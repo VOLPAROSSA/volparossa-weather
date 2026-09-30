@@ -1,0 +1,34 @@
+name: Weather integration components
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  components:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Identify the runner test runtime
+        run: |
+          node --version
+          node -e 'if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)'
+      - name: Check ECMWF and core-cache contracts
+        run: node --test tests/*.test.mjs
+      - name: Check source metadata and whitespace
+        run: |
+          python3 -m json.tool third_party/ecmwf.json > /dev/null
+          python3 -m json.tool third_party/ecmwf-smoke.json > /dev/null
+          python3 -m json.tool third_party/eccodes-sources.json > /dev/null
+          git diff --check
+
+# No live weather requests, dependency installation, decoder build, model
+# inference or daemon startup. Contract tests do not establish overlay delivery.
