@@ -15,11 +15,13 @@ try {
     executable: { type: 'string' }, 'control-socket': { type: 'string' }, cache: { type: 'string' },
     'publisher-key': { type: 'string' }, name: { type: 'string' }, 'min-revision': { type: 'string' },
     'reuse-cache': { type: 'boolean', default: false },
+    'include-wind': { type: 'boolean', default: false },
   } });
   const mode = positionals[0];
   if (positionals.length !== 1 || !['origin', 'core-cache'].includes(mode)) throw new Error('MODE_REQUIRED');
   const query = request({ latitude: Number(values.latitude), longitude: Number(values.longitude), run: values.run,
-    model: values.model, steps: values.steps.split(',').map(Number), communityArea: values['community-area'] });
+    model: values.model, steps: values.steps.split(',').map(Number), communityArea: values['community-area'],
+    includeWind: values['include-wind'] });
   if (!values.execute) {
     if (mode === 'origin') ecmwfRequest(query);
     console.log(JSON.stringify({ mode, executed: false, query, auto_fallback: false,

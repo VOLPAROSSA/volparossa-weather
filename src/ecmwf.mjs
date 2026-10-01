@@ -2,14 +2,19 @@
 import { createHash } from 'node:crypto';
 import { lstat, realpath, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
-import { MAX_AGE_SECONDS, MAX_RUN_AGE_SECONDS, SCHEMA, UNITS, WeatherError,
-  number, request, requireThat, utc, validateForecast } from './forecast.mjs';
+import { MAX_AGE_SECONDS, MAX_RUN_AGE_SECONDS, SCHEMA, UNITS, WIND_UNITS, WeatherError,
+  number, request, requireThat, utc, validateForecast, windVector } from './forecast.mjs';
 import { runOwnedJsonProcess } from './core-cache.mjs';
 
 export const ORIGIN = 'https://data.ecmwf.int/forecasts';
 export const MAX_INDEX_BYTES = 524288;
 export const MAX_FIELD_BYTES = 8 * 1024 * 1024;
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+const PARAMETERS = Object.freeze({ '2t': { id: 167, level: 2, unit: 'K' },
+  '10u': { id: 165, level: 10, unit: 'm s**-1' }, '10v': { id: 166, level: 10, unit: 'm s**-1' } });
+const GRID_KEYS = ['Ni', 'Nj', 'latitudeOfFirstGridPointInDegrees', 'longitudeOfFirstGridPointInDegrees',
+  'latitudeOfLastGridPointInDegrees', 'longitudeOfLastGridPointInDegrees', 'iDirectionIncrementInDegrees',
+  'jDirectionIncrementInDegrees', 'iScansNegatively', 'jScansPositively', 'jPointsAreConsecutive'];
 
 export function ecmwfRequest(input) {
   const query = request(input);
@@ -31,8 +36,9 @@ export function fieldUrl(input, step, extension) {
   return `${ORIGIN}/${date}/${hour}z/${query.model}/0p25/oper/${date}${hour}0000-${step}h-oper-fc.${extension}`;
 }
 
-export function selectIndex(bytes, input, step) {
+export function selectIndex(bytes, input, step, parameter = '2t') {
   const query = ecmwfRequest(input);
+  requireThat(Object.hasOwn(PARAMETERS, parameter), 'PARAMETER_UNSUPPORTED');
   requireThat(bytes instanceof Uint8Array && bytes.length <= MAX_INDEX_BYTES, 'INDEX_TOO_LARGE');
   let lines;
   try { lines = new TextDecoder('utf-8', { fatal: true }).decode(bytes).trim().split('\n'); }
@@ -44,7 +50,7 @@ export function selectIndex(bytes, input, step) {
     let item;
     try { item = JSON.parse(line); } catch { throw new WeatherError('INDEX_INVALID'); }
     requireThat(item && !Array.isArray(item) && typeof item === 'object', 'INDEX_INVALID');
-    if (item.param !== '2t' || item.levtype !== 'sfc') continue;
+    if (item.param !== parameter || item.levtype !== 'sfc') continue;
     requireThat(item.date === query.run.slice(0, 10).replaceAll('-', '') && item.time === query.run.slice(11, 13) + '00'
       && item.step === String(step) && item.class === (query.model === 'ifs' ? 'od' : 'ai')
       && item.type === 'fc' && item.stream === 'oper' && item.expver === '0001', 'INDEX_IDENTITY_MISMATCH');
@@ -100,36 +106,78 @@ export function checkGrib(bytes, length) {
 }
 
 export async function fetchField(input, step, { mode, acceptDataLicense = false, signal, fetcher } = {}) {
+  return (await fetchFields({ ...input, includeWind: false }, step, { mode, acceptDataLicense, signal, fetcher }))['2t'];
+}
+
+export async function fetchFields(input, step, { mode, acceptDataLicense = false, signal, fetcher } = {}) {
   requireThat(mode === 'origin', 'ORIGIN_MODE_REQUIRED');
   requireThat(acceptDataLicense === true, 'DATA_LICENSE_REQUIRED');
   const query = ecmwfRequest(input);
   const index = await getBytes(fieldUrl(query, step, 'index'), { signal, fetcher });
-  const range = selectIndex(index, query, step);
-  const field = await getBytes(fieldUrl(query, step, 'grib2'), { range, signal, fetcher });
-  checkGrib(field, range.length);
-  return { field, indexSha256: sha256(index), fieldSha256: sha256(field), range };
+  const parameters = query.includeWind ? ['2t', '10u', '10v'] : ['2t'];
+  const ranges = parameters.map(parameter => ({ parameter, ...selectIndex(index, query, step, parameter) }));
+  const ordered = [...ranges].sort((a, b) => a.offset - b.offset);
+  requireThat(ordered.slice(1).every((item, i) => item.offset >= ordered[i].offset + ordered[i].length), 'INDEX_RANGES_OVERLAP');
+  const result = {};
+  for (const { parameter, offset, length } of ranges) {
+    const range = { offset, length };
+    const field = await getBytes(fieldUrl(query, step, 'grib2'), { range, signal, fetcher });
+    checkGrib(field, range.length);
+    result[parameter] = { field, indexSha256: sha256(index), fieldSha256: sha256(field), range };
+  }
+  return result;
 }
 
-export function sampleFromDecoded(decoded, input, step, evidence) {
+function decodedPoint(decoded, input, step, parameter) {
   const query = ecmwfRequest(input);
+  const expected = PARAMETERS[parameter];
+  requireThat(expected !== undefined, 'PARAMETER_UNSUPPORTED');
   requireThat(Array.isArray(decoded) && decoded.length === 1, 'DECODE_MESSAGE_COUNT');
   const { keys, method, neighbours } = decoded[0];
   const validAt = new Date(utc(query.run) + step * 3600000).toISOString();
-  requireThat(keys && keys.edition === 2 && keys.centre === 'ecmf' && keys.shortName === '2t' && keys.paramId === 167
+  requireThat(keys && keys.edition === 2 && keys.centre === 'ecmf' && keys.shortName === parameter && keys.paramId === expected.id
     && keys.dataDate === Number(query.run.slice(0, 10).replaceAll('-', '')) && keys.dataTime === Number(query.run.slice(11, 13)) * 100
     && keys.validityDate === Number(validAt.slice(0, 10).replaceAll('-', '')) && keys.validityTime === Number(validAt.slice(11, 13)) * 100
     && keys.stepType === 'instant' && keys.startStep === step && keys.endStep === step && keys.stepUnits === 1
-    && keys.typeOfLevel === 'heightAboveGround' && keys.level === 2 && keys.gridType === 'regular_ll'
+    && keys.typeOfLevel === 'heightAboveGround' && keys.level === expected.level && keys.gridType === 'regular_ll'
     && keys.class === (query.model === 'ifs' ? 'od' : 'ai') && keys.stream === 'oper' && keys.type === 'fc', 'DECODE_IDENTITY_MISMATCH');
   requireThat(method === 'nearest' && Array.isArray(neighbours) && neighbours.length === 1, 'DECODE_GRID_INVALID');
   const point = neighbours[0];
-  requireThat(point.unit === 'K' && point.distance_unit === 'km', 'DECODE_UNITS_INVALID');
-  if (point.value !== null) number(point.value, 0, Infinity, 'DECODE_VALUE_INVALID');
+  requireThat(point.unit === expected.unit && point.distance_unit === 'km', 'DECODE_UNITS_INVALID');
+  if (point.value !== null) number(point.value, parameter === '2t' ? 0 : -Infinity, Infinity, 'DECODE_VALUE_INVALID');
   number(point.latitude, -90, 90, 'DECODE_GRID_INVALID'); number(point.longitude, 0, 360, 'DECODE_GRID_INVALID');
   number(point.distance, 0, 50, 'DECODE_GRID_INVALID');
+  return { keys, point, validAt };
+}
+
+export function sampleFromDecoded(decoded, input, step, evidence) {
+  const { point, validAt } = decodedPoint(decoded, input, step, '2t');
   return { valid_at: validAt, lead_hours: step, temperature_2m: point.value === null ? null : point.value - 273.15,
     grid: { latitude: point.latitude, longitude: point.longitude > 180 ? point.longitude - 360 : point.longitude,
       distance_km: point.distance, method: 'nearest-grid-no-interpolation' }, evidence };
+}
+
+export function sampleWithWind(decoded, input, step, evidence) {
+  requireThat(ecmwfRequest(input).includeWind, 'WIND_REQUEST_REQUIRED');
+  const sample = sampleFromDecoded(decoded['2t'], input, step, evidence['2t']);
+  const parts = Object.fromEntries(['2t', '10u', '10v'].map(parameter =>
+    [parameter, decodedPoint(decoded[parameter], input, step, parameter)]));
+  const temperature = parts['2t'];
+  for (const { keys, point } of Object.values(parts)) {
+    for (const key of GRID_KEYS) {
+      number(keys[key], -Infinity, Infinity, 'DECODE_GRID_INVALID');
+      requireThat(keys[key] === temperature.keys[key], 'DECODE_GRID_MISMATCH');
+    }
+    requireThat(keys.Ni === 1440 && keys.Nj === 721
+      && keys.iDirectionIncrementInDegrees === 0.25 && keys.jDirectionIncrementInDegrees === 0.25
+      && [keys.iScansNegatively, keys.jScansPositively, keys.jPointsAreConsecutive].every(flag => flag === 0 || flag === 1),
+    'DECODE_GRID_INVALID');
+    requireThat(['latitude', 'longitude', 'distance'].every(key => point[key] === temperature.point[key]), 'DECODE_GRID_MISMATCH');
+  }
+  requireThat(parts['10u'].keys.uvRelativeToGrid === 0 && parts['10v'].keys.uvRelativeToGrid === 0,
+    'WIND_ORIENTATION_UNSUPPORTED');
+  return { ...sample, wind_10m: { ...windVector(parts['10u'].point.value, parts['10v'].point.value),
+    evidence: { eastward: evidence['10u'], northward: evidence['10v'] } } };
 }
 
 export function forecastFromSamples(input, samples, acquiredAt) {
@@ -140,8 +188,10 @@ export function forecastFromSamples(input, samples, acquiredAt) {
     source: { provider: 'ecmwf', product: 'open-data-single-level-forecast', model: query.model,
       model_run_at: query.run, issued_at: null, acquired_at: acquiredAt, acquisition: 'origin-https',
       attribution: 'ECMWF open data', license: 'CC-BY-4.0', license_url: 'https://creativecommons.org/licenses/by/4.0/',
-      changes: 'Nearest grid point via ecCodes; 2 m temperature converted from Kelvin to Celsius; no interpolation.' },
-    units: { ...UNITS }, samples,
+      changes: query.includeWind
+        ? 'Nearest co-located grid via ecCodes; Kelvin to Celsius; 10 m east/north components to speed and meteorological direction-from; no interpolation.'
+        : 'Nearest grid point via ecCodes; 2 m temperature converted from Kelvin to Celsius; no interpolation.' },
+    units: { ...UNITS, ...(query.includeWind ? WIND_UNITS : {}) }, samples,
     freshness: { basis: 'acquisition-and-model-run-age',
       expires_at: new Date(Math.min(acquired + MAX_AGE_SECONDS * 1000, run + MAX_RUN_AGE_SECONDS * 1000)).toISOString() } });
 }
@@ -164,15 +214,23 @@ export async function fetchForecast(input, { mode, acceptDataLicense, decoder, d
   const samples = [];
   try {
     for (const step of query.steps) {
-      const downloaded = await fetchField(query, step, { mode, acceptDataLicense, signal });
-      const path = join(work, `field-${step}.grib2`);
-      await writeFile(path, downloaded.field, { mode: 0o600, flag: 'wx' });
-      const keys = 'edition:i,centre:s,dataDate:i,dataTime:i,validityDate:i,validityTime:i,shortName:s,paramId:i,typeOfLevel:s,level:i,stepType:s,startStep:i,endStep:i,stepUnits:i,class:s,stream:s,type:s,gridType:s';
-      const decoded = await runOwnedJsonProcess('/usr/bin/prlimit', ['--as=536870912', '--cpu=20', '--', decoder,
-        '-j', '-l', `${query.latitude},${query.longitude},1`, '-p', keys, path], work, signal, 30000);
-      samples.push(sampleFromDecoded(decoded, query, step, { index_sha256: downloaded.indexSha256,
-        field_sha256: downloaded.fieldSha256, parameter: '2t', unit: 'K', statistic: 'instant', resolution: '0p25',
-        range_start: downloaded.range.offset, range_length: downloaded.range.length, decoder_sha256: decoderSha256 }));
+      const fields = await fetchFields(query, step, { mode, acceptDataLicense, signal });
+      const decoded = {}, evidence = {};
+      for (const [parameter, downloaded] of Object.entries(fields)) {
+        const path = join(work, `field-${step}-${parameter}.grib2`);
+        await writeFile(path, downloaded.field, { mode: 0o600, flag: 'wx' });
+        const keys = 'edition:i,centre:s,dataDate:i,dataTime:i,validityDate:i,validityTime:i,shortName:s,paramId:i,typeOfLevel:s,level:i,stepType:s,startStep:i,endStep:i,stepUnits:i,class:s,stream:s,type:s,gridType:s'
+          + (query.includeWind ? ',' + GRID_KEYS.map(key => key + ':d').join(',') : '')
+          + (parameter !== '2t' ? ',uvRelativeToGrid:i' : '');
+        decoded[parameter] = await runOwnedJsonProcess('/usr/bin/prlimit', ['--as=536870912', '--cpu=20', '--', decoder,
+          '-j', '-l', `${query.latitude},${query.longitude},1`, '-p', keys, path], work, signal, 30000);
+        await rm(path); // Keep scratch disk bounded to one decoded field, not every requested lead.
+        evidence[parameter] = { index_sha256: downloaded.indexSha256, field_sha256: downloaded.fieldSha256,
+          parameter, unit: PARAMETERS[parameter].unit, statistic: 'instant', resolution: '0p25',
+          range_start: downloaded.range.offset, range_length: downloaded.range.length, decoder_sha256: decoderSha256 };
+      }
+      samples.push(query.includeWind ? sampleWithWind(decoded, query, step, evidence)
+        : sampleFromDecoded(decoded['2t'], query, step, evidence['2t']));
     }
     return forecastFromSamples(query, samples, new Date().toISOString());
   } finally { await rm(work, { recursive: true, force: false }); }
