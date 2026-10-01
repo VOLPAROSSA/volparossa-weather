@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "purpose": "Source-built project-local GRIB2/CCSDS nearest-point decoder; no downloaded executables",
+  "sources": [
+    {
+      "name": "ecbuild",
+      "version": "3.8.5",
+      "commit": "a07c0a5caeec13214b3c7b0542c2427f46d417b3",
+      "origin": "https://github.com/ecmwf/ecbuild",
+      "url": "https://codeload.github.com/ecmwf/ecbuild/tar.gz/a07c0a5caeec13214b3c7b0542c2427f46d417b3",
+      "archive": "ecbuild-a07c0a5c.tar.gz",
+      "bytes": 272815,
+      "sha256": "6e52dfb8828b6de24ef27792b132d1b928a987ec3e62866292c354a763943446",
+      "license": "Apache-2.0",
+      "notices": ["LICENSE", "NOTICE", "COPYING"]
+    },
+    {
+      "name": "libaec",
+      "version": "1.1.4",
+      "commit": "7204505af7d6635734fc12a38d6bd0a6253c9c6d",
+      "origin": "https://github.com/Deutsches-Klimarechenzentrum/libaec",
+      "url": "https://codeload.github.com/Deutsches-Klimarechenzentrum/libaec/tar.gz/7204505af7d6635734fc12a38d6bd0a6253c9c6d",
+      "archive": "libaec-7204505a.tar.gz",
+      "bytes": 2786217,
+      "sha256": "2695774c3bf2c85d366e8c13524a77057a72e5fab48cf50425cce611dc5ecb0e",
+      "license": "BSD-2-Clause",
+      "notices": ["LICENSE.txt"]
+    },
+    {
+      "name": "eccodes",
+      "version": "2.44.0",
+      "commit": "aa85928d05036a1bce3cab330bc75681dc26c234",
+      "origin": "https://github.com/ecmwf/eccodes",
+      "url": "https://codeload.github.com/ecmwf/eccodes/tar.gz/aa85928d05036a1bce3cab330bc75681dc26c234",
+      "archive": "eccodes-aa85928d.tar.gz",
+      "bytes": 12913990,
+      "sha256": "c2e8ff9d8343c4c56a6635c43ca18446752ce464d4129a22ef3fda8508d49df6",
+      "license": "Apache-2.0",
+      "notices": ["LICENSE", "NOTICE", "COPYING"]
+    }
+  ],
+  "build": {
+    "jobs": 2,
+    "network_during_build": false,
+    "library_linkage": "static libaec and ecCodes; platform C/C++ runtime remains dynamic",
+    "embedded_definitions": true,
+    "features": ["GRIB", "geography", "AEC/CCSDS"],
+    "excluded": ["BUFR", "Fortran", "NetCDF", "JPEG2000", "PNG", "extra-test data downloads"],
+    "local_source_patches": []
+  }
+}

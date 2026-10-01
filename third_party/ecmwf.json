@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "reviewed_on": "2026-09-30",
+  "origin": "https://data.ecmwf.int/forecasts",
+  "data_license": "CC-BY-4.0",
+  "documentation": "https://confluence.ecmwf.int/spaces/DAC/pages/272310539/ECMWF+open+data+real-time+forecasts+from+IFS+and+AIFS",
+  "dataset": "https://www.ecmwf.int/en/forecasts/datasets/open-data",
+  "reference_client": {
+    "repository": "https://github.com/ecmwf/ecmwf-opendata",
+    "revision": "d2f7c9fff5dbf7b90165939ae0a9d2a3e20e214d",
+    "inspected_file": "ecmwf/opendata/client.py",
+    "license": "Apache-2.0",
+    "copied_or_installed": false
+  },
+  "decoder_source_contract": {
+    "repository": "https://github.com/ecmwf/eccodes",
+    "revision": "aa85928d05036a1bce3cab330bc75681dc26c234",
+    "version": "2.44.0",
+    "inspected_file": "tools/grib_ls.cc",
+    "interface": "grib_ls -j -l LAT,LON,1 -p EXPLICIT_TYPED_KEYS SINGLE_FIELD.grib2"
+  },
+  "supported_first_slice": {
+    "models": ["ifs", "aifs-single"],
+    "stream": "oper",
+    "type": "fc",
+    "resolution": "0p25",
+    "parameter": "2t",
+    "level": "surface field, 2 m temperature",
+    "supported_run_cutoff": "2026-05-13T00:00:00.000Z",
+    "horizon_authority": "Current ECMWF open-data dataset catalogue, not older access examples",
+    "ifs_00_12_steps": "0..144 by 3 hours, 150..360 by 6 hours",
+    "ifs_06_18_steps": "0..144 by 3 hours",
+    "aifs_single_steps": "0..360 by 6 hours",
+    "maximum_samples_per_request": 16,
+    "maximum_field_bytes": 8388608,
+    "no_implicit_latest_or_mirror_retry": true
+  },
+  "hosted_deployment_revision_known": false,
+  "live_model_bytes_pinned_by": "per-run sidecar SHA256, exact HTTP byte range and field SHA256, then native GRIB identity checks"
+}
