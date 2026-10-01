@@ -8,7 +8,7 @@ import { mkdtemp, chmod, writeFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fetchCachedForecast } from '../src/core-cache.mjs';
-import { forecast, QUERY } from './fixtures.mjs';
+import { forecast, windForecast, QUERY } from './fixtures.mjs';
 
 const query = { ...QUERY, run: new Date(Math.floor(Date.now() / 21600000) * 21600000).toISOString() };
 
@@ -50,6 +50,17 @@ test('real subprocess contract checks trusted receipt/hash/query and retains ori
   assert.equal(result.delivery.upstream_origin_attested, false);
   assert.equal(result.delivery.manifest_media_type_checked, false);
   assert.deepEqual((await readdir(root)).sort(), ['control.sock', 'fake-core']);
+});
+
+test('cache consumption accepts wind only for the explicitly requested field set', async t => {
+  const data = windForecast({ ...query, includeWind: true }, new Date().toISOString());
+  const { options } = await fixture(t, { forecast: data });
+  const result = await fetchCachedForecast({ ...options, query: { ...query, includeWind: true } });
+  assert.equal(result.forecast.samples[0].wind_10m.speed, 5);
+  await assert.rejects(fetchCachedForecast(options), error => error.code === 'FORECAST_QUERY_MISMATCH');
+  const temperature = await fixture(t);
+  await assert.rejects(fetchCachedForecast({ ...temperature.options, query: { ...query, includeWind: true } }),
+    error => error.code === 'FORECAST_QUERY_MISMATCH');
 });
 
 test('wrong signer/name/revision/expiry/hash/type never becomes a forecast or origin retry', async t => {

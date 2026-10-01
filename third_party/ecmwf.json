@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "reviewed_on": "2026-09-30",
+  "reviewed_on": "2026-10-01",
   "origin": "https://data.ecmwf.int/forecasts",
   "data_license": "CC-BY-4.0",
   "documentation": "https://confluence.ecmwf.int/spaces/DAC/pages/272310539/ECMWF+open+data+real-time+forecasts+from+IFS+and+AIFS",
@@ -36,5 +36,19 @@
     "no_implicit_latest_or_mirror_retry": true
   },
   "hosted_deployment_revision_known": false,
+  "optional_wind": {
+    "opt_in": "--include-wind",
+    "parameters": {"10u": {"paramId": 165, "unit": "m s**-1"}, "10v": {"paramId": 166, "unit": "m s**-1"}},
+    "level_metres": 10,
+    "statistic": "instant",
+    "vector_basis": "eastward and northward; uvRelativeToGrid must be 0",
+    "conversion": "speed = hypot(u,v); direction-from = (180 + atan2(u,v)*180/pi) modulo 360; calm direction is null",
+    "parameter_source": "https://www.ecmwf.int/sites/default/files/2023-06/Part-IV-Physical-Processes.pdf",
+    "direction_source": "https://confluence.ecmwf.int/pages/viewpage.action?pageId=133262398",
+    "same_run_step_valid_time_and_grid_required": true,
+    "one_shared_index_per_step": true,
+    "ifs_native_wind_decode_proven": true,
+    "aifs_native_wind_decode_proven": false
+  },
   "live_model_bytes_pinned_by": "per-run sidecar SHA256, exact HTTP byte range and field SHA256, then native GRIB identity checks"
 }

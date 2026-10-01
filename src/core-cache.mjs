@@ -120,6 +120,7 @@ export async function fetchCachedForecast({ mode, executable, controlSocket, cac
     requireThat(forecast.area.sharing === 'public-community' && forecast.area.latitude === expected.latitude
       && forecast.area.longitude === expected.longitude && forecast.source.model === expected.model
       && forecast.source.model_run_at === expected.run
+      && Object.hasOwn(forecast.units, 'wind_10m') === expected.includeWind
       && JSON.stringify(forecast.samples.map(sample => sample.lead_hours)) === JSON.stringify(expected.steps), 'FORECAST_QUERY_MISMATCH');
     const expiry = new Date(receipt.publication_expires_unix_seconds * 1000);
     requireThat(Number.isFinite(expiry.getTime()), 'CORE_RECEIPT_INVALID');

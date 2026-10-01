@@ -10,17 +10,20 @@ no intermediate weather API is required.
 ## The first executable slice
 
 - Select an explicit IFS or AIFS Single initialization and forecast lead times.
-- Read that file's official JSON-lines index and request only the selected GRIB2
-  field's exact HTTP byte range. Never fall back to downloading the whole file.
+- Read that file's official JSON-lines index once per lead time and request only
+  each selected GRIB2 field's exact HTTP byte range. Never download the whole file.
 - Use an explicitly pinned official ecCodes decoder to find the nearest model
   grid point, check its run/validity/parameter/unit metadata and convert 2 m
   temperature from Kelvin to Celsius. Missing values remain `null`.
+- Opt into real 10 m wind components, speed and meteorological direction with
+  `--include-wind`. Decode `2t`, `10u` and `10v` independently and require matching
+  initialization, valid time, full grid geometry and nearest grid point.
 - Read an explicitly trusted publisher's forecast through core `content fetch-name`,
   checking receipt identity, hash, bytes, requested location/model/run/steps and
   both original forecast expiry and signed publication expiry.
 
-This is a **temperature-first development component**, not yet a complete weather
-app. Wind, rain, observations, trained corrections, model comparison, automatic
+This is a **temperature-and-wind development component**, not yet a complete weather
+app. Rain, observations, trained corrections, model comparison, automatic
 shared acquisition and platform UIs remain future work. Rain accumulation must
 not be presented as hourly rainfall; unsupported values are not invented.
 
@@ -29,8 +32,14 @@ The [real IFS origin-to-native-decoder smoke](third_party/ecmwf-smoke.json) pass
 explicit public Berlin test point, with exact initialization/valid time and full
 temporary-process cleanup. This establishes decoding, not measured accuracy.
 The AIFS request contract is supported but its native end-to-end run is not yet
-proven. Fourteen focused tests use synthetic payloads and a real subprocess
+proven. Twenty-two focused tests use synthetic payloads and a real subprocess
 fixture; those are not a live Weather-to-core overlay proof.
+
+The [real opt-in wind smoke](third_party/ecmwf-wind-smoke.json) also passes through
+the CLI and the same pinned native decoder: one IFS initialization, three selected
+fields totaling 2,292,842 bytes, and a co-located Berlin vector of −1.87405 m/s
+eastward and 1.56929 m/s northward. That gives 2.444327 m/s from 129.942097°;
+it is a decoded forecast, not evidence that the forecast is accurate.
 
 ## Try a deliberately chosen model run
 
@@ -62,6 +71,22 @@ The date above is an example, not an automatically maintained latest run. The
 real-time upstream archive is rolling; unavailable runs fail explicitly. The
 client does not silently substitute another initialization or provider.
 
+Add `--include-wind` to either `origin` or `core-cache` for the optional v1
+`wind_10m` extension. Without it, temperature-only output and cache requests stay
+unchanged. Use a distinct published cache name for the wind-inclusive field set:
+a request never silently substitutes a temperature-only forecast for wind, or
+vice versa. Existing temperature-only consumers need not adopt the extension.
+
+Each wind block retains the signed components (`eastward`, `northward`), derived
+`speed`, `direction_from`, `status` and both fields' individual range/hash evidence.
+Direction follows the [ECMWF meteorological convention](https://confluence.ecmwf.int/pages/viewpage.action?pageId=133262398):
+clockwise **from** true north, not the direction of travel. A missing decoded
+component remains `null`, with derived speed/direction `null` and status `missing`.
+Actual `(0, 0)` components produce speed `0`, direction `null` and status `calm`;
+no arbitrary calm threshold is imposed. Missing or ambiguous whole model fields,
+rotated vectors, or mismatched grids fail explicitly. These are instantaneous
+10 m vectors, not gusts, observations or newly interpolated hourly values.
+
 The original field covers a global grid, but contains **only one parameter at one
 lead time**, not an entire multi-parameter model file. A field can supply many
 local points. Coordinates are used locally and are not included in upstream URLs;
@@ -70,10 +95,12 @@ files. There is no geolocation, location history, telemetry or implicit training
 publication. Explicit stdout output may contain the chosen location.
 
 Requests are sequential, require exact HTTP 206 ranges, and bound each index to
-512 KiB and field to 8 MiB. Each transfer has a 30-second deadline. ecCodes receives
+512 KiB and field to 8 MiB; wind selects three fields per lead instead of one.
+Each transfer has a 30-second deadline. ecCodes receives
 a single temporary field with a 512 MiB address-space limit, 20 CPU seconds and a
 30-second wall deadline. Its subprocess is joined on cancellation; the exact new
-temporary directory is removed. There is no installer in the forecast command.
+temporary directory is removed; decoded GRIB files are removed as soon as consumed.
+There is no installer in the forecast command.
 
 ## Reuse a shared forecast through the core
 

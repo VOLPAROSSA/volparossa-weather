@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "kind": "direct-ecmwf-native-temperature-and-wind-forecast",
+  "success": true,
+  "observed_at": "2026-10-01T16:52:19.642Z",
+  "entry_point": "node scripts/forecast.mjs origin --include-wind --execute --accept-data-license",
+  "source": "https://data.ecmwf.int/forecasts",
+  "index_url": "https://data.ecmwf.int/forecasts/20261001/00z/ifs/0p25/oper/20261001000000-18h-oper-fc.index",
+  "model": "ifs",
+  "model_run_at": "2026-10-01T00:00:00.000Z",
+  "lead_hours": 18,
+  "valid_at": "2026-10-01T18:00:00.000Z",
+  "public_test_point": {"latitude": 52.52, "longitude": 13.41},
+  "nearest_model_grid_point": {"latitude": 52.5, "longitude": 13.5, "distance_km": 6.48435},
+  "normalized_temperature_celsius": 18.94100000000003,
+  "wind_10m": {
+    "eastward_m_s": -1.87405,
+    "northward_m_s": 1.56929,
+    "speed_m_s": 2.444327004842028,
+    "direction_from_degrees": 129.94209690068845,
+    "status": "available"
+  },
+  "index_sha256": "32ac7d44fa0bfc057bf39ec273b6d11cf88494b4920639d1f3f1053b48a072e0",
+  "fields": {
+    "2t": {
+      "param_id": 167,
+      "unit": "K",
+      "range_start": 17765956,
+      "range_length": 666454,
+      "sha256": "f279232e321a031e3455e4c184e7dd1568f4d82ead28e07b948f82536bccf5a9"
+    },
+    "10u": {
+      "param_id": 165,
+      "unit": "m s**-1",
+      "range_start": 10003899,
+      "range_length": 753330,
+      "sha256": "7328497473a2acd498308a74bed42e35cc38b1fc250d8f62fe4389e6844b1bc7"
+    },
+    "10v": {
+      "param_id": 166,
+      "unit": "m s**-1",
+      "range_start": 13960917,
+      "range_length": 873058,
+      "sha256": "eb694a157095dfea559b1dbee2152649881664b384d7dfdd0f7f7545c461cb62"
+    }
+  },
+  "selected_field_bytes_total": 2292842,
+  "single_shared_official_index": true,
+  "exact_partial_content_required_for_all_fields": true,
+  "same_model_run_valid_time_and_grid_verified": true,
+  "earth_relative_components_verified": true,
+  "coordinates_sent_to_upstream": false,
+  "decoder_version": "2.44.0",
+  "decoder_sha256": "3a3b64581e6922db4287445f217f993f6967dea5fcc45ff66944b0bc883408f4",
+  "decoder_address_space_limit_bytes": 536870912,
+  "decoder_cpu_seconds_limit_per_field": 20,
+  "decoder_wall_seconds_limit_per_field": 30,
+  "decoder_processes_joined": true,
+  "temporary_directory_empty_after_operation": true,
+  "temporary_private_parent_removed": true,
+  "original_public_fields_retained": false,
+  "aifs_native_decode_proven": false,
+  "core_overlay_roundtrip_proven": false,
+  "learned_weather_model_proven": false,
+  "observation_or_forecast_accuracy_proven": false,
+  "data_attribution": "ECMWF open data, CC BY 4.0; nearest point, Kelvin-to-Celsius conversion and 10 m vector to speed/direction"
+}
