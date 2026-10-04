@@ -1,3 +1,5 @@
+![Project VOLPAROSSA Weather — a fox-shaped weather vane between storm clouds and a golden sky](docs/assets/banner-volparossa-weather.png)
+
 # Project VOLPAROSSA Weather
 
 **Direct public weather models. Shared evidence. Learning that must earn its accuracy.**
