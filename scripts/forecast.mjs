@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: GPL-3.0-only
 import { parseArgs } from 'node:util';
-import { request } from '../src/forecast.mjs';
+import { request, requireThat } from '../src/forecast.mjs';
 import { fetchForecast, ecmwfRequest, fieldUrl } from '../src/ecmwf.mjs';
 import { fetchCachedForecast } from '../src/core-cache.mjs';
+import { PROVIDER_SCHEMA, providerVariables, toProviderForecast } from '../src/provider.mjs';
+import { fetchCachedProvider } from '../src/provider-core.mjs';
 
 try {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
@@ -16,15 +18,21 @@ try {
     'publisher-key': { type: 'string' }, name: { type: 'string' }, 'min-revision': { type: 'string' },
     'reuse-cache': { type: 'boolean', default: false },
     'include-wind': { type: 'boolean', default: false },
+    'output-contract': { type: 'string', default: 'forecast' }, variables: { type: 'string' },
   } });
   const mode = positionals[0];
   if (positionals.length !== 1 || !['origin', 'core-cache'].includes(mode)) throw new Error('MODE_REQUIRED');
+  const provider = values['output-contract'] === 'provider';
+  requireThat(['forecast', 'provider'].includes(values['output-contract'])
+    && (provider || values.variables === undefined), 'OUTPUT_CONTRACT_INVALID');
+  const variables = provider ? providerVariables(values.variables?.split(',')) : undefined;
   const query = request({ latitude: Number(values.latitude), longitude: Number(values.longitude), run: values.run,
     model: values.model, steps: values.steps.split(',').map(Number), communityArea: values['community-area'],
     includeWind: values['include-wind'] });
   if (!values.execute) {
     if (mode === 'origin') ecmwfRequest(query);
     console.log(JSON.stringify({ mode, executed: false, query, auto_fallback: false,
+      ...(provider ? { output_contract: PROVIDER_SCHEMA, variables } : {}),
       index_urls: mode === 'origin' ? query.steps.map(step => fieldUrl(query, step, 'index')) : [],
       notice: mode === 'origin'
         ? 'Fetch exact model-field byte ranges; derive point locally with a pinned decoder. No location sent upstream; source IP is visible. Requires --execute and --accept-data-license.'
@@ -33,12 +41,14 @@ try {
     const controller = new AbortController(); const abort = () => controller.abort();
     process.once('SIGINT', abort); process.once('SIGTERM', abort);
     try {
-      const result = mode === 'origin'
+      let result = mode === 'origin'
         ? await fetchForecast(query, { mode, acceptDataLicense: values['accept-data-license'],
           decoder: values.decoder, decoderSha256: values['decoder-sha256'], scratchParent: values['scratch-parent'], signal: controller.signal })
-        : await fetchCachedForecast({ mode, executable: values.executable, controlSocket: values['control-socket'],
+        : await (provider ? fetchCachedProvider : fetchCachedForecast)({ mode, executable: values.executable, controlSocket: values['control-socket'],
           cache: values.cache, scratchParent: values['scratch-parent'], publisherKey: values['publisher-key'],
-          name: values.name, minRevision: Number(values['min-revision']), query, reuseCache: values['reuse-cache'] }, { signal: controller.signal });
+          name: values.name, minRevision: Number(values['min-revision']), query, reuseCache: values['reuse-cache'] },
+        { signal: controller.signal, ...(provider ? { variables } : {}) });
+      if (provider && mode === 'origin') result = toProviderForecast(result, { variables });
       console.log(JSON.stringify(result, null, 2));
     } finally { process.removeListener('SIGINT', abort); process.removeListener('SIGTERM', abort); }
   }
