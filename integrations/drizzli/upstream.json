@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "name": "Drizz.li",
+  "origin": "https://github.com/open-meteo/drizz.li.git",
+  "commit": "d2a6839e2b3f2e561b849d83014fc5959bed39cc",
+  "tree": "7b36709f84a10e082119d245e3bddfe67b209e9b",
+  "license": "AGPL-3.0-or-later",
+  "license_sha256": "20b067f86de375aae6db0f283ab2e65de24d537733b89bd58432c101259d84cf",
+  "package_lock_sha256": "9b04f44d254fff82180b32716353c2e7b4e444de7da26cd3fad7eb92512f3454",
+  "upstream_patch_sha256": "44fa73a806b9361b066d8f277a7be8fc8ecc46092e53a720fc26dfb42ebd40db",
+  "upstream_agents_files": [],
+  "reviewed_main": "1d3183b90fcf84163741b7ffa4bc3f411ed555eb",
+  "baseline_note": "Intentionally uses the inspected pre-SvelteKit-3 baseline; updating the pin requires reviewing framework and integration changes together.",
+  "weather_modules": {
+    "src/forecast.mjs": "cb232710aae64564107a4c24122b19e87ad8ff112c2fe56163fc13996cdd816c",
+    "src/provider.mjs": "db07eac4a8f7df334206ca3f39a4ecd85f89db1196e4042e32edd4956b998754"
+  },
+  "weather_modules_license": "GPL-3.0-only; original Weather modules remain separately identified. Preserve upstream AGPL and all original notices in the combined client distribution.",
+  "mode": "VITE_VOLPAROSSA_WEATHER=1",
+  "transport": "GET /api/volparossa/forecast, same-origin, no parameters, one locally configured public-community forecast",
+  "scope": "Actual Drizz.li week-route integration, not a generic demo. Native UTC temperature/wind points; other weather capabilities explicitly unavailable in VOLPAROSSA mode. Ordinary upstream build retains upstream providers.",
+  "build_caution": "Do not run npm run build blindly: upstream prebuild downloads mutable external assets. Use reviewed locked dependencies and explicit vite build with the mode enabled; no external assets are necessary for the native forecast table. No dependency installation or upstream scripts are performed by stage.py. prepare_build.py replaces upstream CDN localization imports with the SHA512-verified build-plugins.json packages and preserves their MIT notices before compilation.",
+  "verified": ["11 client and actual Svelte compiler/render tests", "4 inert browser harness boundary tests", "full app svelte-check", "full Vite production client and SSR build with adapter-static", "actual Drizz.li hydration and interaction through the real local HTTP bridge in isolated Firefox with synthetic provider data; see browser-smoke.json"],
+  "remaining": ["actual core-to-client joined trial", "additional locations and client configuration", "mobile Overmorrow integration", "precipitation and air-quality sources and rendering"]
+}

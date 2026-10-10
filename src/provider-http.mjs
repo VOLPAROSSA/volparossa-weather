@@ -1,0 +1,212 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Development boundary: one explicitly configured public forecast, not a location catalogue.
+import { createServer } from 'node:http';
+import { constants } from 'node:fs';
+import { lstat, readdir, realpath, open } from 'node:fs/promises';
+import { isAbsolute, join, resolve, extname } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
+import { fetchCachedProvider } from './provider-core.mjs';
+import { providerVariables, toProviderForecast } from './provider.mjs';
+import { freshness, request, requireThat } from './forecast.mjs';
+
+const API = '/api/volparossa/forecast';
+const MAX_ASSET = 8 * 1024 * 1024, MAX_STATIC = 32 * 1024 * 1024;
+const MAX_RESPONSE = 256 * 1024;
+const MIME = Object.freeze({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json',
+  '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp', '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf' });
+const HEADERS = Object.freeze({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer', 'Cross-Origin-Resource-Policy': 'same-origin',
+  'Permissions-Policy': 'geolocation=(), camera=(), microphone=()', 'Connection': 'close',
+  'Content-Security-Policy': "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" });
+
+function exact(value, keys, code) {
+  requireThat(value !== null && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).sort().join('|') === [...keys].sort().join('|'), code);
+}
+function absolute(value) {
+  requireThat(typeof value === 'string' && isAbsolute(value) && resolve(value) === value
+    && !/[\x00-\x1f\x7f]/.test(value), 'BRIDGE_PATH_INVALID');
+  return value;
+}
+
+export function providerHttpConfiguration(config) {
+  exact(config, ['core', 'variables'], 'BRIDGE_CONFIG_INVALID');
+  const core = structuredClone(config.core);
+  exact(core, ['mode', 'executable', 'controlSocket', 'cache', 'scratchParent', 'publisherKey',
+    'name', 'minRevision', 'query', 'reuseCache'], 'BRIDGE_CONFIG_INVALID');
+  requireThat(core.mode === 'core-cache' && typeof core.reuseCache === 'boolean', 'BRIDGE_CONFIG_INVALID');
+  for (const name of ['executable', 'controlSocket', 'cache', 'scratchParent']) absolute(core[name]);
+  requireThat(typeof core.publisherKey === 'string' && /^[a-f0-9]{64}$/.test(core.publisherKey)
+    && typeof core.name === 'string' && Buffer.byteLength(core.name) >= 1 && Buffer.byteLength(core.name) <= 128
+    && !/[\x00-\x1f\x7f]/.test(core.name) && Number.isSafeInteger(core.minRevision)
+    && core.minRevision >= 1, 'BRIDGE_CONFIG_INVALID');
+  exact(core.query, ['latitude', 'longitude', 'run', 'model', 'steps', 'communityArea', 'includeWind'], 'BRIDGE_CONFIG_INVALID');
+  core.query = request(core.query);
+  requireThat(core.query.communityArea, 'PUBLIC_COMMUNITY_AREA_REQUIRED');
+  return Object.freeze({ core: Object.freeze(core), variables: providerVariables(config.variables) });
+}
+
+// Snapshot an explicit, owner-controlled dedicated build directory. Its eligible
+// assets are public to this local UI: do not select a repository/config directory.
+// No request-time filesystem paths, symlink traversal or directory listings.
+async function staticAssets(directory) {
+  absolute(directory);
+  requireThat(typeof process.getuid === 'function' && await realpath(directory) === directory, 'STATIC_ROOT_INVALID');
+  const files = new Map(); let entries = 0, bytes = 0;
+  async function visit(folder, prefix, depth) {
+    const info = await lstat(folder);
+    requireThat(depth <= 16 && info.isDirectory() && !info.isSymbolicLink()
+      && info.uid === process.getuid() && !(info.mode & 0o022), 'STATIC_ROOT_INVALID');
+    const names = await readdir(folder);
+    requireThat((entries += names.length) <= 1024, 'STATIC_BUDGET_EXCEEDED');
+    for (const name of names) {
+      requireThat(name.length <= 255 && !/[\x00-\x1f\x7f\\]/.test(name), 'STATIC_ROOT_INVALID');
+      const path = join(folder, name), relative = `${prefix}/${name}`;
+      const stat = await lstat(path);
+      requireThat(!stat.isSymbolicLink() && stat.uid === process.getuid() && !(stat.mode & 0o022), 'STATIC_ROOT_INVALID');
+      if (stat.isDirectory()) { await visit(path, relative, depth + 1); continue; }
+      requireThat(stat.isFile() && stat.nlink === 1, 'STATIC_ROOT_INVALID');
+      const type = MIME[extname(name)];
+      if (!type || name.startsWith('.')) continue;
+      requireThat(stat.size <= MAX_ASSET && (bytes += stat.size) <= MAX_STATIC, 'STATIC_BUDGET_EXCEEDED');
+      const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        const before = await file.stat();
+        requireThat(before.isFile() && before.dev === stat.dev && before.ino === stat.ino
+          && before.size === stat.size && before.nlink === 1, 'STATIC_ROOT_CHANGED');
+        const data = Buffer.alloc(stat.size + 1);
+        let offset = 0;
+        while (offset < data.length) {
+          const { bytesRead } = await file.read(data, offset, data.length - offset, offset);
+          if (!bytesRead) break;
+          offset += bytesRead;
+        }
+        const after = await file.stat();
+        requireThat(offset === stat.size && after.size === before.size && after.mtimeMs === before.mtimeMs
+          && after.ctimeMs === before.ctimeMs, 'STATIC_ROOT_CHANGED');
+        files.set(relative, { type, bytes: data.subarray(0, offset) });
+      } finally { await file.close(); }
+    }
+  }
+  await visit(directory, '', 0);
+  requireThat(files.has('/index.html'), 'STATIC_INDEX_REQUIRED');
+  return files;
+}
+
+function resultBytes(result, configuration) {
+  const { core, variables } = configuration;
+  const delivery = result?.delivery;
+  exact(delivery, ['mode', 'publisher_key', 'name', 'revision', 'manifest_id', 'sha256',
+    'publication_expires_at', 'freshness', 'upstream_origin_attested', 'manifest_media_type_checked'], 'BRIDGE_RESULT_INVALID');
+  requireThat(delivery.mode === 'core-cache' && delivery.publisher_key === core.publisherKey && delivery.name === core.name
+    && Number.isSafeInteger(delivery.revision) && delivery.revision >= core.minRevision
+    && /^[a-f0-9]{64}$/.test(delivery.manifest_id) && /^[a-f0-9]{64}$/.test(delivery.sha256)
+    && delivery.upstream_origin_attested === false && delivery.manifest_media_type_checked === false, 'BRIDGE_RESULT_INVALID');
+  exact(delivery.freshness, ['stale', 'age_seconds', 'model_age_seconds', 'expires_at'], 'BRIDGE_RESULT_INVALID');
+  requireThat(delivery.freshness.stale === false && Number.isSafeInteger(delivery.freshness.age_seconds)
+    && delivery.freshness.age_seconds >= 0 && Number.isSafeInteger(delivery.freshness.model_age_seconds)
+    && delivery.freshness.model_age_seconds >= 0, 'BRIDGE_RESULT_INVALID');
+  const projection = toProviderForecast(result.forecast, { variables, now: result.freshness?.checked_at,
+    publicationExpires: delivery.publication_expires_at });
+  requireThat(isDeepStrictEqual(result, { ...projection, delivery }), 'BRIDGE_RESULT_INVALID');
+  requireThat(delivery.freshness.expires_at === projection.freshness.expires_at, 'BRIDGE_RESULT_INVALID');
+  const forecast = result.forecast, query = core.query;
+  requireThat(forecast.area.sharing === 'public-community' && forecast.area.latitude === query.latitude
+    && forecast.area.longitude === query.longitude && forecast.source.model === query.model
+    && forecast.source.model_run_at === query.run && Object.hasOwn(forecast.units, 'wind_10m') === query.includeWind
+    && isDeepStrictEqual(forecast.samples.map(sample => sample.lead_hours), [...query.steps]), 'FORECAST_QUERY_MISMATCH');
+  requireThat(!freshness(forecast, new Date().toISOString(), delivery.publication_expires_at).stale, 'STALE_FORECAST');
+  const bytes = Buffer.from(JSON.stringify(result));
+  requireThat(bytes.length <= MAX_RESPONSE, 'BRIDGE_RESULT_TOO_LARGE');
+  return bytes;
+}
+
+export async function startProviderHttp({ config, staticRoot, port = 0, requestDeadlineMs = 180000 },
+  { fetchProvider = fetchCachedProvider } = {}) {
+  const configuration = providerHttpConfiguration(config);
+  requireThat(Number.isInteger(port) && port >= 0 && port <= 65535
+    && Number.isInteger(requestDeadlineMs) && requestDeadlineMs >= 1 && requestDeadlineMs <= 180000,
+  'BRIDGE_CONFIG_INVALID');
+  const assets = await staticAssets(staticRoot);
+  let origin, active = null, closing = false;
+  const controllers = new Set();
+  function send(response, status, body, type = 'application/json') {
+    if (response.destroyed || response.writableEnded) return;
+    response.writeHead(status, { ...HEADERS, 'Content-Type': type, 'Content-Length': body.length });
+    response.end(body);
+  }
+  const error = (response, status, code) => send(response, status, Buffer.from(JSON.stringify({ error: code })));
+  const server = createServer({ maxHeaderSize: 8192, headersTimeout: 5000, requestTimeout: 5000,
+    keepAliveTimeout: 1000, connectionsCheckingInterval: 1000 }, (incoming, response) => {
+    const counts = {};
+    for (let i = 0; i < incoming.rawHeaders.length; i += 2) {
+      const key = incoming.rawHeaders[i].toLowerCase(); counts[key] = (counts[key] ?? 0) + 1;
+    }
+    if (closing) return error(response, 503, 'FORECAST_UNAVAILABLE');
+    if (counts.host !== 1 || incoming.headers.host !== origin.slice('http://'.length)
+      || (counts.origin ?? 0) > 1 || (incoming.headers.origin !== undefined && incoming.headers.origin !== origin)
+      || (incoming.headers['sec-fetch-site'] !== undefined && !['same-origin', 'none'].includes(incoming.headers['sec-fetch-site']))) {
+      return error(response, 403, 'ORIGIN_REJECTED');
+    }
+    if (incoming.method !== 'GET') return error(response, 405, 'METHOD_NOT_ALLOWED');
+    if (incoming.headers['transfer-encoding'] !== undefined || (incoming.headers['content-length'] !== undefined
+      && incoming.headers['content-length'] !== '0') || !incoming.url || incoming.url.length > 2048
+      || !incoming.url.startsWith('/') || incoming.url.startsWith('//') || /[?#]/.test(incoming.url)) {
+      return error(response, 400, 'REQUEST_INVALID');
+    }
+    let path;
+    try { path = decodeURIComponent(incoming.url); } catch { return error(response, 400, 'REQUEST_INVALID'); }
+    if (/[\x00-\x1f\x7f\\]/.test(path) || path.split('/').some(part => part === '.' || part === '..')) {
+      return error(response, 400, 'REQUEST_INVALID');
+    }
+    if (path !== API) {
+      if (path.startsWith('/api/')) return error(response, 404, 'NOT_FOUND');
+      const asset = assets.get(path === '/' ? '/index.html' : path)
+        ?? (!extname(path) ? assets.get('/index.html') : null);
+      if (!asset) return error(response, 404, 'NOT_FOUND');
+      return send(response, 200, asset.bytes, asset.type);
+    }
+    if (active) return error(response, 429, 'FORECAST_BUSY');
+    const controller = new AbortController(); controllers.add(controller);
+    const abort = () => controller.abort();
+    incoming.once('aborted', abort);
+    const disconnected = () => { if (!response.writableEnded) abort(); };
+    response.once('close', disconnected);
+    const timer = setTimeout(() => { abort(); error(response, 503, 'FORECAST_UNAVAILABLE'); }, requestDeadlineMs);
+    active = (async () => {
+      try {
+        const result = await Promise.resolve().then(() => fetchProvider(configuration.core,
+          { variables: configuration.variables, signal: controller.signal }));
+        if (controller.signal.aborted) throw new Error('CANCELLED');
+        send(response, 200, resultBytes(result, configuration));
+      } catch { error(response, 503, 'FORECAST_UNAVAILABLE'); }
+      finally {
+        clearTimeout(timer); incoming.removeListener('aborted', abort); response.removeListener('close', disconnected);
+        controllers.delete(controller); active = null;
+      }
+    })();
+  });
+  server.maxConnections = 16; server.maxRequestsPerSocket = 16;
+  server.setTimeout(requestDeadlineMs + 5000, socket => socket.destroy());
+  server.on('clientError', (_error, socket) => { socket.destroy(); });
+  await new Promise((done, fail) => {
+    server.once('error', fail);
+    server.listen(port, '127.0.0.1', () => { server.removeListener('error', fail); done(); });
+  });
+  origin = `http://127.0.0.1:${server.address().port}`;
+  return Object.freeze({ origin, async close() {
+    closing = true;
+    for (const controller of controllers) controller.abort();
+    const stopped = new Promise(done => server.close(done));
+    server.closeAllConnections();
+    const running = active;
+    let timer;
+    try {
+      await Promise.race([Promise.all([stopped, running]), new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('BRIDGE_CLEANUP_UNCONFIRMED')), 5000);
+      })]);
+    } finally { clearTimeout(timer); }
+  } });
+}

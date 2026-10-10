@@ -23,10 +23,15 @@ no intermediate weather API is required.
 - Read an explicitly trusted publisher's forecast through core `content fetch-name`,
   checking receipt identity, hash, bytes, requested location/model/run/steps and
   both original forecast expiry and signed publication expiry.
+- Build the pinned Drizz.li web client with a VOLPAROSSA forecast view, served by
+  an explicit local HTTP bridge to that same core-cache consumer.
 
 This is a **temperature-and-wind development component**, not yet a complete weather
-app. Precipitation, air quality, observations, trained corrections, model comparison, automatic
-shared acquisition and platform UIs remain future work. Rain accumulation must
+app. Precipitation, air quality, observations, trained corrections, model comparison,
+automatic shared acquisition and native mobile integration remain future work.
+The Drizz.li build and isolated browser interaction pass with synthetic weather;
+displaying a real forecast delivered through the live overlay still needs a
+joined trial. Rain accumulation must
 not be presented as hourly rainfall; unsupported values are not invented.
 
 The [real IFS origin-to-native-decoder smoke](third_party/ecmwf-smoke.json) passes:
@@ -143,10 +148,10 @@ The public-area flag records intent; it is not anonymization.
 
 ## Shared application provider
 
-The opt-in `volparossa.weather.provider.v1` contract prepares one common data
-boundary for Drizz.li and Overmorrow. It is an executable projection and core-cache
-consumer, **not yet either application's UI integration**. There is no HTTP server,
-mobile bridge, new scheduler or fallback weather service.
+The opt-in `volparossa.weather.provider.v1` contract provides one common data
+boundary for application adapters. Drizz.li now has a source integration and a
+local HTTP bridge; Overmorrow remains to be connected. Neither introduces a
+second network scheduler or an external weather fallback.
 
 [`toProviderForecast`](src/provider.mjs) is a framework-independent, read-only
 function over an already acquired forecast. It preserves the complete validated
@@ -203,14 +208,33 @@ Provider output deliberately includes the requested location and original eviden
 stdout is not permission to publish it. Recheck the expiry when reusing or displaying
 the result: `checked_at` records validation time and never resets acquisition age.
 
-### Application adapters still required
+### Drizz.li web integration
 
-Drizz.li's inspected SvelteKit service uses the Open-Meteo SDK's FlatBuffers
-transport and hardcoded endpoint URLs. A VOLPAROSSA JSON provider requires its own
-service adapter and capability-aware presentation, not just a URL substitution.
-Its separate geocoding and map sources also need an explicit policy; selecting
-VOLPAROSSA must not quietly retain Open-Meteo weather requests.
-[Pinned Drizz.li service](https://github.com/open-meteo/drizz.li/blob/d2a6839e2b3f2e561b849d83014fc5959bed39cc/src/lib/services/weather.ts).
+The [Drizz.li integration guide](integrations/drizzli/README.md) stages a pinned
+upstream checkout with a VOLPAROSSA mode in its actual weekly forecast route.
+It displays the configured area's native UTC temperature and wind points,
+publication expiry, source attribution and missing capabilities. Unsupported
+views, geolocation, geocoding, maps and the original weather-service calls are
+disabled in this mode. The ordinary upstream build remains unchanged.
+
+The [local development server](scripts/serve-provider.mjs) serves that built app
+and one fixed forecast from `127.0.0.1`. Its private configuration selects the
+trusted publisher, public community area and model run; browser requests cannot
+choose arbitrary locations, publishers, files or commands. One bounded retrieval
+uses the existing core-cache adapter, cancels on disconnect and never falls back
+to an origin service. No CORS access or automatic location publication is enabled.
+
+The full Drizz.li production build, Svelte/TypeScript checks and actual forecast
+component rendering pass. An [isolated Firefox trial](integrations/drizzli/browser-smoke.json)
+also verifies the real page and HTTP bridge with synthetic weather: initial
+display, refresh, missing and stale values, expiry, route guards and cleanup.
+Separate functional tests exercise the bridge's core-process boundary using a
+synthetic core executable. These trials do not yet prove a real overlay
+publication reaching the rendered app. That joined trial, interactive location
+selection and deployment packaging remain required; this is not yet a complete
+cross-platform weather app.
+
+### Overmorrow integration still required
 
 Overmorrow's current Flutter provider dispatch defaults unknown providers to
 Open-Meteo, including widget paths, and its full weather structure requires more
@@ -221,11 +245,10 @@ separate from this shared contract.
 [Pinned Overmorrow dispatch](https://github.com/bmaroti9/Overmorrow/blob/97995e2e00e454389e00e35f1e65654afe3e8bed/lib/decoders/weather_data.dart),
 [upstream transition](https://github.com/bmaroti9/Overmorrow/discussions/238).
 
-The focused tests cover projection, absent data, expiry, units, provenance and
-actual CLI/process cleanup using a synthetic core executable. They do not establish
-a live Weather-overlay request or rendering in either application. The next proof
-needs an actual client adapter/transport and a real verified publication, with no
-hidden provider fallback or location publication.
+Overmorrow needs its own explicit provider adapter and capability-aware UI;
+the Drizz.li build is not evidence of a working mobile integration. Both clients
+must preserve absent data, expiry, units and provenance, without hidden provider
+fallback or location publication.
 
 ### Planned additional weather data
 

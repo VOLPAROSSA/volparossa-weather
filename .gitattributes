@@ -1,0 +1,3 @@
+# Unified-diff context preserves upstream tabs and blank lines verbatim.
+# stage.py checks the applied source with git diff --check instead.
+integrations/drizzli/upstream.patch -whitespace

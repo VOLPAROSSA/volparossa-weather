@@ -1,0 +1,112 @@
+{
+  "schema": 1,
+  "passed": true,
+  "phase": "complete",
+  "scope": {
+    "actual_drizzli_ui": true,
+    "synthetic_weather": true,
+    "actual_http_bridge": true,
+    "core_executed": false,
+    "overlay_proven": false,
+    "upstream_origin_proven": false
+  },
+  "isolation": {
+    "host_read_only": true,
+    "separate_user_netns": true,
+    "interfaces": [
+      "lo"
+    ],
+    "fresh_private_profile": true
+  },
+  "runtime": {
+    "version": "140.16.0",
+    "source_stamp": "d864999404b3032f682d74ccc60d1ce38c9ce609",
+    "sha256": {
+      "browser/omni.ja": "757f1f47bfbde5603e08cdb7ddc83bd27e9b26695bf843d640df7984842fffd7",
+      "firefox-esr": "22bb2d84f2289622e65fbcde266a30952e6ac64d27a2a1af75cea7229f2e6b14",
+      "libxul.so": "62cc326204668a2dae453c9e89d9c200e513c9e3ad0772b164091bf1e5333fb4",
+      "omni.ja": "c0d453127f9c1310dad39cc3f6971acfe59cdf561fec6918b129ee0c780c6e70"
+    },
+    "node_sha256": "bc17c508ffeed0ec622934f9b7fa72f8e78da65350e63c3eceb56fa688aa5e12"
+  },
+  "source": {
+    "upstream": "d2a6839e2b3f2e561b849d83014fc5959bed39cc",
+    "tree": "7b36709f84a10e082119d245e3bddfe67b209e9b",
+    "patch_sha256": "44fa73a806b9361b066d8f277a7be8fc8ecc46092e53a720fc26dfb42ebd40db",
+    "overlay_sha256": {
+      "src/lib/services/volparossa/client.d.mts": "aef3f33f6a447b4d58932af590737e0fac53f9cc603bf2ff6af38e9bf18726d2",
+      "src/lib/services/volparossa/client.mjs": "a1b5fdaafb1781fc83fe2ef49a641cc182cdc3cc176c722b761a62d0612f98e6",
+      "src/lib/services/volparossa-mode.ts": "17da5a4618ff49d81e1ceab1058a5eafdca285f31febe1cce9d9a454cfc2c40c",
+      "src/routes/weather/week/VolparossaForecast.svelte": "1390a473b13fb065b08e92c9a9a8950b938684df3ef75130402e98b6befe8e21",
+      "src/routes/weather/week/VolparossaWeek.svelte": "82e56bc2e0a68856cc49070ebb003fa578c80b6eddef9da35a575a600c4a3096"
+    },
+    "weather_modules": {
+      "src/forecast.mjs": "cb232710aae64564107a4c24122b19e87ad8ff112c2fe56163fc13996cdd816c",
+      "src/provider.mjs": "db07eac4a8f7df334206ca3f39a4ecd85f89db1196e4042e32edd4956b998754"
+    },
+    "built_tree_sha256": "b2723d668fe2541687419a5d81019e546dbdb9f2c94995e3eec5acba6819f6e0",
+    "built_files": 88,
+    "built_bytes": 1128282,
+    "browser_helpers": {
+      "scripts/smoke_compute_model.py": "70b8a944ba6322d46690eafa74247526ac3fc13e92ae9870717e8ed7c63f5c1b",
+      "scripts/smoke_privacy.py": "dd8bdc5b73071eb13d3cd80d305266c654be07ec6bdd74cb4c456b26147f9104",
+      "scripts/stage_firefox.py": "5d54e0e35662fae6b19d5f497d68469b0757fe754601c3e016f6fda773375203"
+    },
+    "browser_revision": "08bac388a0abfd06426bebe8f6fabd0157d2e709",
+    "driver_sha256": "316a77ab735dda83676043a0bc733fc48d234b13118084ab3f8dada74fd0f417",
+    "fixture_sha256": "f6dea0fc5c41355fb80fbd5713ffff01dbaa617d1aa2e9c4d46af19877aaab14"
+  },
+  "checks": {
+    "fixture_lifecycle": {
+      "stop": {
+        "ready": true,
+        "requested": true,
+        "normal_exit": true,
+        "exit_code": 0,
+        "terminated": true
+      },
+      "eof": {
+        "ready": true,
+        "requested": true,
+        "normal_exit": true,
+        "exit_code": 0,
+        "terminated": true
+      },
+      "signal": {
+        "ready": true,
+        "requested": true,
+        "normal_exit": true,
+        "exit_code": 0,
+        "terminated": true
+      }
+    },
+    "hydration": true,
+    "native_times": true,
+    "temperature_wind": true,
+    "explicit_missing_capabilities": true,
+    "attribution": true,
+    "fixed_location": true,
+    "no_external_resources": true,
+    "actual_refresh": true,
+    "missing_values_not_zero": true,
+    "unavailable_closed": true,
+    "stale_response_closed": true,
+    "display_removed_at_expiry": true,
+    "located_route_redirects": true,
+    "unsupported_maps_not_mounted": true,
+    "provider_requests": 7
+  },
+  "cleanup": {
+    "browser_exited": true,
+    "fixture_exited": true,
+    "private_profile_removed": true,
+    "normal_browser_stop": true,
+    "normal_fixture_stop": true
+  },
+  "outer_cleanup": {
+    "namespace_wrapper_exited": true,
+    "private_profile_removed": true,
+    "host_netns_unchanged": true
+  },
+  "wrapper_outcome": "completed"
+}
