@@ -25,7 +25,7 @@ no intermediate weather API is required.
   both original forecast expiry and signed publication expiry.
 
 This is a **temperature-and-wind development component**, not yet a complete weather
-app. Rain, observations, trained corrections, model comparison, automatic
+app. Precipitation, air quality, observations, trained corrections, model comparison, automatic
 shared acquisition and platform UIs remain future work. Rain accumulation must
 not be presented as hourly rainfall; unsupported values are not invented.
 
@@ -34,7 +34,7 @@ The [real IFS origin-to-native-decoder smoke](third_party/ecmwf-smoke.json) pass
 explicit public Berlin test point, with exact initialization/valid time and full
 temporary-process cleanup. This establishes decoding, not measured accuracy.
 The AIFS request contract is supported but its native end-to-end run is not yet
-proven. Twenty-two focused tests use synthetic payloads and a real subprocess
+proven. The original twenty-two focused tests use synthetic payloads and a real subprocess
 fixture; those are not a live Weather-to-core overlay proof.
 
 The [real opt-in wind smoke](third_party/ecmwf-wind-smoke.json) also passes through
@@ -140,6 +140,105 @@ new owned cache/manifest paths, an explicit name/revision and content type
 `application/vnd.volparossa.forecast.v1+json`. Use a short lifetime within the
 remaining forecast window. Do not automatically publish a private location.
 The public-area flag records intent; it is not anonymization.
+
+## Shared application provider
+
+The opt-in `volparossa.weather.provider.v1` contract prepares one common data
+boundary for Drizz.li and Overmorrow. It is an executable projection and core-cache
+consumer, **not yet either application's UI integration**. There is no HTTP server,
+mobile bridge, new scheduler or fallback weather service.
+
+[`toProviderForecast`](src/provider.mjs) is a framework-independent, read-only
+function over an already acquired forecast. It preserves the complete validated
+forecast under `forecast`, including source, initialization, original acquisition,
+license, grid and per-field evidence. This conversion is not a new acquisition or
+a learned prediction. Its `verification_scope` explicitly covers schema and
+freshness only; accepting this shape does not authenticate a publisher or ECMWF.
+
+[`fetchCachedProvider`](src/provider-core.mjs) uses the existing real
+`fetchCachedForecast` path, then projects that result. It retains the verified
+delivery receipt's publisher/name/revision/hash/manifest binding and its limits:
+`upstream_origin_attested` and `manifest_media_type_checked` remain `false`.
+Pure projection has `delivery: null`; a core-cache result contains `delivery`.
+Neither case claims that a reused forecast was freshly downloaded from ECMWF.
+
+| Provider field | Meaning |
+| --- | --- |
+| `timeline.valid_at` and `lead_hours` | Original UTC model-valid times in the supplied order, not an invented hourly grid |
+| `capabilities.implemented_variables` | Temperature, wind speed and wind direction understood by this version |
+| `capabilities.available_variables` | Fields present in this particular forecast; individual samples may still be missing |
+| `series` | Requested variables with units, values and an aligned `value_status` array |
+| `freshness.expires_at` | Earlier of the original forecast expiry and supplied signed-publication expiry |
+
+The variables are `temperature_2m` in `degC`, `wind_speed_10m` in `m/s` and
+`wind_direction_10m` in degrees clockwise **from** north. `availability: supported`
+does not mean every value is known: `value_status: missing` retains `null`.
+Actual calm wind retains speed `0`, direction `null` and status `calm`.
+An unsupported variable, such as precipitation or AQI, has
+`availability: unavailable`, reason `unsupported_variable` and no units or values.
+Wind requested from a temperature-only forecast instead has reason
+`field_not_in_forecast`. The adapter never fills these gaps with zeros, weather
+icons, current observations, interpolation or an external provider.
+
+Use the existing CLI with `--output-contract provider` and optional `--variables`.
+The default output contract and temperature-only behaviour remain unchanged.
+Selecting a wind variable does not silently add `--include-wind` or choose another
+published field set. Variable lists are bounded to 16 distinct identifiers and
+are validated before retrieval; the underlying forecast retains its 16-sample limit.
+
+```sh
+# Preview only. Add the explicit core-cache arguments shown above and --execute
+# to retrieve a deliberately selected publication through an already configured core.
+node scripts/forecast.mjs core-cache \
+  --latitude 52.52 --longitude 13.41 --run 2026-09-30T12:00:00.000Z \
+  --model ifs --steps 12,15,24 --community-area --include-wind \
+  --output-contract provider \
+  --variables temperature_2m,wind_speed_10m,wind_direction_10m,precipitation
+```
+
+This is an example initialization, not a current run. Origin mode can also request
+the provider output, but still requires the original explicit license acceptance,
+pinned decoder and execution flag. Cache mode never falls back to origin mode.
+Provider output deliberately includes the requested location and original evidence;
+stdout is not permission to publish it. Recheck the expiry when reusing or displaying
+the result: `checked_at` records validation time and never resets acquisition age.
+
+### Application adapters still required
+
+Drizz.li's inspected SvelteKit service uses the Open-Meteo SDK's FlatBuffers
+transport and hardcoded endpoint URLs. A VOLPAROSSA JSON provider requires its own
+service adapter and capability-aware presentation, not just a URL substitution.
+Its separate geocoding and map sources also need an explicit policy; selecting
+VOLPAROSSA must not quietly retain Open-Meteo weather requests.
+[Pinned Drizz.li service](https://github.com/open-meteo/drizz.li/blob/d2a6839e2b3f2e561b849d83014fc5959bed39cc/src/lib/services/weather.ts).
+
+Overmorrow's current Flutter provider dispatch defaults unknown providers to
+Open-Meteo, including widget paths, and its full weather structure requires more
+fields than this slice supplies. Add an explicit provider branch and missing-data
+handling before connecting it. The author plans a Kotlin/Compose successor to the
+current Android release; choosing that target versus the existing Flutter app is
+separate from this shared contract.
+[Pinned Overmorrow dispatch](https://github.com/bmaroti9/Overmorrow/blob/97995e2e00e454389e00e35f1e65654afe3e8bed/lib/decoders/weather_data.dart),
+[upstream transition](https://github.com/bmaroti9/Overmorrow/discussions/238).
+
+The focused tests cover projection, absent data, expiry, units, provenance and
+actual CLI/process cleanup using a synthetic core executable. They do not establish
+a live Weather-overlay request or rendering in either application. The next proof
+needs an actual client adapter/transport and a real verified publication, with no
+hidden provider fallback or location publication.
+
+### Planned additional weather data
+
+- [ ] Precipitation: acquire suitable licensed source fields, distinguish accumulated
+  totals from interval amounts and rates, verify units/time windows and missing
+  values, then expose the validated result in the application adapters.
+- [ ] Air quality: acquire suitable licensed pollutant data, retain concentration
+  units and averaging periods, explicitly identify any derived index and its
+  definition, test those transformations, then add application display.
+
+Both are required follow-up work, not present provider capabilities. Continue to
+use direct authorized sources without an Open-Meteo fallback; until verified data
+exists, the current provider must keep returning `unsupported_variable`.
 
 ## Time, models and evidence
 

@@ -8,6 +8,10 @@ import { mkdtemp, chmod, writeFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fetchCachedForecast } from '../src/core-cache.mjs';
+import { fetchCachedProvider } from '../src/provider-core.mjs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { forecast, windForecast, QUERY } from './fixtures.mjs';
 
 const query = { ...QUERY, run: new Date(Math.floor(Date.now() / 21600000) * 21600000).toISOString() };
@@ -106,4 +110,56 @@ test('cancellation joins CLI process and removes only own temporary output; over
   assert.deepEqual((await readdir(root)).sort(), ['control.sock', 'fake-core']);
   const oversized = await fixture(t, { huge: true });
   await assert.rejects(fetchCachedForecast(oversized.options), error => error.code === 'CORE_REPORT_TOO_LARGE');
+});
+
+test('provider wrapper uses actual core-cache process checks and retains publisher limits and expiry', async t => {
+  const { root, data, options } = await fixture(t);
+  const result = await fetchCachedProvider(options, { variables: ['temperature_2m', 'precipitation'] });
+  assert.equal(result.schema, 'volparossa.weather.provider.v1');
+  assert.deepEqual(result.forecast, data);
+  assert.equal(result.delivery.publisher_key, options.publisherKey);
+  assert.equal(result.delivery.name, options.name);
+  assert.equal(result.delivery.upstream_origin_attested, false);
+  assert.equal(result.delivery.manifest_media_type_checked, false);
+  assert.equal(result.freshness.expires_at, result.delivery.publication_expires_at);
+  assert.equal(result.series[1].reason, 'unsupported_variable');
+  assert.deepEqual((await readdir(root)).sort(), ['control.sock', 'fake-core']);
+});
+
+test('provider wrapper never projects failed receipts or bypasses cancellation', async t => {
+  await assert.rejects(fetchCachedProvider(null, { variables: [] }), error => error.code === 'PROVIDER_VARIABLES_INVALID');
+  for (const bad of [{ badHash: true }, { receipt: { publisher_key: 'f'.repeat(64) } },
+    { receipt: { publication_expires_unix_seconds: 1 } }]) {
+    const { root, options } = await fixture(t, bad);
+    await assert.rejects(fetchCachedProvider(options));
+    assert.deepEqual((await readdir(root)).sort(), ['control.sock', 'fake-core']);
+  }
+  const { root, options } = await fixture(t, { hang: true });
+  const controller = new AbortController();
+  const operation = fetchCachedProvider(options, { signal: controller.signal });
+  const timer = setTimeout(() => controller.abort(), 100);
+  try { await assert.rejects(operation, error => error.code === 'CANCELLED'); }
+  finally { clearTimeout(timer); }
+  assert.deepEqual((await readdir(root)).sort(), ['control.sock', 'fake-core']);
+});
+
+test('real CLI provider execute joins synthetic core subprocess; legacy execute envelope unchanged', async t => {
+  const { root, options } = await fixture(t);
+  const script = fileURLToPath(new URL('../scripts/forecast.mjs', import.meta.url));
+  const args = [script, 'core-cache', '--latitude', String(query.latitude), '--longitude', String(query.longitude),
+    '--run', query.run, '--model', query.model, '--steps', query.steps.join(','), '--community-area',
+    '--executable', options.executable, '--control-socket', options.controlSocket, '--cache', options.cache,
+    '--scratch-parent', options.scratchParent, '--publisher-key', options.publisherKey, '--name', options.name,
+    '--min-revision', String(options.minRevision), '--execute'];
+  const run = promisify(execFile);
+  const legacy = JSON.parse((await run(process.execPath, args)).stdout);
+  assert.deepEqual(Object.keys(legacy).sort(), ['delivery', 'forecast']);
+  const actual = await run(process.execPath, [...args, '--output-contract', 'provider', '--variables', 'temperature_2m,aqi']);
+  assert.equal(actual.stderr, '');
+  const provider = JSON.parse(actual.stdout);
+  assert.equal(provider.schema, 'volparossa.weather.provider.v1');
+  assert.deepEqual(provider.forecast, legacy.forecast);
+  assert.equal(provider.series[1].availability, 'unavailable');
+  assert.equal(provider.delivery.upstream_origin_attested, false);
+  assert.deepEqual((await readdir(root)).sort(), ['control.sock', 'fake-core']);
 });
