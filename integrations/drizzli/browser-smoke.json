@@ -44,6 +44,15 @@
       "src/forecast.mjs": "cb232710aae64564107a4c24122b19e87ad8ff112c2fe56163fc13996cdd816c",
       "src/provider.mjs": "db07eac4a8f7df334206ca3f39a4ecd85f89db1196e4042e32edd4956b998754"
     },
+    "bridge_modules": {
+      "src/provider-http.mjs": "71960f57ffe7f5016e63a0bb93d40b66ded3c2f43b211133c58b08cacfbbb33d",
+      "src/provider-core.mjs": "64540cdd981ab192dfb62d885124191a1e7f04d7996fcf6254a337f6d4bd3784",
+      "src/core-cache.mjs": "0b32fda40ec83f204ec5d768abaab0f6f7e0d40012bf1390de34c309b47a2216"
+    },
+    "fixture_modules": {
+      "tests/fixtures.mjs": "e2c5275a6c3b5bf3181007145722b61263ec3edcb83637caf7615d0fbdb2389a",
+      "src/ecmwf.mjs": "c9f3ddfa91a785aefd2d96dfde9fab31b1edb134ea1bd8a4c1531195a391e6ba"
+    },
     "built_tree_sha256": "b2723d668fe2541687419a5d81019e546dbdb9f2c94995e3eec5acba6819f6e0",
     "built_files": 88,
     "built_bytes": 1128282,
@@ -53,7 +62,7 @@
       "scripts/stage_firefox.py": "5d54e0e35662fae6b19d5f497d68469b0757fe754601c3e016f6fda773375203"
     },
     "browser_revision": "08bac388a0abfd06426bebe8f6fabd0157d2e709",
-    "driver_sha256": "316a77ab735dda83676043a0bc733fc48d234b13118084ab3f8dada74fd0f417",
+    "driver_sha256": "dfc2b329aa58e43b06011c9fbfcd355e1d32f10c4ab4da7f4851ad5a0503196d",
     "fixture_sha256": "f6dea0fc5c41355fb80fbd5713ffff01dbaa617d1aa2e9c4d46af19877aaab14"
   },
   "checks": {

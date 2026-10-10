@@ -154,7 +154,7 @@ timeout 150s prlimit --cpu=120 -- python3 -B integrations/drizzli/smoke_browser.
 ```
 
 The retained successful run used `--stage build/drizzli-volparossa-03`,
-`--output build/drizzli-browser-smoke-03` and the workspace-verified executable at
+`--output build/drizzli-browser-smoke-04` and the workspace-verified executable at
 `build/tooling/node-v24.19.0-linux-x64-drizzli-20261011/node-v24.19.0-linux-x64/bin/node`.
 All other arguments match the command above. Earlier failed runs remain failed;
 they exposed test-fixture shutdown/readiness bugs which were corrected before
@@ -173,7 +173,9 @@ namespace with read-only host/runtime mounts and private writable test state.
 No ordinary browser profile, external connectivity or host network change is
 used. Cleanup checks and a closed result survive failure; no raw browser log or
 page contents are exported. Source and built-asset identity are checked before
-launch, and the receipt records the helper hashes actually used.
+launch, and the receipt records the helper, bridge and synthetic-fixture module
+hashes actually used. Loading the core adapter does not mean core retrieval ran:
+this browser proof retains `core_executed: false`.
 
 ## Serve through the local core bridge
 

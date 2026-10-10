@@ -59,24 +59,25 @@ async function staticAssets(directory) {
     const info = await lstat(folder);
     requireThat(depth <= 16 && info.isDirectory() && !info.isSymbolicLink()
       && info.uid === process.getuid() && !(info.mode & 0o022), 'STATIC_ROOT_INVALID');
-    const names = await readdir(folder);
-    requireThat((entries += names.length) <= 1024, 'STATIC_BUDGET_EXCEEDED');
-    for (const name of names) {
+    const children = await readdir(folder, { withFileTypes: true });
+    requireThat((entries += children.length) <= 1024, 'STATIC_BUDGET_EXCEEDED');
+    for (const entry of children) {
+      const name = entry.name;
       requireThat(name.length <= 255 && !/[\x00-\x1f\x7f\\]/.test(name), 'STATIC_ROOT_INVALID');
       const path = join(folder, name), relative = `${prefix}/${name}`;
-      const stat = await lstat(path);
-      requireThat(!stat.isSymbolicLink() && stat.uid === process.getuid() && !(stat.mode & 0o022), 'STATIC_ROOT_INVALID');
-      if (stat.isDirectory()) { await visit(path, relative, depth + 1); continue; }
-      requireThat(stat.isFile() && stat.nlink === 1, 'STATIC_ROOT_INVALID');
-      const type = MIME[extname(name)];
-      if (!type || name.startsWith('.')) continue;
-      requireThat(stat.size <= MAX_ASSET && (bytes += stat.size) <= MAX_STATIC, 'STATIC_BUDGET_EXCEEDED');
+      if (entry.isDirectory()) { await visit(path, relative, depth + 1); continue; }
+      requireThat(entry.isFile(), 'STATIC_ROOT_INVALID');
+      // Directory entries only guide traversal. Authorize and size each asset
+      // using the opened descriptor, never a pathname check made before open.
       const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       try {
         const before = await file.stat();
-        requireThat(before.isFile() && before.dev === stat.dev && before.ino === stat.ino
-          && before.size === stat.size && before.nlink === 1, 'STATIC_ROOT_CHANGED');
-        const data = Buffer.alloc(stat.size + 1);
+        requireThat(before.isFile() && before.uid === process.getuid() && !(before.mode & 0o022)
+          && before.nlink === 1, 'STATIC_ROOT_INVALID');
+        const type = MIME[extname(name)];
+        if (!type || name.startsWith('.')) continue;
+        requireThat(before.size <= MAX_ASSET && (bytes += before.size) <= MAX_STATIC, 'STATIC_BUDGET_EXCEEDED');
+        const data = Buffer.alloc(before.size + 1);
         let offset = 0;
         while (offset < data.length) {
           const { bytesRead } = await file.read(data, offset, data.length - offset, offset);
@@ -84,8 +85,9 @@ async function staticAssets(directory) {
           offset += bytesRead;
         }
         const after = await file.stat();
-        requireThat(offset === stat.size && after.size === before.size && after.mtimeMs === before.mtimeMs
-          && after.ctimeMs === before.ctimeMs, 'STATIC_ROOT_CHANGED');
+        requireThat(offset === before.size && after.size === before.size && after.mtimeMs === before.mtimeMs
+          && after.ctimeMs === before.ctimeMs && after.uid === before.uid && after.mode === before.mode
+          && after.nlink === 1, 'STATIC_ROOT_CHANGED');
         files.set(relative, { type, bytes: data.subarray(0, offset) });
       } finally { await file.close(); }
     }

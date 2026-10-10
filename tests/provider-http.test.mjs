@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { request as httpRequest } from 'node:http';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
-import { mkdtemp, mkdir, chmod, writeFile, readdir, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, chmod, writeFile, readdir, rm, symlink, link, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, execFile } from 'node:child_process';
@@ -121,6 +121,23 @@ test('static build root rejects symlinks and writable files rather than serving 
   await assert.rejects(f.start(), error => error.code === 'STATIC_ROOT_INVALID');
   await rm(join(f.staticRoot, 'passwd.json'));
   await chmod(join(f.staticRoot, 'app.js'), 0o666);
+  await assert.rejects(f.start(), error => error.code === 'STATIC_ROOT_INVALID');
+});
+
+test('static assets reject hardlinks and keep only the verified startup bytes after pathname replacement', async t => {
+  const f = await fixture(t), asset = join(f.staticRoot, 'app.js');
+  const original = 'console.log("synthetic client");';
+  await link(asset, join(f.root, 'linked.js'));
+  await assert.rejects(f.start(), error => error.code === 'STATIC_ROOT_INVALID');
+  await rm(join(f.root, 'linked.js'));
+  const server = await f.start();
+  await rename(asset, join(f.root, 'original.js'));
+  await symlink('/etc/passwd', asset);
+  assert.equal((await get(server.origin, '/app.js')).body, original);
+  await rm(asset);
+  await writeFile(asset, 'unverified replacement', { mode: 0o666 });
+  await chmod(asset, 0o666);
+  assert.equal((await get(server.origin, '/app.js')).body, original);
   await assert.rejects(f.start(), error => error.code === 'STATIC_ROOT_INVALID');
 });
 

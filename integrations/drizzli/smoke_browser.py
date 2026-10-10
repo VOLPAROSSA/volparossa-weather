@@ -140,6 +140,9 @@ def validate_client_stage(stage):
     artifact = hashlib.sha256(json.dumps(hashes, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return dict(upstream=metadata["commit"], tree=metadata["tree"], patch_sha256=digest(HERE / "upstream.patch"),
         overlay_sha256=copied, weather_modules=metadata["weather_modules"],
+        bridge_modules={name: digest(ROOT / name) for name in
+            ("src/provider-http.mjs", "src/provider-core.mjs", "src/core-cache.mjs")},
+        fixture_modules={name: digest(ROOT / name) for name in ("tests/fixtures.mjs", "src/ecmwf.mjs")},
         built_tree_sha256=artifact, built_files=len(hashes), built_bytes=total,
         browser_helpers={name: digest(BROWSER_ROOT / name) for name in
             ("scripts/smoke_compute_model.py", "scripts/smoke_privacy.py", "scripts/stage_firefox.py")},

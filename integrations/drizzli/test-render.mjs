@@ -48,18 +48,22 @@ test('actual Svelte child renders supplied coordinates, native times and tempera
   assert.match(html, /not current observations/);
   assert.match(html, /Missing does not mean dry, clear or clean air/);
   assert.equal((html.match(/<tr /g) || []).length, 3);
-  assert.doesNotMatch(html, /<iframe|<script|<img/);
+  assert.doesNotMatch(html, /<(?:iframe|script|img)\b/i);
   assert.match(html, /href="https:\/\/www.ecmwf.int\/en\/forecasts\/datasets\/open-data"/);
   assert.match(html, /href="https:\/\/creativecommons.org\/licenses\/by\/4.0\/"/);
   assert.match(html, /Processing:/);
 });
 
 test('source descriptions are escaped by the actual Svelte component', async () => {
-  const original = forecast();
-  original.source.changes = '<script>not executable</script>';
-  const html = (await render(Component, { props: { forecast: provider(original) } })).body;
-  assert.ok(html.includes('&lt;script>not executable&lt;/script>'));
-  assert.doesNotMatch(html, /<script>/);
+  for (const description of ['<script>not executable</script>',
+    '<ScRiPt data-example="true">not executable</ScRiPt>']) {
+    const original = forecast();
+    original.source.changes = description;
+    const html = (await render(Component, { props: { forecast: provider(original) } })).body;
+    assert.ok(html.includes(description.replaceAll('<', '&lt;')));
+    // HTML tag names are case-insensitive; attributes must not evade the assertion.
+    assert.doesNotMatch(html, /<script\b/i);
+  }
 });
 
 test('actual Svelte child renders missing wind rather than invented zero', async () => {
