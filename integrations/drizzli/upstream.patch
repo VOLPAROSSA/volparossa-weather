@@ -1,0 +1,281 @@
+diff --git a/src/lib/components/navigation/footer.svelte b/src/lib/components/navigation/footer.svelte
+index c5da848..b657790 100644
+--- a/src/lib/components/navigation/footer.svelte
++++ b/src/lib/components/navigation/footer.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { VOLPAROSSA_WEATHER } from '$lib/services/volparossa-mode';
+ 	import { href } from '$lib/i18n';
+ 	import * as m from '$lib/paraglide/messages';
+ 
+@@ -51,6 +52,11 @@
+ 					{m.footer_tagline()}
+ 				</p>
+ 				<p class="mt-3 text-xs text-muted-foreground">
++					{#if VOLPAROSSA_WEATHER}
++						Weather data: VOLPAROSSA provider from
++						<a class="underline" href="https://www.ecmwf.int/en/forecasts/datasets/open-data" target="_blank" rel="noopener noreferrer">ECMWF Open Data</a>.
++						Original Drizz.li application by Open-Meteo.
++					{:else}
+ 					{m.footer_data_by()}
+ 					<a
+ 						class="font-medium underline-offset-2 hover:text-foreground hover:underline"
+@@ -58,6 +64,7 @@
+ 						target="_blank"
+ 						rel="noopener noreferrer">Open-Meteo</a
+ 					>
++					{/if}
+ 				</p>
+ 				<!-- Open source is part of the identity: whole app under AGPL, with a
+ 				     fork button like the Open-Meteo maps carry. -->
+@@ -103,17 +110,20 @@
+ 				</h3>
+ 				<ul class="mt-3 flex flex-col gap-2 text-sm">
+ 					{#each forecastLinks as link (link.href)}
++						{#if !VOLPAROSSA_WEATHER || link.href === href('/weather/week')}
+ 						<li>
+ 							<a
+ 								class="text-foreground/80 underline-offset-2 hover:text-foreground hover:underline"
+ 								href={link.href}>{link.label}</a
+ 							>
+ 						</li>
++						{/if}
+ 					{/each}
+ 				</ul>
+ 			</nav>
+ 
+ 			<!-- Popular locations (spans two columns of links) -->
++			{#if !VOLPAROSSA_WEATHER}
+ 			<nav aria-label={m.footer_popular()} class="lg:col-span-2">
+ 				<h3 class="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">
+ 					{m.footer_popular()}
+@@ -130,6 +140,7 @@
+ 					{/each}
+ 				</ul>
+ 			</nav>
++			{/if}
+ 		</div>
+ 
+ 		<!-- Bottom bar: legal -->
+diff --git a/src/lib/components/navigation/header.svelte b/src/lib/components/navigation/header.svelte
+index 7f67e17..45b5545 100644
+--- a/src/lib/components/navigation/header.svelte
++++ b/src/lib/components/navigation/header.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { VOLPAROSSA_WEATHER } from '$lib/services/volparossa-mode';
+ 	import { get } from 'svelte/store';
+ 
+ 	import { goto } from '$app/navigation';
+@@ -72,6 +73,9 @@
+ 			</div>
+ 		</a>
+ 		<div class="flex min-w-0 flex-1 items-center md:max-w-xl">
++			{#if VOLPAROSSA_WEATHER}
++				<span class="text-sm">Configured VOLPAROSSA forecast · location selection unavailable</span>
++			{:else}
+ 			<LocationSearch
+ 				label={m.search_placeholder()}
+ 				{location}
+@@ -80,6 +84,7 @@
+ 					navigateToLocation(event.detail);
+ 				}}
+ 			/>
++			{/if}
+ 		</div>
+ 
+ 		<div class="ml-auto flex shrink-0 items-center gap-2">
+diff --git a/src/lib/services/geolocation.ts b/src/lib/services/geolocation.ts
+index 03218d0..a4d41a8 100644
+--- a/src/lib/services/geolocation.ts
++++ b/src/lib/services/geolocation.ts
+@@ -1,4 +1,5 @@
+ import { get } from 'svelte/store';
++import { VOLPAROSSA_WEATHER } from '$lib/services/volparossa-mode';
+ 
+ import {
+ 	type GeoLocation,
+@@ -38,6 +39,7 @@ const MAX_MATCH_KM = 250;
+ 
+ /** Cloudflare's estimate for this visitor, or null when it has none. */
+ export async function fetchEdgeGeo(): Promise<EdgeGeo | null> {
++	if (VOLPAROSSA_WEATHER) return null;
+ 	try {
+ 		const response = await fetch(GEO_ENDPOINT, {
+ 			headers: { accept: 'application/json' },
+diff --git a/src/lib/services/weather.ts b/src/lib/services/weather.ts
+index d894c6c..567c5f2 100644
+--- a/src/lib/services/weather.ts
++++ b/src/lib/services/weather.ts
+@@ -12,7 +12,13 @@
+  */
+ import { Model } from '@openmeteo/sdk/model';
+ import { Unit } from '@openmeteo/sdk/unit';
+-import { fetchWeatherApi } from 'openmeteo';
++import { fetchWeatherApi as upstreamWeatherApi } from 'openmeteo';
++import { VOLPAROSSA_WEATHER } from '$lib/services/volparossa-mode';
++
++const fetchWeatherApi: typeof upstreamWeatherApi = (...args) => {
++	if (VOLPAROSSA_WEATHER) throw new Error('This weather capability is not available through VOLPAROSSA yet.');
++	return upstreamWeatherApi(...args);
++};
+ 
+ import { type DaylightBand, buildDaylightBands } from '$lib/charts/bands';
+ import * as m from '$lib/paraglide/messages';
+diff --git a/src/lib/utils/location.ts b/src/lib/utils/location.ts
+index fae053c..10d2da6 100644
+--- a/src/lib/utils/location.ts
++++ b/src/lib/utils/location.ts
+@@ -1,4 +1,5 @@
+ import { error, redirect } from '@sveltejs/kit';
++import { VOLPAROSSA_WEATHER } from '$lib/services/volparossa-mode';
+ 
+ import { deLocalizeHref, localizeHref } from '$lib/paraglide/runtime';
+ 
+@@ -21,6 +22,7 @@ export type RoutableLocation = Pick<
+ >;
+ 
+ export function buildLocationRoute(location: RoutableLocation): string {
++	if (VOLPAROSSA_WEATHER) return 'configured';
+ 	// coordinate-only locations (GPS) have no real geocoding id
+ 	if (location.feature_code === 'COORD' || !location.id) {
+ 		return `${location.latitude.toFixed(4)}N${location.longitude.toFixed(4)}E`;
+@@ -91,6 +93,9 @@ export async function resolveLocationFromRoute({
+ 	routePrefix,
+ 	event
+ }: ResolveLocationOptions): Promise<GeoLocation> {
++	// A fixed local publication cannot answer an arbitrary city route. Do not
++	// geocode it or display that city's heading above different forecast data.
++	if (VOLPAROSSA_WEATHER) redirect(303, localizeHref('/weather/week/'));
+ 	const coordMatch = urlLocation.match(COORD_ROUTE);
+ 	if (coordMatch) {
+ 		return coordinateLocation(parseFloat(coordMatch[1]), parseFloat(coordMatch[2]));
+diff --git a/src/routes/+layout.svelte b/src/routes/+layout.svelte
+index 821a516..8c0106f 100644
+--- a/src/routes/+layout.svelte
++++ b/src/routes/+layout.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { VOLPAROSSA_WEATHER } from '$lib/services/volparossa-mode';
+ 	import { onMount, tick } from 'svelte';
+ 	import { get } from 'svelte/store';
+ 	import { fade } from 'svelte/transition';
+@@ -43,6 +44,7 @@
+ 	// topbar would otherwise sit on its placeholder for the whole visit. Ask
+ 	// once here; the answer is shared with whatever asks next.
+ 	onMount(() => {
++		if (VOLPAROSSA_WEATHER) return;
+ 		if (!get(page).data.location && !hasStoredLocation()) void initialLocation();
+ 	});
+ 
+diff --git a/src/routes/weather/+layout.svelte b/src/routes/weather/+layout.svelte
+index 7655821..c718615 100644
+--- a/src/routes/weather/+layout.svelte
++++ b/src/routes/weather/+layout.svelte
+@@ -1,4 +1,5 @@
+ <script lang="ts">
++	import { VOLPAROSSA_WEATHER } from '$lib/services/volparossa-mode';
+ 	import { setContext } from 'svelte';
+ 
+ 	import { page } from '$app/stores';
+@@ -16,7 +17,7 @@
+ 
+ 	let { children }: Props = $props();
+ 	let location: GeoLocation | null = $derived(
+-		$page.data.location ?? ($locationKnown ? $storedLocation : null)
++		VOLPAROSSA_WEATHER ? null : ($page.data.location ?? ($locationKnown ? $storedLocation : null))
+ 	);
+ 
+ 	let actions = $state<Snippet | null>(null);
+@@ -33,7 +34,7 @@
+ 		['/weather/seasonal', m.page_seasonal_subtitle],
+ 		['/weather/historical', m.page_historical_subtitle]
+ 	];
+-	let hasModelSelector = $derived(!routePath($page.url.pathname).startsWith('/weather/compare'));
++	let hasModelSelector = $derived(!VOLPAROSSA_WEATHER && !routePath($page.url.pathname).startsWith('/weather/compare'));
+ 	let title = $derived(
+ 		TITLES.find(([prefix]) => routePath($page.url.pathname).startsWith(prefix))?.[1]?.() ?? null
+ 	);
+@@ -44,7 +45,7 @@
+ 	<!-- Keep mobile controls close; desktop spacing matches main's top padding. -->
+ 	<div class="mb-2 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 md:mb-3 md:min-h-9 lg:mb-6">
+ 		<h1 class="text-xl leading-tight font-bold tracking-tight text-foreground md:text-3xl">
+-			{title}
++			{VOLPAROSSA_WEATHER ? 'Configured VOLPAROSSA forecast' : title}
+ 			{#if location?.name}
+ 				<span class="hidden font-medium text-muted-foreground md:inline md:text-2xl"
+ 					>{m.forecast_location({ location: location.name })}</span
+@@ -63,4 +64,8 @@
+ 	</div>
+ {/if}
+ 
+-{@render children?.()}
++{#if VOLPAROSSA_WEATHER && !routePath($page.url.pathname).startsWith('/weather/week')}
++	<p role="status" class="p-6">This view is not available through VOLPAROSSA yet. Use the weekly forecast view for native temperature and wind data. No external weather service or map is loaded.</p>
++{:else}
++	{@render children?.()}
++{/if}
+diff --git a/src/routes/weather/week/+page.svelte b/src/routes/weather/week/+page.svelte
+index 4565124..b145979 100644
+--- a/src/routes/weather/week/+page.svelte
++++ b/src/routes/weather/week/+page.svelte
+@@ -1,4 +1,6 @@
+ <script lang="ts">
++	import { VOLPAROSSA_WEATHER } from '$lib/services/volparossa-mode';
++	import VolparossaWeek from './VolparossaWeek.svelte';
+ 	import { onMount } from 'svelte';
+ 
+ 	import { goto } from '$app/navigation';
+@@ -18,6 +20,7 @@
+ 	// during prerender: the location this browser last looked at, or - on a first
+ 	// visit - the one Cloudflare derives from the request (see initialLocation)
+ 	onMount(() => {
++		if (VOLPAROSSA_WEATHER) return;
+ 		void initialLocation().then((location) => {
+ 			goto(href('/weather/week/[location]', { location: buildLocationRoute(location) }), {
+ 				replaceState: true
+@@ -35,6 +38,9 @@
+      for all of it. It shows the page it is about to hand over to rather than an
+      empty column - the same placeholders, from the same component, so the
+      located page drops straight into them without a flicker. -->
++{#if VOLPAROSSA_WEATHER}
++	<VolparossaWeek />
++{:else}
+ <div style="timeline-scope: --daystrip-sentinel">
+ 	<DailyStripSticky
+ 		daily={null}
+@@ -49,3 +55,4 @@
+ 	<div class="relative"><WeekSkeleton part="summary" /></div>
+ 	<div class="relative"><WeekSkeleton part="charts" /></div>
+ </div>
++{/if}
+diff --git a/svelte.config.js b/svelte.config.js
+index 470b4bc..6cad985 100644
+--- a/svelte.config.js
++++ b/svelte.config.js
+@@ -30,7 +30,7 @@ const config = {
+ 		// (unlisted cities, GPS coordinate routes); the universal load then
+ 		// resolves the location client-side. Most static hosts serve 404.html
+ 		// for unknown paths automatically.
+-		adapter: adapter({ fallback: '404.html' }),
++		adapter: adapter({ fallback: process.env.VITE_VOLPAROSSA_WEATHER === '1' ? 'index.html' : '404.html' }),
+ 		// Poll _app/version.json so a deploy while the SPA is open surfaces the
+ 		// update-notification toast (see update-notification.svelte). NOTE for the
+ 		// upcoming service worker / offline PRs: version.json must stay
+@@ -41,6 +41,7 @@ const config = {
+ 		},
+ 		// Pregenerate city pages to improve SEO during static build
+ 		prerender: {
++			crawl: process.env.VITE_VOLPAROSSA_WEATHER !== '1',
+ 			// dynamic per-location routes (14-day, compare, unlisted cities) are
+ 			// served by the SPA fallback instead of being prerendered
+ 			handleUnseenRoutes: 'ignore',
+@@ -50,6 +51,8 @@ const config = {
+ 				console.warn(`prerender skipped ${path}: ${message}`);
+ 			},
+ 			entries: (() => {
++				// No public geocoder calls or city-specific content at build time.
++				if (process.env.VITE_VOLPAROSSA_WEATHER === '1') return ['/en/weather/week/'];
+ 				// Locale lives in the path (see the paraglide config in vite.config.ts),
+ 				// so a localized URL is not a route SvelteKit can discover on its own -
+ 				// each one has to be listed. City pages are prerendered for the base
