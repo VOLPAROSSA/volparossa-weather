@@ -20,7 +20,7 @@ const query = { ...QUERY, run: run.toISOString(), steps: [3, 9, 24], includeWind
 const config = { core: { mode: 'core-cache', executable: `${work}/unused-core`,
   controlSocket: `${work}/unused.sock`, cache: `${work}/unused-cache`, scratchParent: work,
   publisherKey: '1'.repeat(64), name: 'synthetic-browser-forecast', minRevision: 1,
-  query, reuseCache: false }, variables: ['temperature_2m', 'wind_speed_10m', 'wind_direction_10m',
+  query, reuseCache: true }, variables: ['temperature_2m', 'wind_speed_10m', 'wind_direction_10m',
   'precipitation', 'air_quality'] };
 let mode = 'valid', calls = 0;
 const server = await startProviderHttp({ config, staticRoot, requestDeadlineMs: 5000 }, {

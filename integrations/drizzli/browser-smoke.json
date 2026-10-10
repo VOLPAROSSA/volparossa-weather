@@ -45,7 +45,7 @@
       "src/provider.mjs": "db07eac4a8f7df334206ca3f39a4ecd85f89db1196e4042e32edd4956b998754"
     },
     "bridge_modules": {
-      "src/provider-http.mjs": "71960f57ffe7f5016e63a0bb93d40b66ded3c2f43b211133c58b08cacfbbb33d",
+      "src/provider-http.mjs": "6941899190379629723df0509be3d5b096243d2d6ab3eaac6c122eef74b7e854",
       "src/provider-core.mjs": "64540cdd981ab192dfb62d885124191a1e7f04d7996fcf6254a337f6d4bd3784",
       "src/core-cache.mjs": "0b32fda40ec83f204ec5d768abaab0f6f7e0d40012bf1390de34c309b47a2216"
     },
@@ -63,7 +63,7 @@
     },
     "browser_revision": "08bac388a0abfd06426bebe8f6fabd0157d2e709",
     "driver_sha256": "dfc2b329aa58e43b06011c9fbfcd355e1d32f10c4ab4da7f4851ad5a0503196d",
-    "fixture_sha256": "f6dea0fc5c41355fb80fbd5713ffff01dbaa617d1aa2e9c4d46af19877aaab14"
+    "fixture_sha256": "268d9ad6a7c18fac965296ffbabca68580fec6905f6e8728c4e1cc425beeb6be"
   },
   "checks": {
     "fixture_lifecycle": {

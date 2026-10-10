@@ -37,6 +37,9 @@ export function providerHttpConfiguration(config) {
   exact(core, ['mode', 'executable', 'controlSocket', 'cache', 'scratchParent', 'publisherKey',
     'name', 'minRevision', 'query', 'reuseCache'], 'BRIDGE_CONFIG_INVALID');
   requireThat(core.mode === 'core-cache' && typeof core.reuseCache === 'boolean', 'BRIDGE_CONFIG_INVALID');
+  // A long-lived UI must reuse an explicitly initialized, agent-owned cache.
+  // Creation is a separate one-shot CLI action; repeating create on Refresh fails.
+  requireThat(core.reuseCache === true, 'BRIDGE_REUSABLE_CACHE_REQUIRED');
   for (const name of ['executable', 'controlSocket', 'cache', 'scratchParent']) absolute(core[name]);
   requireThat(typeof core.publisherKey === 'string' && /^[a-f0-9]{64}$/.test(core.publisherKey)
     && typeof core.name === 'string' && Buffer.byteLength(core.name) >= 1 && Buffer.byteLength(core.name) <= 128

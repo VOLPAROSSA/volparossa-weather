@@ -223,6 +223,9 @@ trusted publisher, public community area and model run; browser requests cannot
 choose arbitrary locations, publishers, files or commands. One bounded retrieval
 uses the existing core-cache adapter, cancels on disconnect and never falls back
 to an origin service. No CORS access or automatic location publication is enabled.
+Initialize the exact agent-owned cache with an explicit successful CLI retrieval
+first, then configure the long-lived bridge with `reuseCache: true`; one-shot
+cache creation is rejected by the bridge so refreshes do not try to recreate it.
 
 The full Drizz.li production build, Svelte/TypeScript checks and actual forecast
 component rendering pass. An [isolated Firefox trial](integrations/drizzli/browser-smoke.json)

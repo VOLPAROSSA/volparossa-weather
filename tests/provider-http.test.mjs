@@ -29,7 +29,7 @@ async function fixture(t) {
   const config = { variables: ['temperature_2m', 'precipitation'], core: { mode: 'core-cache',
     executable: join(root, 'fake-core'), controlSocket: join(root, 'control.sock'), cache: join(root, 'cache'),
     scratchParent: root, publisherKey: 'c'.repeat(64), name: 'weather.fixture', minRevision: 2,
-    query: currentQuery(), reuseCache: false } };
+    query: currentQuery(), reuseCache: true } };
   function provider() {
     const data = forecast(config.core.query, new Date().toISOString());
     const expiry = new Date(Math.floor(Date.now() / 1000) * 1000 + 1200000).toISOString();
@@ -113,6 +113,9 @@ test('fixed configuration is copied, exact, public-community-only and checked be
     await assert.rejects(startProviderHttp({ config: invalid, staticRoot: f.staticRoot }));
   }
   await assert.rejects(startProviderHttp({ config: original, staticRoot: f.staticRoot, requestDeadlineMs: 180001 }));
+  const oneShot = structuredClone(original); oneShot.core.reuseCache = false;
+  await assert.rejects(startProviderHttp({ config: oneShot, staticRoot: f.staticRoot }),
+    error => error.code === 'BRIDGE_REUSABLE_CACHE_REQUIRED');
 });
 
 test('static build root rejects symlinks and writable files rather than serving arbitrary paths', async t => {
@@ -205,7 +208,7 @@ test('stale, mismatched and embellished injected provider results fail closed', 
   }
 });
 
-test('default HTTP backend executes existing core-cache adapter and cleans synthetic process outputs', async t => {
+test('default HTTP backend reuses the exact configured cache across refreshes and cleans synthetic process outputs', async t => {
   const f = await fixture(t), { core } = f.config;
   const socket = createServer(); socket.listen(core.controlSocket); await once(socket, 'listening');
   t.after(() => socket.close());
@@ -213,7 +216,7 @@ test('default HTTP backend executes existing core-cache adapter and cleans synth
   await writeFile(core.executable, `#!${process.execPath}
 const fs=require('node:fs'), crypto=require('node:crypto');
 const args=process.argv.slice(2), read=key=>args[args.indexOf(key)+1];
-if(args[2]!=='content'||args[3]!=='fetch-name'||args.includes('--cache-only'))process.exit(9);
+if(args[2]!=='content'||args[3]!=='fetch-name'||args.includes('--cache-only')||!args.includes('--reuse-cache')||read('--cache')!==${JSON.stringify(core.cache)})process.exit(9);
 const bytes=Buffer.from(JSON.stringify(${JSON.stringify(data)})),output=read('--local-output');
 fs.writeFileSync(output,bytes,{mode:0o600,flag:'wx'});
 process.stdout.write(JSON.stringify({operation:'named_content_download',publisher_key:read('--publisher-key'),name:read('--name'),revision:2,
@@ -225,6 +228,8 @@ ownership_changed:false,origin_authenticated:false,globally_latest:false,local_o
   const result = await get(server.origin);
   assert.equal(result.status, 200); assert.deepEqual(JSON.parse(result.body).forecast, data);
   assert.equal(JSON.parse(result.body).delivery.upstream_origin_attested, false);
+  const refreshed = await get(server.origin);
+  assert.equal(refreshed.status, 200); assert.deepEqual(JSON.parse(refreshed.body).forecast, data);
   assert.deepEqual((await readdir(f.root)).sort(), ['control.sock', 'fake-core', 'static']);
 });
 

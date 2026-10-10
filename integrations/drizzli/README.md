@@ -154,7 +154,7 @@ timeout 150s prlimit --cpu=120 -- python3 -B integrations/drizzli/smoke_browser.
 ```
 
 The retained successful run used `--stage build/drizzli-volparossa-03`,
-`--output build/drizzli-browser-smoke-04` and the workspace-verified executable at
+`--output build/drizzli-browser-smoke-05` and the workspace-verified executable at
 `build/tooling/node-v24.19.0-linux-x64-drizzli-20261011/node-v24.19.0-linux-x64/bin/node`.
 All other arguments match the command above. Earlier failed runs remain failed;
 they exposed test-fixture shutdown/readiness bugs which were corrected before
@@ -179,12 +179,35 @@ this browser proof retains `core_executed: false`.
 
 ## Serve through the local core bridge
 
-First obtain an existing, fresh, trusted core-cache publication as described in
-the [root README](../../README.md). Its area, model run, lead times, wind presence,
-publisher, name and revision must match the bridge configuration exactly.
-Expired publications must be replaced with genuinely fresh data, not given new
-timestamps. The bridge does not acquire data from an Internet origin or publish
-it when a request fails.
+First select an existing, fresh, trusted publication as described in the
+[root README](../../README.md). Complete one explicit core-cache retrieval to
+create and verify a new cache owned by the agent. For example, replace every
+placeholder below with the actual publication and local paths:
+
+```sh
+node scripts/forecast.mjs core-cache \
+  --executable /ABSOLUTE/PATH/TO/volparossa \
+  --control-socket /ABSOLUTE/PATH/TO/control.sock \
+  --cache /ABSOLUTE/PATH/TO/weather-cache \
+  --scratch-parent /ABSOLUTE/PATH/TO/private-weather-scratch \
+  --publisher-key TRUSTED_64_HEX_KEY --name TRUSTED_PUBLICATION_NAME --min-revision 1 \
+  --latitude 52.52 --longitude 13.41 --run ACTUAL_FRESH_MODEL_RUN_UTC \
+  --model ifs --steps 3,9,24 --community-area --include-wind --execute
+```
+
+The first command deliberately omits `--reuse-cache`: the selected cache path
+must not already exist. Start the bridge only after this retrieval succeeds.
+If you instead deliberately reuse an already verified cache, supply
+`--reuse-cache` to this one-shot command too; never delete or adopt an unknown
+cache to make it pass.
+
+The long-running bridge requires `reuseCache: true` and uses that **same cache**
+for its first request and later refreshes. This checks the existing owned store;
+it neither creates a cache nor relaxes its ownership checks. Its area, model run,
+lead times, wind presence, publisher, name and minimum revision must match the
+selected publication. Expired publications must be replaced with genuinely fresh
+data, not given new timestamps. The bridge does not acquire data from an Internet
+origin or publish it when a request fails.
 
 Create a private JSON file in an owner-controlled directory using your editor.
 The following is a template: replace the uppercase placeholders and example
@@ -211,7 +234,7 @@ locations are dedicated core-provider working directories, not the static site.
       "communityArea": true,
       "includeWind": true
     },
-    "reuseCache": false
+    "reuseCache": true
   },
   "variables": ["temperature_2m", "wind_speed_10m", "wind_direction_10m", "precipitation", "air_quality"]
 }
