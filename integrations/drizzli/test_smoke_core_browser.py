@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
-"""Inert joined-proof boundaries. No browser, core, network or namespace launch."""
+"""Joined-proof boundaries. No browser, core or external network execution.
+
+One optional, bounded bwrap regression only reads an existing public executable
+in a fresh loopback-only namespace. Other cases are inert filesystem/unit tests.
+"""
 import copy
 import datetime
 import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -118,6 +124,93 @@ class BindingTests(unittest.TestCase):
 
 
 class FilesystemTests(unittest.TestCase):
+    def test_core_exception_requires_verified_inner_boundary_and_distinct_user_namespace(self):
+        binary = Path("/usr/bin/true")
+        current = os.readlink("/proc/self/ns/user")
+        with self.assertRaises(ValueError): smoke.readonly_core_hash(binary, "a" * 64, current)
+        with self.assertRaises(ValueError): smoke.readonly_core_hash(binary, "a" * 64, None)
+        inner = SimpleNamespace(inside=True, outer_userns=current)
+        with patch.object(smoke, "boundary", side_effect=ValueError("closed")), \
+             patch.object(smoke, "readonly_core_hash") as read, self.assertRaises(ValueError):
+            smoke.verify_core_binary(binary, "a" * 64, inner)
+        read.assert_not_called()
+        outer = SimpleNamespace(inside=False, outer_userns="user:[123]")
+        with self.assertRaises(ValueError): smoke.verify_core_binary(binary, "a" * 64, outer)
+
+    def test_outer_core_verifier_preserves_strict_file_owner_and_hash_checks(self):
+        args = SimpleNamespace(inside=False, outer_userns=None)
+        with tempfile.TemporaryDirectory(prefix="drizzli-core-test-", dir=smoke.ROOT / "build") as directory:
+            binary = Path(directory) / "core"
+            binary.write_bytes(b"not executed"); binary.chmod(0o500)
+            expected = digest(b"not executed")
+            self.assertEqual(smoke.verify_core_binary(binary, expected, args), (expected, 12))
+            with self.assertRaises(ValueError): smoke.verify_core_binary(binary, "f" * 64, args)
+            binary.chmod(0o520)
+            with self.assertRaises(ValueError): smoke.verify_core_binary(binary, expected, args)
+            binary.chmod(0o400)
+            with self.assertRaises(ValueError): smoke.verify_core_binary(binary, expected, args)
+            with patch.object(smoke, "file_hash", side_effect=ValueError("owner rejected")), \
+                 patch.object(smoke, "readonly_core_hash") as relaxed, self.assertRaises(ValueError):
+                smoke.verify_core_binary(binary, expected, args)
+            relaxed.assert_not_called()
+
+    def test_readonly_core_descriptor_rejects_writable_mount_and_changed_inode(self):
+        with tempfile.TemporaryDirectory(prefix="drizzli-core-test-", dir=smoke.ROOT / "build") as directory:
+            binary = Path(directory) / "core"
+            binary.write_bytes(b"not executed"); binary.chmod(0o500)
+            expected = digest(b"not executed")
+            with patch.object(smoke.os, "readlink", return_value="user:[456]"), \
+                 patch.object(smoke.Path, "read_text", return_value=f"{os.getuid()} {os.getuid()} 1\n"):
+                # Namespace shape alone cannot authorize a writable executable.
+                with patch.object(smoke.os, "fstatvfs", return_value=SimpleNamespace(f_flag=0)), self.assertRaises(ValueError):
+                    smoke.readonly_core_hash(binary, expected, "user:[123]")
+                original_stat = binary.stat()
+                changed = copy.copy(original_stat)
+                with patch.object(smoke.os, "fstatvfs", return_value=SimpleNamespace(f_flag=os.ST_RDONLY)), \
+                     patch.object(smoke.os, "fstat", side_effect=[original_stat, changed]), \
+                     patch.object(smoke.Path, "stat", return_value=SimpleNamespace(
+                         **{name: getattr(original_stat, name) for name in ("st_dev", "st_uid", "st_gid", "st_mode",
+                             "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")}, st_ino=original_stat.st_ino + 1)), \
+                     self.assertRaises(ValueError):
+                    smoke.readonly_core_hash(binary, expected, "user:[123]")
+
+    @unittest.skipUnless(Path("/usr/bin/bwrap").is_file() and os.getuid() != 0, "requires unprivileged Linux bwrap")
+    def test_real_bwrap_root_owned_binary_keeps_strict_generic_guard_but_exact_readonly_core_verifies(self):
+        binary = Path("/usr/bin/true")
+        self.assertEqual(binary.stat().st_uid, 0)
+        expected, size = smoke.verify_core_binary(binary, digest(binary.read_bytes()),
+                                                  SimpleNamespace(inside=False, outer_userns=None))
+        outer = os.readlink("/proc/self/ns/user")
+        # The lower descriptor helper is exercised here, not the UID985/KVM
+        # browser runner. No executable from this test is ever run as the core.
+        code = """
+import json, os, sys
+from pathlib import Path
+import smoke_core_browser as smoke
+binary, expected, outer = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+def rejected(call):
+    try: call()
+    except (ValueError, OSError): return True
+    return False
+generic_rejected = rejected(lambda: smoke.file_hash(binary, 1024*1024))
+result = smoke.readonly_core_hash(binary, expected, outer)
+wrong_hash_rejected = rejected(lambda: smoke.readonly_core_hash(binary, 'f'*64, outer))
+same_namespace_rejected = rejected(lambda: smoke.readonly_core_hash(binary, expected, os.readlink('/proc/self/ns/user')))
+print(json.dumps(dict(generic_rejected=generic_rejected, exact_readonly_core_verified=result[0]==expected,
+                     bytes=result[1], wrong_hash_rejected=wrong_hash_rejected,
+                     same_namespace_rejected=same_namespace_rejected)))
+"""
+        helpers = Path(sys.modules["smoke_compute_model"].__file__).resolve().parent
+        environment = {**smoke.shared.clean_environment(), "PYTHONPATH": os.pathsep.join((str(HERE), str(helpers)))}
+        completed = subprocess.run(["/usr/bin/bwrap", "--die-with-parent", "--new-session", "--unshare-user",
+            "--unshare-net", "--unshare-pid", "--ro-bind", "/", "/", "--ro-bind", str(binary), str(binary),
+            "--tmpfs", "/tmp", "--proc", "/proc", "--dev", "/dev", "--", sys.executable, "-B", "-c", code,
+            str(binary), expected, outer], env=environment, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, timeout=15)
+        self.assertEqual(completed.returncode, 0, "isolated core-descriptor probe failed")
+        self.assertEqual(json.loads(completed.stdout), dict(generic_rejected=True, exact_readonly_core_verified=True,
+            bytes=size, wrong_hash_rejected=True, same_namespace_rejected=True))
+
     def test_owned_cleanup_preserves_receipt_and_refuses_swapped_identity_or_symlink(self):
         with tempfile.TemporaryDirectory(prefix="drizzli-core-test-", dir=smoke.ROOT / "build") as directory:
             work = Path(directory); owned = smoke.identity(work)
