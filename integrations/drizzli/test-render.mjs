@@ -9,7 +9,10 @@ import { randomUUID } from 'node:crypto';
 import { resolve, join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { windForecast, forecast, QUERY, NOW } from '../../tests/fixtures.mjs';
+import { precipitationForecast } from '../../tests/precipitation-fixture.mjs';
 import { toProviderForecast } from '../../src/provider.mjs';
+import { toAirQualityProviderForecast } from '../../src/air-quality-provider.mjs';
+import { aqForecast, AQ_NOW, AQ_QUERY } from '../../tests/air-quality-fixtures.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
 assert.ok(process.env.DRIZZLI_STAGE, 'Set DRIZZLI_STAGE to the exact staged upstream checkout');
@@ -19,23 +22,36 @@ const require = createRequire(join(stage, 'package.json'));
 const { compile } = require('svelte/compiler');
 const { render } = await import(pathToFileURL(require.resolve('svelte/server')));
 const components = join(stage, 'src/routes/weather/week');
-const sourcePath = join(components, 'VolparossaForecast.svelte');
-assert.equal(await readFile(sourcePath, 'utf8'), await readFile(join(import.meta.dirname,
-  'overlay/src/routes/weather/week/VolparossaForecast.svelte'), 'utf8'));
-const output = join(components, `.volparossa-render-${randomUUID()}.mjs`);
-const compiled = compile(await readFile(sourcePath, 'utf8'), { filename: sourcePath, generate: 'server' });
-await writeFile(output, compiled.js.code, { flag: 'wx', mode: 0o600 });
-after(() => unlink(output));
-const Component = (await import(pathToFileURL(output))).default;
-const { validateProvider } = await import(pathToFileURL(join(stage, 'src/lib/services/volparossa/client.mjs')));
+async function loadComponent(file) {
+  const sourcePath = join(components, file);
+  assert.equal(await readFile(sourcePath, 'utf8'), await readFile(join(import.meta.dirname,
+    'overlay/src/routes/weather/week', file), 'utf8'));
+  const output = join(components, `.volparossa-render-${randomUUID()}.mjs`);
+  const compiled = compile(await readFile(sourcePath, 'utf8'), { filename: sourcePath, generate: 'server' });
+  await writeFile(output, compiled.js.code, { flag: 'wx', mode: 0o600 });
+  after(() => unlink(output));
+  return (await import(pathToFileURL(output))).default;
+}
+const Component = await loadComponent('VolparossaForecast.svelte');
+const AirQualityComponent = await loadComponent('VolparossaAirQuality.svelte');
+const { validateProvider, validateAirQualityProvider } = await import(pathToFileURL(join(stage, 'src/lib/services/volparossa/client.mjs')));
 
 function provider(original) {
   const expiry = '2026-09-30T21:10:00.000Z';
   const value = { ...toProviderForecast(original, { now: NOW, publicationExpires: expiry,
-    variables: ['temperature_2m', 'wind_speed_10m', 'wind_direction_10m'] }),
+    variables: ['temperature_2m', 'wind_speed_10m', 'wind_direction_10m', 'precipitation', 'air_quality'] }),
   delivery: { mode: 'core-cache', upstream_origin_attested: false,
     manifest_media_type_checked: false, publication_expires_at: expiry } };
   return validateProvider(value, NOW);
+}
+
+function airQualityProvider(original = aqForecast()) {
+  const expiry = '2026-10-11T01:10:00.000Z';
+  const value = { ...toAirQualityProviderForecast(original, { now: AQ_NOW, publicationExpires: expiry,
+    variables: ['pm2_5', 'pm10'] }),
+  delivery: { mode: 'core-cache', upstream_origin_attested: false,
+    manifest_media_type_checked: false, publication_expires_at: expiry } };
+  return validateAirQualityProvider(value, AQ_NOW);
 }
 
 test('actual Svelte child renders supplied coordinates, native times and temperature/wind', async () => {
@@ -69,14 +85,82 @@ test('source descriptions are escaped by the actual Svelte component', async () 
 test('actual Svelte child renders missing wind rather than invented zero', async () => {
   const html = (await render(Component, { props: { forecast: provider(forecast()) } })).body;
   assert.equal((html.match(/Not available<\/td>/g) || []).length, 2);
-  assert.match(html, /Precipitation, air quality/);
+  assert.match(html, /Precipitation, /);
+  assert.match(html, /Air quality has its own separately configured panel/);
+  assert.doesNotMatch(html, /Accumulated precipitation|Accumulation window|precipitation-accumulation/);
+});
+
+test('actual Svelte child shows precipitation totals with their native UTC windows, never hourly rates', async () => {
+  const original = precipitationForecast({ ...QUERY, steps: [3, 9, 24], includeWind: true });
+  original.samples[0].precipitation.amount = original.samples[0].precipitation.source_value = null;
+  original.samples[1].precipitation.amount = original.samples[1].precipitation.source_value = 0;
+  original.samples[2].precipitation.source_value = 0.00001;
+  original.samples[2].precipitation.amount = 0.01;
+  original.samples[2].precipitation.start_lead_hours = 6;
+  original.samples[2].precipitation.start_at = '2026-09-30T18:00:00.000Z';
+  const html = (await render(Component, { props: { forecast: provider(original) } })).body;
+  assert.match(html, /Accumulated precipitation \(mm\)/);
+  assert.match(html, /Accumulation window \(UTC\)/);
+  assert.match(html, /not an hourly rain rate/);
+  assert.match(html, /Windows may overlap/);
+  for (const sample of original.samples) {
+    assert.ok(html.includes(`${sample.precipitation.start_at} → ${sample.precipitation.end_at}`));
+  }
+  assert.match(html, /Not available<\/td>/);
+  assert.match(html, />0<\/td>/);
+  assert.match(html, />0\.01<\/td>/);
+  assert.match(html, /Air quality/);
+  assert.match(html, /Missing does not mean dry, clear or clean air/);
+  assert.doesNotMatch(html, /Precipitation, air quality|mm\/h/);
+  assert.equal((html.match(/<tr /g) || []).length, 3);
 });
 
 test('actual week integration component compiles for client and server', async () => {
-  for (const file of ['VolparossaWeek.svelte', '+page.svelte']) {
+  for (const file of ['VolparossaWeek.svelte', 'VolparossaAirQuality.svelte', '+page.svelte']) {
     const filename = join(components, file);
     const source = await readFile(filename, 'utf8');
     assert.ok(compile(source, { filename, generate: 'client' }).js.code.length > 0);
     assert.ok(compile(source, { filename, generate: 'server' }).js.code.length > 0);
   }
+});
+
+test('actual air-quality component renders native NOAA points, precise concentrations and missing versus zero', async () => {
+  const value = airQualityProvider();
+  const html = (await render(AirQualityComponent, { props: { forecast: value } })).body;
+  assert.match(html, /Configured air-quality area/);
+  assert.match(html, /52\.52° latitude, 13\.41° longitude/);
+  assert.ok(html.includes(`gefs-aerosols · ${AQ_QUERY.run}`));
+  for (const time of value.timeline.valid_at) assert.ok(html.includes(time));
+  assert.match(html, /PM2\.5 \(µg\/m³\)/);
+  assert.match(html, /PM10 \(µg\/m³\)/);
+  assert.match(html, />5\.53071<\/td>/);
+  assert.match(html, />11\.5959<\/td>/);
+  assert.equal((html.match(/Not available<\/td>/g) || []).length, 2);
+  assert.equal((html.match(/>0<\/td>/g) || []).length, 2);
+  assert.equal((html.match(/<tr /g) || []).length, 3);
+  assert.match(html, /Instantaneous particulate forecasts/);
+  assert.match(html, /not AQI or current observations/);
+  assert.match(html, /not zero or clean air/);
+  assert.doesNotMatch(html, /Temperature \(°C\)|Accumulated precipitation/);
+});
+
+test('actual air-quality component displays its own expiry, linked NOAA attribution and data terms', async () => {
+  const value = airQualityProvider();
+  const html = (await render(AirQualityComponent, { props: { forecast: value } })).body;
+  assert.ok(html.includes(value.freshness.expires_at));
+  assert.match(html, /NOAA\/NWS GEFS-Aerosols/);
+  assert.match(html, /href="https:\/\/www.emc.ncep.noaa.gov\/emc\/pages\/numerical_forecast_systems\/gefs_aero.php"/);
+  assert.match(html, /href="https:\/\/registry.opendata.aws\/noaa-gefs\/"/);
+  assert.match(html, /LicenseRef-NOAA-NODD/);
+  assert.match(html, /Processing:/);
+  assert.match(html, /not an official NOAA product or endorsement/);
+  assert.doesNotMatch(html, /<(?:iframe|script|img)\b/i);
+});
+
+test('actual air-quality component escapes source text independently of schema validation', async () => {
+  const value = airQualityProvider();
+  value.forecast.source.attribution = '<ScRiPt>not executable</ScRiPt>';
+  const html = (await render(AirQualityComponent, { props: { forecast: value } })).body;
+  assert.ok(html.includes('&lt;ScRiPt>not executable&lt;/ScRiPt>'));
+  assert.doesNotMatch(html, /<script\b/i);
 });

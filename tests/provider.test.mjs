@@ -43,7 +43,7 @@ test('unsupported variables and supported-but-unrequested forecast fields are di
     assert.equal(result.series[index].values, null);
     assert.equal(result.series[index].value_status, null);
     assert.equal(result.series[index].unit, null);
-    assert.equal(result.series[index].reason, index === 1 ? 'field_not_in_forecast' : 'unsupported_variable');
+    assert.equal(result.series[index].reason, index <= 1 ? 'field_not_in_forecast' : 'unsupported_variable');
   }
   assert.deepEqual(result.series[2].values, [10]);
   assert.equal(result.series[2].availability, 'supported');

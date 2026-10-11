@@ -1,0 +1,145 @@
+{
+  "version": 1,
+  "kind": "direct-noaa-native-particulate-forecast",
+  "success": true,
+  "origin": "https://noaa-gefs-pds.s3.amazonaws.com",
+  "entry_point": "scripts/air-quality.mjs origin --community-area --steps 3,6 --execute --accept-data-license",
+  "node_sha256": "bc17c508ffeed0ec622934f9b7fa72f8e78da65350e63c3eceb56fa688aa5e12",
+  "decoder_sha256": "3a3b64581e6922db4287445f217f993f6967dea5fcc45ff66944b0bc883408f4",
+  "source_modules": {
+    "src/noaa-gefs.mjs": "b92af74d71d4b986f59a41a894b1b50436bbcbea720f672da3cbfca7a855c010",
+    "src/air-quality.mjs": "c69432ead935a81d3ae28a5259201f98a8845eaef96019121ab9bf3c8f7fced7",
+    "src/core-cache.mjs": "ab756962c88641484615c5552eb07592d149c7a9a811821d6022ad2ceaa3793b",
+    "scripts/air-quality.mjs": "b5a9c64e5dc9faa8920aa0f4bc728c79446ee5a73516f498654cc68d632450e3"
+  },
+  "model_run_at": "2026-10-10T00:00:00.000Z",
+  "acquired_at": "2026-10-11T01:50:16.770Z",
+  "public_test_point": {
+    "latitude": 52.52,
+    "longitude": 13.41
+  },
+  "selected_field_bytes_total": 2841174,
+  "output_bytes": 4076,
+  "output_sha256": "5c3a6f34c0e5bff957e8cde66cf7c4bb49d98cb6d654f71985c82128a7b86801",
+  "samples": [
+    {
+      "valid_at": "2026-10-10T03:00:00.000Z",
+      "lead_hours": 3,
+      "pm2_5": 5.53071,
+      "pm10": 11.5959,
+      "grid": {
+        "latitude": 52.5,
+        "longitude": 13.5,
+        "distance_km": 6.48435,
+        "method": "nearest-grid-no-interpolation"
+      },
+      "evidence": {
+        "pm2_5": {
+          "index_sha256": "a8057ea60e21408e83f35761525f1ffcaa439f423156dc9123f1f5e5d5e285fb",
+          "field_sha256": "de1167788a34a3805c60273c0cccbd4e093359dd307c3e929594b99cd75491af",
+          "range_start": 21103457,
+          "range_length": 615927,
+          "decoder_sha256": "3a3b64581e6922db4287445f217f993f6967dea5fcc45ff66944b0bc883408f4",
+          "parameter": "PMTF",
+          "param_id": 260375,
+          "particle_size_upper_m": 0.0000025,
+          "unit": "(10**-6 g) m**-3",
+          "statistic": "instant",
+          "resolution": "0p25",
+          "aerosol_type": 62000
+        },
+        "pm10": {
+          "index_sha256": "a8057ea60e21408e83f35761525f1ffcaa439f423156dc9123f1f5e5d5e285fb",
+          "field_sha256": "ad621463283f70f4df3732278a2e09940dc63b53f2887b8867a69c5434b27729",
+          "range_start": 20296273,
+          "range_length": 807184,
+          "decoder_sha256": "3a3b64581e6922db4287445f217f993f6967dea5fcc45ff66944b0bc883408f4",
+          "parameter": "PMTC",
+          "param_id": 260374,
+          "particle_size_upper_m": 0.00001,
+          "unit": "(10**-6 g) m**-3",
+          "statistic": "instant",
+          "resolution": "0p25",
+          "aerosol_type": 62000
+        }
+      }
+    },
+    {
+      "valid_at": "2026-10-10T06:00:00.000Z",
+      "lead_hours": 6,
+      "pm2_5": 5.24488,
+      "pm10": 10.0825,
+      "grid": {
+        "latitude": 52.5,
+        "longitude": 13.5,
+        "distance_km": 6.48435,
+        "method": "nearest-grid-no-interpolation"
+      },
+      "evidence": {
+        "pm2_5": {
+          "index_sha256": "8672335537de354b451ddaee3097c9b6d112c7f2cd3cb9157b9b8c0c373a0646",
+          "field_sha256": "3480a5b0f8309ca8904131e6d2203f5d09b7ed83d465bf211fcc59595330a7ea",
+          "range_start": 20675010,
+          "range_length": 613467,
+          "decoder_sha256": "3a3b64581e6922db4287445f217f993f6967dea5fcc45ff66944b0bc883408f4",
+          "parameter": "PMTF",
+          "param_id": 260375,
+          "particle_size_upper_m": 0.0000025,
+          "unit": "(10**-6 g) m**-3",
+          "statistic": "instant",
+          "resolution": "0p25",
+          "aerosol_type": 62000
+        },
+        "pm10": {
+          "index_sha256": "8672335537de354b451ddaee3097c9b6d112c7f2cd3cb9157b9b8c0c373a0646",
+          "field_sha256": "76c262040fd6b9e580d2166647140f602c7ac84ead3f2bc0533f3dfb87eed373",
+          "range_start": 19870414,
+          "range_length": 804596,
+          "decoder_sha256": "3a3b64581e6922db4287445f217f993f6967dea5fcc45ff66944b0bc883408f4",
+          "parameter": "PMTC",
+          "param_id": 260374,
+          "particle_size_upper_m": 0.00001,
+          "unit": "(10**-6 g) m**-3",
+          "statistic": "instant",
+          "resolution": "0p25",
+          "aerosol_type": 62000
+        }
+      }
+    }
+  ],
+  "units": {
+    "pm2_5": "ug/m3",
+    "pm10": "ug/m3"
+  },
+  "native_statistic": "instant",
+  "derived_air_quality_index": false,
+  "observations": false,
+  "scope": {
+    "actual_origin_acquisition": true,
+    "actual_pinned_native_decoder": true,
+    "core_executed": false,
+    "overlay_proven": false,
+    "browser_executed": false,
+    "accuracy_proven": false,
+    "all_supported_leads_proven": false
+  },
+  "safety": {
+    "coordinates_sent_to_origin": false,
+    "exact_http_206_ranges_required": true,
+    "maximum_field_bytes": 2097152,
+    "maximum_index_bytes": 65536,
+    "decoder_address_space_bytes": 536870912,
+    "decoder_cpu_seconds": 20,
+    "decoder_wall_seconds": 30
+  },
+  "cleanup": {
+    "command_exit_code": 0,
+    "stderr_bytes": 0,
+    "owned_decoder_directories_remaining": 0,
+    "original_grib_fields_retained": false
+  },
+  "attribution": "NOAA/NWS GEFS-Aerosols",
+  "license": "LicenseRef-NOAA-NODD",
+  "license_url": "https://registry.opendata.aws/noaa-gefs/",
+  "decoder_precision": "ecCodes grib_ls nearest JSON uses approximately six significant digits; its missing sentinel is retained as null"
+}

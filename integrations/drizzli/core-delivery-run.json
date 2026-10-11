@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "kind": "scoped-weather-phase-in-disposable-topology",
+  "core_revision": "93dc2a64bd7157a77ee1837e4b8375f9b222fac6",
+  "weather_revision": "8f54aaa",
+  "bundle_manifest_sha256": "a3dab90657e742ce181994cb0be6741eccaaaaf63464026a09da67b49db7cb6e",
+  "bundle_archive_sha256": "ece4406408d08ed18d3589f0a70ea5b0f8dee68bc6081053fb626105d31dfaaf",
+  "weather_phase_passed": true,
+  "weather_evidence": "core-delivery-smoke.json",
+  "weather_evidence_sha256": "f8a0a792e8e392cc8981c293b548bcec34852255cbad6b5aa7f6e3fc39d659d4",
+  "browser_report": "core-browser-smoke.json",
+  "browser_report_sha256": "a869419e5302cb079240f68acbe327f46157c63c102d427b1701b48b38e5836b",
+  "complete_topology_passed": false,
+  "runner_exit_code": 1,
+  "later_failure": "CONTENT_PROVIDER_ADAPTIVE_RUNTIME_FETCH_FAILED: CONTENT_UNAVAILABLE",
+  "later_failure_scope": "separate 15 MiB complementary-provider transfer after Weather phase",
+  "guest_root_network_state_unchanged": true,
+  "guest_root_network_state_before_sha256": "87543e3e2e90468e81e716200bf5617f79a2335c011176fb6707c8eaf45f9ed7",
+  "guest_root_network_state_after_sha256": "87543e3e2e90468e81e716200bf5617f79a2335c011176fb6707c8eaf45f9ed7",
+  "runner_and_qemu_exited": true,
+  "scope": {
+    "temperature_wind": true,
+    "precipitation": false,
+    "air_quality": false,
+    "browser_triggered_cold_fetch": false,
+    "production_service_complete": false
+  }
+}

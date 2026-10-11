@@ -25,15 +25,25 @@ jobs:
         run: node --test tests/*.test.mjs
       - name: Check Drizz.li adapter without downloading upstream dependencies
         run: node --test integrations/drizzli/test-client.mjs
+      - name: Check Overmorrow integration without downloading upstream dependencies
+        run: |
+          node --test integrations/overmorrow/test-browser-fixture.mjs
+          VOLPAROSSA_TEST_NODE="$(command -v node)" python3 -B -m unittest discover \
+            -s integrations/overmorrow -p 'test_*.py'
       - name: Check source metadata and whitespace
         run: |
           python3 -m json.tool third_party/ecmwf.json > /dev/null
           python3 -m json.tool third_party/ecmwf-smoke.json > /dev/null
           python3 -m json.tool third_party/ecmwf-wind-smoke.json > /dev/null
+          python3 -m json.tool third_party/ecmwf-precipitation-smoke.json > /dev/null
           python3 -m json.tool third_party/eccodes-sources.json > /dev/null
           python3 -m json.tool integrations/drizzli/upstream.json > /dev/null
           python3 -m json.tool integrations/drizzli/build-plugins.json > /dev/null
           python3 -m json.tool integrations/drizzli/browser-smoke.json > /dev/null
+          python3 -m json.tool integrations/drizzli/precipitation-build.json > /dev/null
+          python3 -m json.tool integrations/drizzli/precipitation-browser-smoke.json > /dev/null
+          python3 -m json.tool integrations/overmorrow/upstream.json > /dev/null
+          python3 -m json.tool integrations/overmorrow/build-verification.json > /dev/null
           git diff --check
 
 # No live weather requests, dependency installation, decoder build, model

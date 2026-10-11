@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "kind": "direct-ecmwf-native-precipitation-forecast",
+  "success": true,
+  "source": "https://data.ecmwf.int/forecasts",
+  "model_run_at": "2026-10-10T12:00:00.000Z",
+  "public_test_point": {"latitude": 52.52, "longitude": 13.41},
+  "nearest_model_grid_point": {"latitude": 52.5, "longitude": 13.5, "distance_km": 6.48435},
+  "entry_point": "scripts/forecast.mjs origin --community-area --include-precipitation --output-contract provider --execute --accept-data-license",
+  "node_sha256": "bc17c508ffeed0ec622934f9b7fa72f8e78da65350e63c3eceb56fa688aa5e12",
+  "decoder_version": "2.44.0",
+  "decoder_sha256": "3a3b64581e6922db4287445f217f993f6967dea5fcc45ff66944b0bc883408f4",
+  "source_modules": {
+    "src/ecmwf.mjs": "afccdb77c28d070a81d761e07e843c761c0b4d35d32037350ebc2cb2badda35e",
+    "src/forecast.mjs": "5a3d71b0c1735e5a7716a1d126fe39c5595232d07ef54f876b8838bc5ccd14e4",
+    "src/provider.mjs": "d2dcf5b3817b148721632c74684ce83770bb670feb18872aec5a71157542b7ee",
+    "scripts/forecast.mjs": "9f3cc2726464dfbe1c8b717d24f7173c9f9056ea5eac4547be5ce53a4e8fcb3d"
+  },
+  "runs": [
+    {
+      "model": "ifs",
+      "acquired_at": "2026-10-11T00:51:09.392Z",
+      "include_wind": true,
+      "lead_hours": [3, 9, 24],
+      "selected_fields": ["2t", "10u", "10v", "tp"],
+      "selected_field_bytes_total": 8451118,
+      "provider_output_bytes": 12999,
+      "provider_output_sha256": "aae64045197e3678d98bfe83594545d68cd11a1a1e6537bbc174dd8d777a34a6",
+      "precipitation_param_id": 228,
+      "source_unit": "m",
+      "precipitation_mm": [0.0190735, 0.038147, 1.02234],
+      "accumulation_start_lead_hours": [0, 0, 0],
+      "index_sha256": [
+        "e506cb7e114b7ee1f1574e2dc502e8808cddf5294386ae5e09555c7a21d0a693",
+        "fbc24bb99f12324151b2a7e1f26845a410fe2fa0fff2ba28b2419f5cdb2d27ed",
+        "3a6f96b346b9f230314ffe502d29f216933a6a3367c1cec932705617c62db8ed"
+      ],
+      "precipitation_field_sha256": [
+        "833a1594b8e89afb9a59f1408dbd48201197330b96adfaac5f5e61d03cc4c44a",
+        "7e679dc42a69fc7252afca171ae79a921f59d04e91ac0ab66f1ad0cc3085a474",
+        "ccb1014f2943055123654407ababb3c8a7b8042c61ed192480241497a687e0bb"
+      ]
+    },
+    {
+      "model": "aifs-single",
+      "acquired_at": "2026-10-11T00:53:16.661Z",
+      "include_wind": false,
+      "lead_hours": [0, 6, 24],
+      "selected_fields": ["2t", "tp"],
+      "selected_field_bytes_total": 3030759,
+      "provider_output_bytes": 8138,
+      "provider_output_sha256": "9ecbd3b44d614723e2841d3a89e484ccebb4c6a2c20300201ab3f65e640bd80b",
+      "precipitation_param_id": 228228,
+      "source_unit": "kg m**-2",
+      "precipitation_mm": [0, 0.00390625, 1.11719],
+      "accumulation_start_lead_hours": [0, 0, 0],
+      "index_sha256": [
+        "414362d872b6259a5e4035585a674f02acb73e872c4176b22bfc23a560584ec5",
+        "1a696118d1e0d505095b639f04e2851a9573fead2cd76acc445fae86d1370d8a",
+        "525035d702fa28fa218950d468a8d66cdb279e960679eceea807d629efdef159"
+      ],
+      "precipitation_field_sha256": [
+        "39a76eac22e6c76d4acd0e83a798bf92ed6f24e73bccd188b8b790303e1bc859",
+        "ec29e78e0096efb39588636dabbec57aaf6e8367d9198fafc2fcee9db874e725",
+        "430d9fd0f5164b264f88104dc731bf0db57b113529d25dc732887621612992fe"
+      ]
+    }
+  ],
+  "exact_http_partial_content_required": true,
+  "same_model_run_valid_time_and_grid_verified": true,
+  "native_accumulation_windows_preserved": true,
+  "hourly_rates_inferred": false,
+  "air_quality_available": false,
+  "coordinates_sent_to_upstream": false,
+  "decoder_address_space_limit_bytes": 536870912,
+  "decoder_cpu_seconds_limit_per_field": 20,
+  "decoder_wall_seconds_limit_per_field": 30,
+  "decoder_processes_joined": true,
+  "temporary_decoder_directories_removed": true,
+  "local_provider_outputs_retained": true,
+  "original_public_grib_fields_retained": false,
+  "core_overlay_roundtrip_proven": false,
+  "browser_execution_proven": false,
+  "learned_weather_model_proven": false,
+  "observation_or_forecast_accuracy_proven": false,
+  "data_attribution": "ECMWF open data, CC BY 4.0; nearest point, Kelvin to Celsius, optional wind vector derivation and precipitation normalized to millimetres over native accumulation windows"
+}

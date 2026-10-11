@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "reviewed_on": "2026-10-11",
+  "origin": "https://noaa-gefs-pds.s3.amazonaws.com",
+  "data_terms": "https://registry.opendata.aws/noaa-gefs/",
+  "model_documentation": "https://www.emc.ncep.noaa.gov/emc/pages/numerical_forecast_systems/gefs_aero.php",
+  "data_license_identifier": "LicenseRef-NOAA-NODD",
+  "attribution": "NOAA/NWS GEFS-Aerosols",
+  "modified_output_is_not_official_noaa_product": true,
+  "mirror_requires_account": false,
+  "upstream_software_copied": false,
+  "hosted_deployment_revision_known": false,
+  "decoder_source_reference": "eccodes-sources.json",
+  "decoder_version": "2.44.0",
+  "decoder_sha256": "3a3b64581e6922db4287445f217f993f6967dea5fcc45ff66944b0bc883408f4",
+  "product": "gefs-aerosols-surface-total-pm",
+  "resolution": "0p25",
+  "statistic": "instant",
+  "units": "ug/m3",
+  "fields": {
+    "pm2_5": {"parameter": "PMTF", "param_id": 260375, "aerosol_type": 62000, "size_upper_m": 0.0000025},
+    "pm10": {"parameter": "PMTC", "param_id": 260374, "aerosol_type": 62000, "size_upper_m": 0.00001}
+  },
+  "live_leads_proven": [3, 6, 12, 24, 48],
+  "maximum_index_bytes": 65536,
+  "maximum_field_bytes": 2097152,
+  "maximum_samples": 16,
+  "live_bytes_pinned_by": "per-run index SHA256, exact HTTP 206 range, field SHA256 and native identity checks",
+  "no_implicit_latest_mirror_fallback_or_retry": true,
+  "nearest_decoder_precision": "approximately six significant digits; missing sentinel preserved as null",
+  "live_receipt": "noaa-gefs-future-smoke.json"
+}

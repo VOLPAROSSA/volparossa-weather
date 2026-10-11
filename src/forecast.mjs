@@ -7,6 +7,13 @@ export const MAX_AGE_SECONDS = 1800;
 export const MAX_RUN_AGE_SECONDS = 72 * 3600;
 export const UNITS = Object.freeze({ temperature_2m: 'degC' });
 export const WIND_UNITS = Object.freeze({ wind_10m: 'm/s', wind_direction_10m: 'degree' });
+export const PRECIPITATION_UNITS = Object.freeze({ precipitation: 'mm' });
+// ECMWF AIFS Single v1 changed tp's GRIB identifier and physical unit.
+// https://confluence.ecmwf.int/pages/viewpage.action?pageId=496875126
+export const PRECIPITATION_SOURCES = Object.freeze({
+  ifs: Object.freeze({ id: 228, unit: 'm', factor: 1000 }),
+  'aifs-single': Object.freeze({ id: 228228, unit: 'kg m**-2', factor: 1 }),
+});
 export class WeatherError extends Error {
   constructor(code) { super(code); this.name = 'WeatherError'; this.code = code; }
 }
@@ -26,7 +33,8 @@ export function utc(value) {
   return ms;
 }
 function hash(value) { requireThat(typeof value === 'string' && /^[a-f0-9]{64}$/.test(value), 'HASH_INVALID'); }
-export function request({ latitude, longitude, run, model = 'ifs', steps = [24], communityArea = false, includeWind = false } = {}) {
+export function request({ latitude, longitude, run, model = 'ifs', steps = [24], communityArea = false,
+  includeWind = false, includePrecipitation = false } = {}) {
   number(latitude, -90, 90, 'LATITUDE_INVALID'); number(longitude, -180, 180, 'LONGITUDE_INVALID');
   requireThat(utc(run) % 3600000 === 0, 'RUN_INVALID');
   requireThat(typeof model === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(model), 'MODEL_INVALID');
@@ -38,7 +46,9 @@ export function request({ latitude, longitude, run, model = 'ifs', steps = [24],
   }
   requireThat(typeof communityArea === 'boolean', 'SHARING_INVALID');
   requireThat(typeof includeWind === 'boolean', 'WIND_REQUEST_INVALID');
-  return Object.freeze({ latitude, longitude, run, model, steps: Object.freeze([...steps]), communityArea, includeWind });
+  requireThat(typeof includePrecipitation === 'boolean', 'PRECIPITATION_REQUEST_INVALID');
+  return Object.freeze({ latitude, longitude, run, model, steps: Object.freeze([...steps]), communityArea,
+    includeWind, includePrecipitation });
 }
 
 export function windVector(eastward, northward) {
@@ -52,12 +62,13 @@ export function windVector(eastward, northward) {
   return { eastward, northward, speed, direction_from: direction, status: 'available' };
 }
 
-function validateEvidence(evidence, parameter, unit) {
+function validateEvidence(evidence, parameter, unit, statistic = 'instant', paramId = null) {
   object(evidence, ['index_sha256', 'field_sha256', 'parameter', 'unit', 'statistic',
-    'resolution', 'range_start', 'range_length', 'decoder_sha256'], 'EVIDENCE_INVALID');
+    'resolution', 'range_start', 'range_length', 'decoder_sha256', ...(paramId === null ? [] : ['param_id'])], 'EVIDENCE_INVALID');
   for (const key of ['index_sha256', 'field_sha256', 'decoder_sha256']) hash(evidence[key]);
   requireThat(evidence.parameter === parameter && evidence.unit === unit
-    && evidence.statistic === 'instant' && evidence.resolution === '0p25', 'EVIDENCE_INVALID');
+    && evidence.statistic === statistic && evidence.resolution === '0p25'
+    && (paramId === null || evidence.param_id === paramId), 'EVIDENCE_INVALID');
   requireThat(Number.isSafeInteger(evidence.range_start) && evidence.range_start >= 0
     && Number.isSafeInteger(evidence.range_length) && evidence.range_length >= 20
     && evidence.range_length <= 8 * 1024 * 1024, 'RANGE_INVALID');
@@ -82,7 +93,8 @@ export function validateForecast(value) {
   if (value.source.issued_at !== null) requireThat(utc(value.source.issued_at) <= acquired, 'ISSUE_TIME_INVALID');
   requireThat(value.units !== null && typeof value.units === 'object' && !Array.isArray(value.units), 'UNITS_INVALID');
   const includesWind = Object.hasOwn(value.units, 'wind_10m');
-  const units = includesWind ? { ...UNITS, ...WIND_UNITS } : UNITS;
+  const includesPrecipitation = Object.hasOwn(value.units, 'precipitation');
+  const units = { ...UNITS, ...(includesWind ? WIND_UNITS : {}), ...(includesPrecipitation ? PRECIPITATION_UNITS : {}) };
   object(value.units, Object.keys(units), 'UNITS_INVALID');
   for (const [key, unit] of Object.entries(units)) requireThat(value.units[key] === unit, 'UNITS_INVALID');
   object(value.freshness, ['basis', 'expires_at'], 'FRESHNESS_INVALID');
@@ -94,7 +106,7 @@ export function validateForecast(value) {
   let previous = -1;
   for (const sample of value.samples) {
     object(sample, ['valid_at', 'lead_hours', 'temperature_2m', 'grid', 'evidence',
-      ...(includesWind ? ['wind_10m'] : [])], 'SAMPLE_INVALID');
+      ...(includesWind ? ['wind_10m'] : []), ...(includesPrecipitation ? ['precipitation'] : [])], 'SAMPLE_INVALID');
     requireThat(Number.isInteger(sample.lead_hours) && sample.lead_hours >= 0
       && sample.lead_hours <= 360 && sample.lead_hours > previous, 'STEPS_INVALID');
     requireThat(utc(sample.valid_at) === run + sample.lead_hours * 3600000, 'VALID_TIME_INVALID'); previous = sample.lead_hours;
@@ -126,6 +138,36 @@ export function validateForecast(value) {
       const ranges = [...allEvidence].sort((a, b) => a.range_start - b.range_start);
       requireThat(ranges.slice(1).every((item, index) =>
         item.range_start >= ranges[index].range_start + ranges[index].range_length), 'WIND_PROVENANCE_MISMATCH');
+    }
+    if (includesPrecipitation) {
+      const precipitation = sample.precipitation;
+      object(precipitation, ['amount', 'source_value', 'start_lead_hours', 'end_lead_hours',
+        'start_at', 'end_at', 'evidence'], 'PRECIPITATION_INVALID');
+      requireThat(Object.hasOwn(PRECIPITATION_SOURCES, value.source.model), 'PRECIPITATION_MODEL_UNSUPPORTED');
+      const source = PRECIPITATION_SOURCES[value.source.model];
+      validateEvidence(precipitation.evidence, 'tp', source.unit, 'accum', source.id);
+      requireThat(Number.isInteger(precipitation.start_lead_hours) && precipitation.start_lead_hours >= 0
+        && precipitation.end_lead_hours === sample.lead_hours
+        && (precipitation.start_lead_hours < precipitation.end_lead_hours
+          || precipitation.start_lead_hours === 0 && precipitation.end_lead_hours === 0), 'PRECIPITATION_WINDOW_INVALID');
+      requireThat(utc(precipitation.start_at) === run + precipitation.start_lead_hours * 3600000
+        && precipitation.end_at === sample.valid_at, 'PRECIPITATION_WINDOW_INVALID');
+      if (precipitation.source_value === null) requireThat(precipitation.amount === null, 'PRECIPITATION_VALUE_INVALID');
+      else {
+        number(precipitation.source_value, 0, Infinity, 'PRECIPITATION_VALUE_INVALID');
+        number(precipitation.amount, 0, Infinity, 'PRECIPITATION_VALUE_INVALID');
+        requireThat(precipitation.amount === precipitation.source_value * source.factor
+          && (sample.lead_hours !== 0 || precipitation.source_value === 0), 'PRECIPITATION_VALUE_INVALID');
+      }
+      // All fields in one sample must come from distinct ranges in the same
+      // indexed model file and the same pinned decoder. No cross-run mixing.
+      const allEvidence = [sample.evidence, precipitation.evidence,
+        ...(includesWind ? [sample.wind_10m.evidence.eastward, sample.wind_10m.evidence.northward] : [])];
+      requireThat(allEvidence.every(item => item.index_sha256 === sample.evidence.index_sha256
+        && item.decoder_sha256 === sample.evidence.decoder_sha256), 'PRECIPITATION_PROVENANCE_MISMATCH');
+      const ranges = [...allEvidence].sort((a, b) => a.range_start - b.range_start);
+      requireThat(ranges.slice(1).every((item, index) =>
+        item.range_start >= ranges[index].range_start + ranges[index].range_length), 'PRECIPITATION_PROVENANCE_MISMATCH');
     }
   }
   return value;

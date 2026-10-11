@@ -3,7 +3,8 @@
 import { freshness, requireThat } from './forecast.mjs';
 
 export const PROVIDER_SCHEMA = 'volparossa.weather.provider.v1';
-const VARIABLES = Object.freeze({ temperature_2m: 'degC', wind_speed_10m: 'm/s', wind_direction_10m: 'degree' });
+const VARIABLES = Object.freeze({ temperature_2m: 'degC', wind_speed_10m: 'm/s', wind_direction_10m: 'degree',
+  precipitation: 'mm' });
 
 export function providerVariables(value = ['temperature_2m']) {
   requireThat(Array.isArray(value) && value.length >= 1 && value.length <= 16
@@ -20,20 +21,24 @@ export function toProviderForecast(forecast, { variables, now = new Date().toISO
   requireThat(!age.stale, 'STALE_FORECAST');
   const original = structuredClone(forecast);
   const available = Object.keys(VARIABLES).filter(name => name === 'temperature_2m'
-    || Object.hasOwn(original.units, 'wind_10m'));
+    || Object.hasOwn(original.units, name === 'precipitation' ? 'precipitation' : 'wind_10m'));
   const series = requested.map(variable => {
     if (!available.includes(variable)) {
       return { variable, availability: 'unavailable',
         reason: Object.hasOwn(VARIABLES, variable) ? 'field_not_in_forecast' : 'unsupported_variable',
         unit: null, values: null, value_status: null };
     }
-    const temperature = variable === 'temperature_2m';
+    const temperature = variable === 'temperature_2m', precipitation = variable === 'precipitation';
     const values = original.samples.map(sample => temperature ? sample.temperature_2m
-      : variable === 'wind_speed_10m' ? sample.wind_10m.speed : sample.wind_10m.direction_from);
-    const valueStatus = original.samples.map((sample, index) => temperature
+      : precipitation ? sample.precipitation.amount
+        : variable === 'wind_speed_10m' ? sample.wind_10m.speed : sample.wind_10m.direction_from);
+    const valueStatus = original.samples.map((sample, index) => temperature || precipitation
       ? values[index] === null ? 'missing' : 'available' : sample.wind_10m.status);
     return { variable, availability: 'supported', reason: null, unit: VARIABLES[variable],
-      values, value_status: valueStatus };
+      values, value_status: valueStatus,
+      // These are source-native accumulated amounts, not hourly rain rates.
+      ...(precipitation ? { statistic: 'accumulation', accumulation_windows: original.samples.map(sample => ({
+        start_at: sample.precipitation.start_at, end_at: sample.precipitation.end_at })) } : {}) };
   });
   return {
     schema: PROVIDER_SCHEMA, kind: 'forecast',

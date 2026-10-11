@@ -5,23 +5,114 @@ import { mkdtemp, cp, copyFile, rm, mkdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { forecast, windForecast, NOW, QUERY } from '../../tests/fixtures.mjs';
+import { precipitationForecast } from '../../tests/precipitation-fixture.mjs';
 import { toProviderForecast } from '../../src/provider.mjs';
+import { toAirQualityProviderForecast } from '../../src/air-quality-provider.mjs';
+import { aqForecast, AQ_NOW, AQ_QUERY } from '../../tests/air-quality-fixtures.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
 await mkdir(join(root, 'build'), { recursive: true });
 const work = await mkdtemp(join(root, 'build/drizzli-client-test-'));
 await cp(join(import.meta.dirname, 'overlay/src/lib/services/volparossa'), work, { recursive: true });
-for (const file of ['provider.mjs', 'forecast.mjs']) await copyFile(join(root, 'src', file), join(work, file));
-const { validateProvider, displayValue, fetchProvider, MAX_PROVIDER_BYTES } = await import(pathToFileURL(join(work, 'client.mjs')));
+for (const file of ['provider.mjs', 'forecast.mjs', 'air-quality-provider.mjs', 'air-quality.mjs']) {
+  await copyFile(join(root, 'src', file), join(work, file));
+}
+const { validateProvider, displayValue, displayAccumulationWindow, hasSupportedPrecipitation,
+  fetchProvider, validateAirQualityProvider, fetchAirQualityProvider,
+  MAX_PROVIDER_BYTES } = await import(pathToFileURL(join(work, 'client.mjs')));
 after(() => rm(work, { recursive: true }));
 
 function response(source = windForecast(), now = NOW) {
   const expiry = new Date(Date.parse(now) + 600000).toISOString();
   return { ...toProviderForecast(source, { now, publicationExpires: expiry,
-    variables: ['temperature_2m', 'wind_speed_10m', 'wind_direction_10m'] }),
+    variables: ['temperature_2m', 'wind_speed_10m', 'wind_direction_10m', 'precipitation', 'air_quality'] }),
   delivery: { mode: 'core-cache', publication_expires_at: expiry,
     upstream_origin_attested: false, manifest_media_type_checked: false } };
 }
+
+function airQualityResponse(source = aqForecast(), now = AQ_NOW) {
+  const expiry = new Date(Date.parse(now) + 600000).toISOString();
+  return { ...toAirQualityProviderForecast(source, { now, publicationExpires: expiry,
+    variables: ['pm2_5', 'pm10'] }),
+  delivery: { mode: 'core-cache', publication_expires_at: expiry,
+    upstream_origin_attested: false, manifest_media_type_checked: false } };
+}
+
+test('particulate projection retains its own NOAA time axis, instant units and missing/zero values', () => {
+  const value = airQualityResponse();
+  const accepted = validateAirQualityProvider(value, AQ_NOW);
+  assert.deepEqual(accepted.timeline.valid_at, value.forecast.samples.map(sample => sample.valid_at));
+  assert.deepEqual(accepted.timeline.lead_hours, [3, 6, 12]);
+  assert.notDeepEqual(accepted.timeline.valid_at, response().timeline.valid_at);
+  assert.equal(accepted.forecast.source.model_run_at, AQ_QUERY.run);
+  assert.equal(displayValue(accepted, 'pm2_5', 0), 'Not available');
+  assert.equal(displayValue(accepted, 'pm2_5', 1), '0');
+  assert.equal(displayValue(accepted, 'pm2_5', 2), '5.53071');
+  assert.equal(displayValue(accepted, 'pm10', 0), '11.5959');
+  assert.equal(displayValue(accepted, 'pm10', 1), 'Not available');
+  assert.equal(displayValue(accepted, 'pm10', 2), '0');
+  assert.ok(accepted.series.every(field => field.unit === 'ug/m3' && field.statistic === 'instant'));
+  assert.equal(accepted.capabilities.current_observations, false);
+  assert.equal(displayValue(accepted, 'aqi', 0), 'Not available');
+});
+
+test('particulate projection cannot change its run, native axis, units, statistic, source or expiry', () => {
+  const value = airQualityResponse();
+  assert.throws(() => validateAirQualityProvider(value, value.delivery.publication_expires_at), /STALE_FORECAST/);
+  for (const mutate of [
+    body => { body.timeline.valid_at[0] = NOW; },
+    body => { body.timeline.lead_hours[0] = 1; },
+    body => { body.series[0].values[0] = 0; },
+    body => { body.series[0].unit = 'AQI'; },
+    body => { body.series[0].statistic = 'daily-average'; },
+    body => { body.series[0].value_status[0] = 'available'; },
+    body => { body.capabilities.current_observations = true; },
+    body => { body.forecast.source.model_run_at = NOW; },
+    body => { body.forecast.source.license_url = 'https://invalid.example/'; },
+    body => { body.forecast.area.sharing = 'private'; },
+    body => { body.delivery.upstream_origin_attested = true; },
+    body => { body.freshness.expires_at = '2099-01-01T00:00:00.000Z'; },
+  ]) {
+    const changed = structuredClone(value); mutate(changed);
+    assert.throws(() => validateAirQualityProvider(changed, AQ_NOW));
+  }
+  assert.throws(() => validateProvider(value, AQ_NOW), /FORECAST_INVALID/);
+  assert.throws(() => validateAirQualityProvider(response(), NOW), /AIR_QUALITY_INVALID/);
+});
+
+test('particulate fetch selects only its fixed same-origin endpoint without location or origin fallback', async () => {
+  const now = new Date().toISOString();
+  const run = new Date(); run.setUTCHours(0, 0, 0, 0);
+  const value = airQualityResponse(aqForecast({ ...AQ_QUERY, run: run.toISOString() }, now), now);
+  const controller = new AbortController();
+  let calls = 0;
+  const accepted = await fetchAirQualityProvider(async (url, options) => {
+    ++calls;
+    assert.equal(url, '/api/volparossa/air-quality');
+    assert.equal(options.method, 'GET');
+    assert.equal(options.credentials, 'same-origin');
+    assert.equal(options.redirect, 'error');
+    assert.equal(options.cache, 'no-store');
+    assert.equal(options.body, undefined);
+    assert.equal(options.signal, controller.signal);
+    return new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
+  }, controller.signal);
+  assert.equal(calls, 1);
+  assert.equal(accepted.forecast.source.model, 'gefs-aerosols');
+});
+
+test('particulate unavailable, busy, malformed and oversized responses never become weather fallback', async () => {
+  for (const candidate of [new Response('bad', { status: 503 }), new Response('busy', { status: 429 }),
+    new Response(new Uint8Array([0xff]), { headers: { 'content-type': 'application/json' } }),
+    new Response(' '.repeat(MAX_PROVIDER_BYTES + 1), { headers: { 'content-type': 'application/json' } }),
+    new Response(JSON.stringify(response()), { headers: { 'content-type': 'application/json' } })]) {
+    let calls = 0;
+    await assert.rejects(fetchAirQualityProvider(async (url) => {
+      ++calls; assert.equal(url, '/api/volparossa/air-quality'); return candidate;
+    }, new AbortController().signal));
+    assert.equal(calls, 1);
+  }
+});
 
 test('native points and units survive with no interpolation or current-weather claim', () => {
   const value = response(windForecast({ ...QUERY, steps: [3, 9, 24] }));
@@ -38,6 +129,43 @@ test('unsupported precipitation and AQI do not become zero', () => {
   assert.equal(displayValue(value, 'wind_speed_10m', 0), 'Not available');
   assert.equal(displayValue(value, 'precipitation', 0), 'Not available');
   assert.equal(displayValue(value, 'air_quality', 0), 'Not available');
+  assert.equal(hasSupportedPrecipitation(value), false);
+  assert.equal(displayAccumulationWindow(value, 0), 'Not available');
+});
+
+test('precipitation keeps source accumulation windows, amounts, missing values and genuine zero', () => {
+  const source = precipitationForecast({ ...QUERY, steps: [3, 9, 24], includeWind: true });
+  source.samples[0].precipitation.amount = source.samples[0].precipitation.source_value = null;
+  source.samples[1].precipitation.amount = source.samples[1].precipitation.source_value = 0;
+  source.samples[2].precipitation.start_lead_hours = 6;
+  source.samples[2].precipitation.start_at = '2026-09-30T18:00:00.000Z';
+  source.samples[2].precipitation.source_value = 0.00001;
+  source.samples[2].precipitation.amount = 0.01;
+  const value = validateProvider(response(source), NOW);
+  assert.equal(hasSupportedPrecipitation(value), true);
+  assert.equal(displayValue(value, 'precipitation', 0), 'Not available');
+  assert.equal(displayValue(value, 'precipitation', 1), '0');
+  assert.equal(displayValue(value, 'precipitation', 2), '0.01');
+  assert.equal(displayAccumulationWindow(value, 0), `${QUERY.run} → ${source.samples[0].valid_at}`);
+  assert.equal(displayAccumulationWindow(value, 2), `2026-09-30T18:00:00.000Z → ${source.samples[2].valid_at}`);
+  assert.equal(displayValue(value, 'air_quality', 0), 'Not available');
+});
+
+test('precipitation projection cannot replace native windows, units or totals with inferred rates', () => {
+  const value = response(precipitationForecast({ ...QUERY, steps: [3, 9, 24] }));
+  for (const mutate of [
+    rain => { rain.accumulation_windows[1].start_at = value.timeline.valid_at[0]; },
+    rain => { rain.accumulation_windows[1].end_at = value.timeline.valid_at[0]; },
+    rain => { rain.accumulation_windows.pop(); },
+    rain => { delete rain.accumulation_windows; },
+    rain => { rain.values[1] /= 9; },
+    rain => { rain.unit = 'mm/h'; },
+    rain => { rain.statistic = 'rate'; },
+  ]) {
+    const changed = structuredClone(value);
+    mutate(changed.series.find(item => item.variable === 'precipitation'));
+    assert.throws(() => validateProvider(changed, NOW), /FORECAST_INVALID/);
+  }
 });
 
 test('genuine zero differs from a missing value', () => {

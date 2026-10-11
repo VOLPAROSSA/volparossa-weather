@@ -1,8 +1,9 @@
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
 <script lang="ts">
-  import { displayValue } from '../../../lib/services/volparossa/client.mjs';
+  import { displayValue, hasSupportedPrecipitation, displayAccumulationWindow } from '../../../lib/services/volparossa/client.mjs';
   import type { DisplayForecast } from '../../../lib/services/volparossa/client.mjs';
   let { forecast }: { forecast: DisplayForecast } = $props();
+  const precipitationSupported = $derived(hasSupportedPrecipitation(forecast));
 </script>
 
     <dl class="mt-4 grid gap-2 text-sm">
@@ -14,21 +15,34 @@
     <div class="mt-4 overflow-x-auto">
       <table class="w-full text-left text-sm">
         <caption class="mb-2 text-left">Available model points · UTC</caption>
-        <thead><tr><th class="p-2">Valid time</th><th class="p-2">Temperature (°C)</th><th class="p-2">Wind (m/s)</th><th class="p-2">Wind from (°)</th></tr></thead>
+        <thead><tr><th class="p-2">Valid time</th><th class="p-2">Temperature (°C)</th><th class="p-2">Wind (m/s)</th><th class="p-2">Wind from (°)</th>
+          {#if precipitationSupported}<th class="p-2">Accumulated precipitation (mm)</th><th class="p-2">Accumulation window (UTC)</th>{/if}
+        </tr></thead>
         <tbody>
           {#each forecast.timeline.valid_at as time, i}
             <tr class="border-t border-border"><th class="p-2 font-normal">{time}</th>
               <td class="p-2">{displayValue(forecast, 'temperature_2m', i)}</td>
               <td class="p-2">{displayValue(forecast, 'wind_speed_10m', i)}</td>
               <td class="p-2">{displayValue(forecast, 'wind_direction_10m', i)}</td>
+              {#if precipitationSupported}
+                <td class="p-2">{displayValue(forecast, 'precipitation', i)}</td>
+                <td class="p-2">{displayAccumulationWindow(forecast, i)}</td>
+              {/if}
             </tr>
           {/each}
         </tbody>
       </table>
     </div>
+    {#if precipitationSupported}
+      <p class="mt-4 text-sm" data-testid="precipitation-accumulation">
+        Precipitation is the total over each explicit UTC accumulation window, not an hourly rain rate.
+        Windows may overlap; amounts must not be added together as separate hourly totals.
+      </p>
+    {/if}
     <p class="mt-4 text-sm" data-testid="unsupported-capabilities">
-      Precipitation, air quality, weather-condition icons, daily summaries, current observations,
-      radar, maps and model comparisons: not available through this connection yet.
+      {precipitationSupported ? '' : 'Precipitation, '}weather-condition icons, daily summaries, current observations,
+      radar, maps and model comparisons: not available through this weather feed yet.
+      Air quality has its own separately configured panel, source and native forecast times.
       Missing does not mean dry, clear or clean air.
     </p>
     <p class="mt-3 text-sm text-muted-foreground">

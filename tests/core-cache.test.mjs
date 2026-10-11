@@ -13,6 +13,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { forecast, windForecast, QUERY } from './fixtures.mjs';
+import { precipitationForecast } from './precipitation-fixture.mjs';
 
 const query = { ...QUERY, run: new Date(Math.floor(Date.now() / 21600000) * 21600000).toISOString() };
 
@@ -65,6 +66,22 @@ test('cache consumption accepts wind only for the explicitly requested field set
   const temperature = await fixture(t);
   await assert.rejects(fetchCachedForecast({ ...temperature.options, query: { ...query, includeWind: true } }),
     error => error.code === 'FORECAST_QUERY_MISMATCH');
+});
+
+test('precipitation cache consumption binds the exact field set and preserves accumulated amounts', async t => {
+  const now = new Date().toISOString();
+  const data = precipitationForecast(query, now);
+  const { root, options } = await fixture(t, { forecast: data });
+  const selected = { ...options, query: { ...query, includePrecipitation: true } };
+  const result = await fetchCachedProvider(selected, { variables: ['precipitation'] });
+  assert.equal(result.series[0].statistic, 'accumulation');
+  assert.deepEqual(result.series[0].values, [1]);
+  assert.deepEqual(result.forecast.samples[0].precipitation, data.samples[0].precipitation);
+  await assert.rejects(fetchCachedForecast(options), error => error.code === 'FORECAST_QUERY_MISMATCH');
+  const temperature = await fixture(t);
+  await assert.rejects(fetchCachedForecast({ ...temperature.options, query: selected.query }),
+    error => error.code === 'FORECAST_QUERY_MISMATCH');
+  assert.deepEqual((await readdir(root)).sort(), ['control.sock', 'fake-core']);
 });
 
 test('wrong signer/name/revision/expiry/hash/type never becomes a forecast or origin retry', async t => {
@@ -122,7 +139,7 @@ test('provider wrapper uses actual core-cache process checks and retains publish
   assert.equal(result.delivery.upstream_origin_attested, false);
   assert.equal(result.delivery.manifest_media_type_checked, false);
   assert.equal(result.freshness.expires_at, result.delivery.publication_expires_at);
-  assert.equal(result.series[1].reason, 'unsupported_variable');
+  assert.equal(result.series[1].reason, 'field_not_in_forecast');
   assert.deepEqual((await readdir(root)).sort(), ['control.sock', 'fake-core']);
 });
 

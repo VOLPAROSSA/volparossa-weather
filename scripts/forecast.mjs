@@ -18,6 +18,7 @@ try {
     'publisher-key': { type: 'string' }, name: { type: 'string' }, 'min-revision': { type: 'string' },
     'reuse-cache': { type: 'boolean', default: false },
     'include-wind': { type: 'boolean', default: false },
+    'include-precipitation': { type: 'boolean', default: false },
     'output-contract': { type: 'string', default: 'forecast' }, variables: { type: 'string' },
   } });
   const mode = positionals[0];
@@ -28,7 +29,7 @@ try {
   const variables = provider ? providerVariables(values.variables?.split(',')) : undefined;
   const query = request({ latitude: Number(values.latitude), longitude: Number(values.longitude), run: values.run,
     model: values.model, steps: values.steps.split(',').map(Number), communityArea: values['community-area'],
-    includeWind: values['include-wind'] });
+    includeWind: values['include-wind'], includePrecipitation: values['include-precipitation'] });
   if (!values.execute) {
     if (mode === 'origin') ecmwfRequest(query);
     console.log(JSON.stringify({ mode, executed: false, query, auto_fallback: false,

@@ -15,8 +15,9 @@ import { startProviderHttp, providerHttpConfiguration } from '../src/provider-ht
 import { toProviderForecast } from '../src/provider.mjs';
 import { freshness } from '../src/forecast.mjs';
 import { forecast, QUERY } from './fixtures.mjs';
+import { precipitationForecast } from './precipitation-fixture.mjs';
 
-const currentQuery = () => ({ ...QUERY, includeWind: false,
+const currentQuery = () => ({ ...QUERY, includeWind: false, includePrecipitation: false,
   run: new Date(Math.floor(Date.now() / 21600000) * 21600000).toISOString() });
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'weather-http-'));
@@ -31,7 +32,9 @@ async function fixture(t) {
     scratchParent: root, publisherKey: 'c'.repeat(64), name: 'weather.fixture', minRevision: 2,
     query: currentQuery(), reuseCache: true } };
   function provider() {
-    const data = forecast(config.core.query, new Date().toISOString());
+    const data = config.core.query.includePrecipitation
+      ? precipitationForecast(config.core.query, new Date().toISOString())
+      : forecast(config.core.query, new Date().toISOString());
     const expiry = new Date(Math.floor(Date.now() / 1000) * 1000 + 1200000).toISOString();
     const result = toProviderForecast(data, { variables: config.variables, publicationExpires: expiry });
     result.delivery = { mode: 'core-cache', publisher_key: config.core.publisherKey, name: config.core.name,
@@ -101,14 +104,50 @@ test('HTTP cannot choose location, publisher, paths, method, foreign origin or h
   assert.equal(calls, 0);
 });
 
+test('HTTP preserves explicitly requested precipitation amounts and native windows', async t => {
+  const f = await fixture(t);
+  f.config.core.query.includePrecipitation = true;
+  const expected = f.provider(), server = await f.start({}, async () => expected);
+  const result = await get(server.origin);
+  assert.equal(result.status, 200);
+  assert.deepEqual(JSON.parse(result.body), expected);
+  assert.equal(expected.series[1].statistic, 'accumulation');
+  assert.equal(expected.series[1].unit, 'mm');
+  assert.deepEqual(expected.series[1].accumulation_windows, expected.forecast.samples.map(sample => ({
+    start_at: sample.precipitation.start_at, end_at: sample.precipitation.end_at,
+  })));
+});
+
+test('HTTP rejects precipitation field-set substitutions and changed accumulation projections', async t => {
+  const f = await fixture(t);
+  f.config.core.query.includePrecipitation = true;
+  let value = f.provider();
+  const server = await f.start({}, async () => value);
+  for (const change of [data => data.series[1].accumulation_windows[0].start_at = data.timeline.valid_at[0],
+    data => data.series[1].statistic = 'hourly', data => data.series[1].values[0] = 99]) {
+    value = f.provider(); change(value);
+    assert.equal((await get(server.origin)).status, 503);
+  }
+  f.config.core.query.includePrecipitation = false;
+  value = f.provider();
+  assert.equal((await get(server.origin)).status, 503);
+  const unrequested = await f.start({}, async () => value);
+  f.config.core.query.includePrecipitation = true;
+  value = f.provider();
+  assert.equal((await get(unrequested.origin)).status, 503);
+});
+
 test('fixed configuration is copied, exact, public-community-only and checked before listening', async t => {
   const f = await fixture(t), original = structuredClone(f.config);
   const config = providerHttpConfiguration(f.config);
+  const legacy = structuredClone(original); delete legacy.core.query.includePrecipitation;
+  assert.equal(providerHttpConfiguration(legacy).core.query.includePrecipitation, false);
   f.config.core.query.steps.push(24); f.config.variables.push('aqi');
   assert.deepEqual(config.core, original.core); assert.deepEqual(config.variables, original.variables);
   for (const change of [value => value.core.query.communityArea = false, value => value.core.url = 'https://elsewhere',
     value => value.core.executable = '/tmp/../file', value => value.core.minRevision = 0,
-    value => value.core.query.extra = true, value => value.variables = []]) {
+    value => value.core.query.extra = true, value => value.variables = [],
+    value => value.core.query.includePrecipitation = 'true', value => value.core.query = null]) {
     const invalid = structuredClone(original); change(invalid);
     await assert.rejects(startProviderHttp({ config: invalid, staticRoot: f.staticRoot }));
   }

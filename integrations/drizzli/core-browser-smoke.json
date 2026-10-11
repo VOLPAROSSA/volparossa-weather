@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "passed": true,
+  "phase": "complete",
+  "source": {
+    "bundle_manifest_sha256": "a3dab90657e742ce181994cb0be6741eccaaaaf63464026a09da67b49db7cb6e",
+    "driver_sha256": "e22e560522a68e2e3994556d58350dc2f2750c50e711f457bcbfd9883ad3a1ba",
+    "preparer_sha256": "f4564c39c7fb57ff35e6b8688f3d1eb0ffc95390729e25ffe29cdb4297274fa0",
+    "built_tree_sha256": "b2723d668fe2541687419a5d81019e546dbdb9f2c94995e3eec5acba6819f6e0",
+    "node_sha256": "bc17c508ffeed0ec622934f9b7fa72f8e78da65350e63c3eceb56fa688aa5e12",
+    "bridge_modules": {
+      "scripts/serve-provider.mjs": "cf1510679c8836a25a0ae98c9bb8369cb52987433478bf4c45fef001b33fbcbb",
+      "src/provider-http.mjs": "6941899190379629723df0509be3d5b096243d2d6ab3eaac6c122eef74b7e854",
+      "src/provider-core.mjs": "64540cdd981ab192dfb62d885124191a1e7f04d7996fcf6254a337f6d4bd3784",
+      "src/core-cache.mjs": "0b32fda40ec83f204ec5d768abaab0f6f7e0d40012bf1390de34c309b47a2216"
+    }
+  },
+  "expected": {
+    "expected_sha256": "665d9d24a215c0d38c3d3202ac3d2a0bcd6401165cd56317a5cdc9e95477b7f4",
+    "cold_receipt_sha256": "79390647604838f54f4a975b894fd7a83435b0e6952dd735ff25f28a87f78f2f",
+    "core_sha256": "0ffc8254bf70cf621ddfce9602e58a1da5d6c954d1e6b3792b57fc38a4421802",
+    "display_sha256": "dce80d74d154251c8ded7af22465afd3159574631bf0fcf889323ece8d361ec4",
+    "forecast_sha256": "751ecebd73cd9249276ebef45e7417ac8434924ca8827cc4550320a14cb0c5bf",
+    "manifest_id": "ba85128300418d0f4f6cb1bb788957c16a159d58970eaa23b9d6463be29cd908"
+  },
+  "scope": {
+    "actual_drizzli_ui": true,
+    "actual_http_bridge": true,
+    "real_core_adapter": true,
+    "synthetic_weather": false,
+    "standalone_origin_proven": false,
+    "standalone_overlay_proven": false,
+    "browser_triggered_cold_fetch": false
+  },
+  "checks": {
+    "api_response_sha256": "71f6b83f3d61753db37219f92a82d89ab437d323128319a8d1d459cdde6b73b8",
+    "initial_dom_display_sha256": "dce80d74d154251c8ded7af22465afd3159574631bf0fcf889323ece8d361ec4",
+    "initial_dom_matches_cold_publication": true,
+    "refresh_dom_display_sha256": "dce80d74d154251c8ded7af22465afd3159574631bf0fcf889323ece8d361ec4",
+    "refresh_dom_matches_cold_publication": true,
+    "browser_api_requests": 2,
+    "provider_requests_checked": 1,
+    "exact_native_times_and_values": true,
+    "explicit_missing_capabilities": true,
+    "no_external_resources": true,
+    "source_attribution": true
+  },
+  "cleanup": {
+    "browser_exited": true,
+    "bridge_exited": true,
+    "private_state_removed": true,
+    "normal_browser_stop": true,
+    "normal_bridge_stop": true
+  },
+  "outer_cleanup": {
+    "namespace_wrapper_exited": true,
+    "private_state_removed": true,
+    "client_namespace_unchanged": true
+  }
+}
