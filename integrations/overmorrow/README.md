@@ -9,11 +9,15 @@ shared core/provider layer.
 ## Verified scope
 
 The release web build succeeds with Flutter 3.38.5 and the unchanged upstream
-dependency lock. Sixteen Flutter tests pass with synthetic products: native times
+dependency lock. Twenty-three Flutter tests pass with synthetic products: native times
 and accumulation windows, missing versus zero values, independent weather/AQ
 failures, expiry while idle, phone/tablet layouts and the existing detail route.
-The local HTTP profile passes thirty-one focused bridge tests; thirteen build
+The local HTTP profile passes thirty-four focused bridge tests; thirteen build
 driver and twelve deployment tests cover its workspace boundaries.
+Seven of the Flutter tests cover slow retrieval, exact bounded busy retries,
+request/body cancellation and rejection of late results. Twenty additional
+core-process adapter tests include preservation of an unconfirmed-cleanup error
+when removing temporary output also fails.
 
 A bounded, isolated Firefox trial now passes against the actual CanvasKit UI and
 local HTTP bridge, using synthetic weather and particulate products. It verifies
@@ -42,6 +46,20 @@ sequentially requests `/api/volparossa/forecast` and `/api/volparossa/air-qualit
 from its own loopback origin. Requests cannot choose a location, model, publisher,
 file or command. The configured public-community area is displayed explicitly.
 Weather and particulates retain separate runs, sample times and expiry.
+
+Each product has one 195-second deadline, including up to two seconds for local
+cancellation. This accommodates the bridge's 180-second retrieval deadline and
+185-second socket bound; cold retrieval no longer fails after twenty seconds.
+Cancellation aborts the request and response body. A late result cannot replace
+the unavailable state or start another attempt.
+
+Only the local bridge's exact `429 FORECAST_BUSY` response with `Retry-After: 1`
+permits a retry: at most five one-second waits, all within the original product
+deadline. There is no request queue, renewed deadline or retry of other errors.
+The next request must pass the bridge's single-operation admission check; waiting
+alone does not prove cleanup finished. Unconfirmed core-process cleanup blocks
+further retrieval in that bridge instance and prevents a successful shutdown
+report. Weather and air quality keep independent results.
 
 Missing observations, daily forecasts, radar, UV and air-quality indices are not
 invented. Accumulated rain is not hourly rain. A failed product does not erase an

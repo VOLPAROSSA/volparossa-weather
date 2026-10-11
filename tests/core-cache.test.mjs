@@ -4,7 +4,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
-import { mkdtemp, chmod, writeFile, readdir, rm } from 'node:fs/promises';
+import fsPromises, { mkdtemp, chmod, writeFile, readdir, rm } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fetchCachedForecast } from '../src/core-cache.mjs';
@@ -127,6 +128,36 @@ test('cancellation joins CLI process and removes only own temporary output; over
   assert.deepEqual((await readdir(root)).sort(), ['control.sock', 'fake-core']);
   const oversized = await fixture(t, { huge: true });
   await assert.rejects(fetchCachedForecast(oversized.options), error => error.code === 'CORE_REPORT_TOO_LARGE');
+});
+
+test('unconfirmed process cleanup survives a second scratch error; ordinary scratch errors are not swallowed', async t => {
+  for (const processUnconfirmed of [true, false]) {
+    const { root, options } = await fixture(t, { badHash: !processUnconfirmed });
+    let cleanupCalls = 0;
+    const scratchError = Object.assign(new Error('PRIVATE_SYNTHETIC_SCRATCH_FAILURE'), { code: 'EACCES' });
+    const rmMock = t.mock.method(fsPromises, 'rm', async (path, removal) => {
+      assert.ok(path.startsWith(join(root, 'forecast-')));
+      assert.deepEqual(removal, { recursive: true, force: false });
+      cleanupCalls++; throw scratchError;
+    });
+    // The real synthetic child has already exited before groupExists runs.
+    // Simulate a still-visible group without leaving or signaling descendants.
+    const groups = new Set();
+    const killMock = processUnconfirmed ? t.mock.method(process, 'kill', (pid, signal) => {
+      assert.ok(Number.isInteger(pid) && pid < 0);
+      assert.ok([0, 'SIGTERM', 'SIGKILL'].includes(signal));
+      groups.add(pid); return true;
+    }) : null;
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(fetchCachedForecast(options), error => processUnconfirmed
+        ? error.code === 'CORE_CLEANUP_UNCONFIRMED' : error === scratchError);
+      assert.equal(cleanupCalls, 1, 'owned scratch cleanup is still attempted');
+      assert.equal(groups.size, processUnconfirmed ? 1 : 0);
+    } finally {
+      rmMock.mock.restore(); killMock?.mock.restore(); syncBuiltinESMExports();
+    }
+  }
 });
 
 test('provider wrapper uses actual core-cache process checks and retains publisher limits and expiry', async t => {

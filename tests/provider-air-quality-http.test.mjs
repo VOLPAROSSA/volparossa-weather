@@ -12,7 +12,7 @@ import { startProviderHttp, providerHttpConfiguration } from '../src/provider-ht
 import { toAirQualityProviderForecast } from '../src/air-quality-provider.mjs';
 import { toProviderForecast } from '../src/provider.mjs';
 import { airQualityFreshness, airQualityRequest } from '../src/air-quality.mjs';
-import { freshness, request } from '../src/forecast.mjs';
+import { freshness, request, WeatherError } from '../src/forecast.mjs';
 import { aqForecast } from './air-quality-fixtures.mjs';
 import { forecast } from './fixtures.mjs';
 
@@ -123,6 +123,7 @@ test('AQ HTTP requests cannot change location, source, query, executable, host o
     [AQ_API, { headers: { 'Sec-Fetch-Site': 'cross-site' } }, 403],
     [AQ_API, { headers: { 'Content-Length': '1' } }, 400], ['/api/volparossa/air-quality/other', {}, 404],
   ]) { const result = await get(server.origin, path, options); assert.equal(result.status, status);
+    assert.equal(result.headers['retry-after'], undefined);
     assert.deepEqual(Object.keys(result.body), ['error']); }
   assert.equal(calls, 0);
 });
@@ -169,6 +170,7 @@ test('AQ and weather share one active slot; synchronous failures release it with
   for (const path of [AQ_API, WEATHER_API]) {
     const result = await get(server.origin, path); assert.equal(result.status, 429);
     assert.deepEqual(result.body, { error: 'FORECAST_BUSY' });
+    assert.equal(result.headers['retry-after'], '1');
   }
   assert.equal(calls, 1); release(); assert.equal((await pending).status, 200);
   assert.equal((await get(server.origin, WEATHER_API)).status, 200);
@@ -177,8 +179,83 @@ test('AQ and weather share one active slot; synchronous failures release it with
   for (let i = 0; i < 2; i++) {
     const result = await get(failing.origin); assert.equal(result.status, 503);
     assert.deepEqual(result.body, { error: 'AIR_QUALITY_UNAVAILABLE' });
+    assert.equal(result.headers['retry-after'], undefined);
   }
   assert.equal(failures, 2); assert.equal((await get(failing.origin, WEATHER_API)).status, 200);
+});
+
+test('client disconnect keeps the slot busy through cleanup; immediate AQ is paced, not queued', async t => {
+  for (const lateResult of [false, true]) {
+    const f = await fixture(t);
+    let entered, aborted, release, finished;
+    const began = new Promise(done => { entered = done; });
+    const sawAbort = new Promise(done => { aborted = done; });
+    const heldCleanup = new Promise(done => { release = done; });
+    const cleaned = new Promise(done => { finished = done; });
+    let weatherCalls = 0, aqCalls = 0, lateResponses = 0;
+    const server = await f.start({
+      fetchProvider: async (_core, { signal }) => {
+        weatherCalls++; entered();
+        await new Promise(done => signal.addEventListener('abort', done, { once: true }));
+        aborted(); await heldCleanup; finished();
+        if (lateResult) return f.provider(false);
+        throw Error('PRIVATE_CANCELLED_AFTER_CLEANUP');
+      },
+      fetchAirQualityProvider: () => { aqCalls++; return f.provider(); },
+    });
+    t.after(release);
+    const cancelled = httpRequest(server.origin + WEATHER_API, () => { lateResponses++; });
+    cancelled.on('error', () => {}); cancelled.end();
+    await began; cancelled.destroy(); await sawAbort;
+    for (const path of [AQ_API, WEATHER_API, AQ_API]) {
+      const busy = await get(server.origin, path);
+      assert.equal(busy.status, 429); assert.deepEqual(busy.body, { error: 'FORECAST_BUSY' });
+      assert.equal(busy.headers['retry-after'], '1');
+    }
+    assert.equal(weatherCalls, 1); assert.equal(aqCalls, 0);
+    release(); await cleaned;
+    // Drain the backend's settlement microtasks, not an assumed cleanup delay.
+    await new Promise(done => setImmediate(done));
+    assert.equal(aqCalls, 0, 'busy requests never become queued provider work');
+    const aq = await get(server.origin, AQ_API);
+    assert.equal(aq.status, 200); assert.equal(aq.body.schema, 'volparossa.air-quality.provider.v1');
+    assert.equal(aq.headers['retry-after'], undefined);
+    assert.equal(weatherCalls, 1); assert.equal(aqCalls, 1); assert.equal(lateResponses, 0);
+  }
+});
+
+test('unconfirmed core cleanup closes both product admissions and cannot report clean shutdown', async t => {
+  for (const failingProduct of [WEATHER_API, AQ_API]) {
+    const f = await fixture(t); let calls = 0;
+    const fail = async () => { calls++; throw new WeatherError('CORE_CLEANUP_UNCONFIRMED'); };
+    const server = await startProviderHttp({ config: f.config, staticRoot: f.staticRoot }, {
+      fetchProvider: fail, fetchAirQualityProvider: fail,
+    });
+    t.after(async () => {
+      await assert.rejects(server.close(), error => error.message === 'BRIDGE_CLEANUP_UNCONFIRMED');
+    });
+    for (const path of [failingProduct, WEATHER_API, AQ_API, failingProduct]) {
+      const result = await get(server.origin, path);
+      assert.equal(result.status, 503);
+      assert.deepEqual(result.body, { error: path === AQ_API ? 'AIR_QUALITY_UNAVAILABLE' : 'FORECAST_UNAVAILABLE' });
+      assert.equal(result.headers['retry-after'], undefined);
+      assert.equal(calls, 1, 'settled but unconfirmed cleanup never reopens the slot');
+    }
+  }
+});
+
+test('ordinary core failures after confirmed cleanup still release admission without retry advice', async t => {
+  for (const code of ['CANCELLED', 'CORE_FAILED', 'CORE_DESCENDANT_REMAINS']) {
+    const f = await fixture(t); let aqCalls = 0;
+    const server = await f.start({
+      fetchProvider: async () => { throw new WeatherError(code); },
+      fetchAirQualityProvider: () => { aqCalls++; return f.provider(); },
+    });
+    const failed = await get(server.origin, WEATHER_API);
+    assert.equal(failed.status, 503); assert.equal(failed.headers['retry-after'], undefined);
+    assert.deepEqual(failed.body, { error: 'FORECAST_UNAVAILABLE' });
+    assert.equal((await get(server.origin, AQ_API)).status, 200); assert.equal(aqCalls, 1);
+  }
 });
 
 test('shared deadline, client disconnect and shutdown all abort AQ retrieval and join cleanup', async t => {
