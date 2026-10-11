@@ -143,9 +143,35 @@ def stamp(value):
 
 
 def validate_expected(value, config):
+    require(type(value) is dict and type(value.get("schema")) is int)
+    if value["schema"] == 2:
+        require(set(value) == {"schema", "core_sha256", "products", "display_sha256"}
+                and hex64(value["core_sha256"]) and hex64(value["display_sha256"])
+                and type(value["products"]) is dict and set(value["products"]) == {"weather", "air_quality"}
+                and type(config) is dict and set(config) == {"core", "variables", "airQuality"}
+                and type(config["airQuality"]) is dict and set(config["airQuality"]) == {"core", "variables"})
+        weather, air_quality = value["products"]["weather"], value["products"]["air_quality"]
+        for name, product, selected in (("weather", weather, config), ("air_quality", air_quality, config["airQuality"])):
+            require(type(product) is dict and set(product) == {"cold_receipt_sha256", "publication", "forecast", "display", "display_sha256"})
+            validate_product(product, selected, name)
+        core, aq = config["core"], config["airQuality"]["core"]
+        require(all(core[key] == aq[key] for key in ("executable", "controlSocket", "scratchParent"))
+                and core["name"] != aq["name"] and core["cache"] != aq["cache"]
+                and all(core["query"][key] == aq["query"][key] for key in ("latitude", "longitude"))
+                and config["airQuality"]["variables"] == ["pm2_5", "pm10"]
+                and {"temperature_2m", "wind_speed_10m", "wind_direction_10m", "precipitation"}.issubset(config["variables"])
+                and hashlib.sha256(canonical({name: product["display"] for name, product in value["products"].items()})).hexdigest()
+                    == value["display_sha256"])
+        return value
     require(type(value) is dict and set(value) == {"schema", "core_sha256", "cold_receipt_sha256", "publication",
             "forecast", "display", "display_sha256"} and type(value["schema"]) is int and value["schema"] == 1)
-    require(all(hex64(value[key]) for key in ("core_sha256", "cold_receipt_sha256", "display_sha256")))
+    require(hex64(value["core_sha256"]) and type(config) is dict and set(config) == {"core", "variables"})
+    validate_product(value, config)
+    return value
+
+
+def validate_product(value, config, product="legacy"):
+    require(all(hex64(value[key]) for key in ("cold_receipt_sha256", "display_sha256")))
     publication, forecast, display = (value[key] for key in ("publication", "forecast", "display"))
     require(type(publication) is dict and set(publication) == {"publisher_key", "name", "revision", "manifest_id",
             "sha256", "bytes", "expires_unix_seconds"})
@@ -153,17 +179,29 @@ def validate_expected(value, config):
     require(type(publication["revision"]) is int and publication["revision"] >= 1
             and type(publication["bytes"]) is int and 0 < publication["bytes"] <= 131072
             and type(publication["expires_unix_seconds"]) is int and publication["expires_unix_seconds"] > time.time())
-    require(type(config) is dict and set(config) == {"core", "variables"} and type(config["core"]) is dict)
+    require(type(config["core"]) is dict)
     core, query = config["core"], config["core"]["query"]
     require(core["mode"] == "core-cache" and core["reuseCache"] is True
             and core["publisherKey"] == publication["publisher_key"] and core["name"] == publication["name"]
             and core["minRevision"] <= publication["revision"])
-    require(forecast["schema"] == "volparossa.forecast.v1" and forecast["kind"] == "forecast"
+    air_quality = product == "air_quality"
+    require(forecast["schema"] == ("volparossa.air-quality.forecast.v1" if air_quality else "volparossa.forecast.v1")
+            and forecast["kind"] == "forecast"
             and forecast["area"]["sharing"] == "public-community"
             and forecast["area"]["latitude"] == query["latitude"] and forecast["area"]["longitude"] == query["longitude"]
             and forecast["source"]["model"] == query["model"] and forecast["source"]["model_run_at"] == query["run"]
-            and query["communityArea"] is True and ("wind_10m" in forecast["units"]) == query["includeWind"])
+            and query["communityArea"] is True)
+    if air_quality:
+        require(forecast["units"] == {"pm2_5": "ug/m3", "pm10": "ug/m3"}
+                and forecast["source"]["model"] == "gefs-aerosols"
+                and forecast["source"]["provider"] == "noaa")
+    else:
+        require(("wind_10m" in forecast["units"]) == query["includeWind"]
+                and ("precipitation" in forecast["units"]) == (product == "weather")
+                and query.get("includePrecipitation", False) == (product == "weather")
+                and (product != "weather" or query["includeWind"] is True))
     require(type(display) is dict and set(display) == {"coordinates", "native", "values", "model_run", "expires_at"}
+            | ({"attribution", "license", "license_url", "changes"} if air_quality else set())
             and hashlib.sha256(canonical(display)).hexdigest() == value["display_sha256"])
     require(type(display["native"]) is list and 1 <= len(display["native"]) <= 16
             and display["native"] == [sample["valid_at"] for sample in forecast["samples"]]
@@ -171,25 +209,40 @@ def validate_expected(value, config):
             and len(display["values"]) == len(display["native"]))
     for when, lead in zip(display["native"], query["steps"]):
         require(type(lead) is int and stamp(when) == stamp(query["run"]) + lead * 3600)
-    require(all(type(row) is list and len(row) == 3 and all(type(cell) is str
+    if product == "legacy":
+        require(all(type(row) is list and len(row) == 3 and all(type(cell) is str
                 and (cell == "Not available" or re.fullmatch(r"-?\d{1,6}\.\d", cell)) for cell in row)
                 for row in display["values"]))
+    else:
+        for row, sample in zip(display["values"], forecast["samples"]):
+            require(type(row) is list and len(row) == (2 if air_quality else 5))
+            numbers = row if air_quality else row[:4]
+            require(all(type(cell) is str and len(cell) <= 40 and (cell == "Not available"
+                    or re.fullmatch(r"-?\d+(?:\.\d+)?(?:e[+-]?\d+)?", cell)) for cell in numbers))
+            if not air_quality:
+                require(row[4] == sample["precipitation"]["start_at"] + " → " + sample["precipitation"]["end_at"])
+        if air_quality:
+            require(all(display[key] == forecast["source"][key] for key in ("attribution", "license", "license_url", "changes"))
+                    and display["attribution"] == "NOAA/NWS GEFS-Aerosols"
+                    and display["license"] == "LicenseRef-NOAA-NODD"
+                    and display["license_url"] == "https://registry.opendata.aws/noaa-gefs/")
     require(type(display["coordinates"]) is str and len(display["coordinates"]) <= 100
             and display["model_run"] == forecast["source"]["model"] + " · " + forecast["source"]["model_run_at"]
             and stamp(display["expires_at"]) == min(stamp(forecast["freshness"]["expires_at"]), publication["expires_unix_seconds"])
             and stamp(display["expires_at"]) > time.time())
-    return value
 
 
-def validate_bundle(root, expected):
+def validate_bundle(root, expected, version=None):
     require(root.resolve(strict=True) == root and ROOT == root / "volparossa-weather" and hex64(expected))
     require(root.stat().st_uid == os.getuid() and stat.S_IMODE(root.stat().st_mode) == 0o500)
     raw = raw_file(root / "INPUTS.json", 131072, 0o400)
     require(hashlib.sha256(raw).hexdigest() == expected)
     manifest = json.loads(raw, object_pairs_hook=pairs)
     require(type(manifest) is dict and set(manifest) == {"version", "kind", "files"}
-            and manifest["version"] == 1 and manifest["kind"] == "volparossa-weather-client-inputs"
+            and type(manifest["version"]) is int and manifest["version"] in (1, 2)
+            and manifest["kind"] == "volparossa-weather-client-inputs"
             and type(manifest["files"]) is dict and 1 <= len(manifest["files"]) <= 1024)
+    require(version is None or manifest["version"] == version)
     require(raw.isascii() and raw == canonical(manifest) + b"\n")
     found, total = set(), 0
     for count, path in enumerate(root.rglob("*")):
@@ -221,7 +274,8 @@ def validate_bundle(root, expected):
     built = root / "volparossa-weather/build/drizzli-volparossa/build"
     hashes = {name.split("/build/drizzli-volparossa/build/", 1)[1]: record["sha256"]
               for name, record in files.items() if "/build/drizzli-volparossa/build/" in name}
-    retained = read_json(ROOT / "integrations/drizzli/browser-smoke.json", 16384)
+    retained = read_json(ROOT / ("integrations/drizzli/browser-smoke.json" if manifest["version"] == 1
+        else "integrations/drizzli/air-quality-browser-smoke.json"), 16384)
     require(hashlib.sha256(canonical(hashes)).hexdigest() == retained["source"]["built_tree_sha256"])
     browser = root / "volparossa-browser/build/firefox-esr-smoke-v3"
     metadata = shared.validate_stage(browser)
@@ -229,7 +283,8 @@ def validate_bundle(root, expected):
         driver_sha256=files[required[0]]["sha256"], preparer_sha256=files[required[1]]["sha256"],
         built_tree_sha256=retained["source"]["built_tree_sha256"], node_sha256=shared.NODE_SHA256,
         bridge_modules={name: files["volparossa-weather/" + name]["sha256"] for name in
-            ("scripts/serve-provider.mjs", "src/provider-http.mjs", "src/provider-core.mjs", "src/core-cache.mjs")})
+            ("scripts/serve-provider.mjs", "src/provider-http.mjs", "src/provider-core.mjs", "src/core-cache.mjs",
+             *(("src/air-quality.mjs", "src/air-quality-provider.mjs", "src/air-quality-core.mjs") if manifest["version"] == 2 else ()))})
 
 
 def available_memory():
@@ -280,6 +335,16 @@ def cleanup(work, expected):
 
 
 def report_base(source, expected):
+    if expected["schema"] == 2:
+        return dict(schema=2, passed=False, phase="inputs", source=source,
+            expected=dict(expected_sha256=None, core_sha256=expected["core_sha256"], display_sha256=expected["display_sha256"]),
+            products={name: dict(expected=dict(cold_receipt_sha256=product["cold_receipt_sha256"],
+                display_sha256=product["display_sha256"], forecast_sha256=product["publication"]["sha256"],
+                manifest_id=product["publication"]["manifest_id"]), checks={}) for name, product in expected["products"].items()},
+            scope=dict(actual_drizzli_ui=False, actual_http_bridge=False, real_core_adapter=False,
+                synthetic_weather=False, standalone_origin_proven=False, standalone_overlay_proven=False,
+                browser_triggered_cold_fetch=False, synthetic_air_quality=False, separate_native_runs=False),
+            checks={}, cleanup={})
     return dict(schema=1, passed=False, phase="inputs", source=source,
         expected=dict(expected_sha256=None, cold_receipt_sha256=expected["cold_receipt_sha256"],
             core_sha256=expected["core_sha256"], display_sha256=expected["display_sha256"],
@@ -289,9 +354,10 @@ def report_base(source, expected):
             browser_triggered_cold_fetch=False), checks={}, cleanup={})
 
 
-def check_api(result, expected):
+def check_api(result, expected, product="weather"):
     publication = expected["publication"]
-    require(result["schema"] == "volparossa.weather.provider.v1" and result["kind"] == "forecast"
+    require(result["schema"] == ("volparossa.air-quality.provider.v1" if product == "air_quality" else "volparossa.weather.provider.v1")
+            and result["kind"] == "forecast"
             and result["forecast"] == expected["forecast"])
     delivery = result["delivery"]
     require(delivery["mode"] == "core-cache" and all(delivery[key] == publication[key]
@@ -303,17 +369,18 @@ def check_api(result, expected):
             and result["timeline"]["valid_at"] == expected["display"]["native"])
 
 
-def api(origin, expected):
+def api(origin, expected, product="weather"):
     port = int(origin.rsplit(":", 1)[1])
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
     try:
-        connection.request("GET", "/api/volparossa/forecast", headers={"Accept": "application/json"})
+        connection.request("GET", "/api/volparossa/" + ("air-quality" if product == "air_quality" else "forecast"),
+                           headers={"Accept": "application/json"})
         response = connection.getresponse()
         require(response.status == 200 and response.getheader("Cache-Control") == "no-store"
                 and response.getheader("Content-Type").startswith("application/json"))
         raw = response.read(524289)
         require(0 < len(raw) <= 524288)
-        check_api(json.loads(raw, object_pairs_hook=pairs), expected)
+        check_api(json.loads(raw, object_pairs_hook=pairs), expected, product)
         return hashlib.sha256(raw).hexdigest()
     finally:
         connection.close()
@@ -340,6 +407,86 @@ def check_dom(value, expected, requests):
             and value.get("details") == [display["coordinates"], display["model_run"], display["expires_at"]]
             and value.get("apiRequests") == requests and all(value.get(name) is True
                 for name in ("attribution", "licence", "missing", "localOnly")))
+
+
+def dom_products(client):
+    return client.script('''
+      const weather=document.querySelector('section[aria-label="VOLPAROSSA forecast"]');
+      const aq=document.querySelector('section[aria-label="VOLPAROSSA air quality"]');
+      const button=weather?.querySelector('button');
+      if(!weather?.querySelector('tbody') || !aq?.querySelector('tbody') || !button || button.disabled
+        || weather.querySelector('[role="status"], [role="alert"]') || aq.querySelector('[role="status"], [role="alert"]'))return null;
+      const entries=performance.getEntriesByType('resource');
+      const common=(area,endpoint)=>({native:[...area.querySelectorAll('tbody tr')].map(r=>r.children[0].textContent.trim()),
+        values:[...area.querySelectorAll('tbody tr')].map(r=>[...r.querySelectorAll('td')].map(c=>c.textContent.trim())),
+        details:[...area.querySelectorAll('dl dd')].map(c=>c.textContent.trim()),
+        headers:[...area.querySelectorAll('thead th')].map(c=>c.textContent.trim()),
+        localOnly:entries.every(e=>e.name.startsWith(location.origin+'/')&&!e.name.includes('/api/geo')),
+        apiRequests:entries.filter(e=>e.name===location.origin+endpoint).length});
+      const source=aq.querySelector('[data-testid="air-quality-source"]');
+      const attribution=source?.querySelector('a[href="https://www.emc.ncep.noaa.gov/emc/pages/numerical_forecast_systems/gefs_aero.php"]');
+      const license=source?.querySelector('a[href="https://registry.opendata.aws/noaa-gefs/"]');
+      const text=source?.textContent.replace(/\\s+/g,' ').trim() || '';
+      const changes=text.match(/Processing: (.*?) This modified presentation is not an official NOAA product or endorsement\\./);
+      return {weather:{...common(weather,'/api/volparossa/forecast'),
+          attribution:!!weather.querySelector('a[href="https://www.ecmwf.int/en/forecasts/datasets/open-data"]'),
+          licence:!!weather.querySelector('a[href="https://creativecommons.org/licenses/by/4.0/"]'),
+          missing:weather.textContent.includes('Missing does not mean dry, clear or clean air'),
+          accumulation:weather.textContent.includes('not an hourly rain rate')&&weather.textContent.includes('Windows may overlap')},
+        air_quality:{...common(aq,'/api/volparossa/air-quality'),attribution:attribution?.textContent.trim(),
+          license:license?.textContent.trim(),license_url:license?.getAttribute('href'),changes:changes?.[1],
+          missing:aq.textContent.includes('Missing values mean not available, not zero or clean air'),
+          nativeScope:aq.textContent.includes('not AQI or current observations')&&aq.textContent.includes('no time points are aligned or interpolated'),
+          noEndorsement:text.includes('not an official NOAA product or endorsement')}, refreshReady:true};
+    ''')
+
+
+def check_products_dom(value, expected, requests):
+    if type(value) is not dict or set(value) != {"weather", "air_quality", "refreshReady"} or value["refreshReady"] is not True:
+        return False
+    weather, aq = value["weather"], value["air_quality"]
+    display = expected["products"]["air_quality"]["display"]
+    return (check_dom(weather, expected["products"]["weather"], requests)
+            and weather.get("accumulation") is True
+            and weather.get("headers") == ["Valid time", "Temperature (°C)", "Wind (m/s)", "Wind from (°)",
+                                           "Accumulated precipitation (mm)", "Accumulation window (UTC)"]
+            and type(aq) is dict and aq.get("native") == display["native"] and aq.get("values") == display["values"]
+            and aq.get("details") == [display["coordinates"], display["model_run"], display["expires_at"]]
+            and aq.get("headers") == ["Valid time", "PM2.5 (µg/m³)", "PM10 (µg/m³)"]
+            and all(aq.get(key) == display[key] for key in ("attribution", "license", "license_url", "changes"))
+            and all(aq.get(key) is True for key in ("missing", "nativeScope", "noEndorsement", "localOnly"))
+            and aq.get("apiRequests") == requests)
+
+
+def observed_products(value):
+    result = {}
+    for name in ("weather", "air_quality"):
+        observed = value[name]
+        result[name] = dict(coordinates=observed["details"][0], model_run=observed["details"][1],
+            expires_at=observed["details"][2], native=observed["native"], values=observed["values"])
+        if name == "air_quality":
+            result[name].update({key: observed[key] for key in ("attribution", "license", "license_url", "changes")})
+    return result
+
+
+def wait_products_dom(client, connection, expected, requests):
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        connection.settimeout(min(15, remaining))
+        observed = dom_products(client)
+        if check_products_dom(observed, expected, requests):
+            displays = observed_products(observed)
+            hashes = {name: hashlib.sha256(canonical(display)).hexdigest() for name, display in displays.items()}
+            require(all(digest == expected["products"][name]["display_sha256"] for name, digest in hashes.items()))
+            combined = hashlib.sha256(canonical(displays)).hexdigest()
+            require(combined == expected["display_sha256"])
+            connection.settimeout(15)
+            return combined, hashes
+        time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+    raise TimeoutError("dom_deadline")
 
 
 def wait_dom(client, connection, expected, requests):
@@ -378,6 +525,7 @@ def inside(args, built, browser_stage, metadata, source, expected, config):
     environment.update(MOZ_NO_REMOTE="1", MOZ_CRASHREPORTER_DISABLE="1", XDG_CONFIG_HOME=str(work / "config"),
         XDG_CACHE_HOME=str(work / "cache"), XDG_RUNTIME_DIR=str(work / "runtime"), TMPDIR=str(work / "tmp"))
     report = report_base(source, expected)
+    v2 = expected["schema"] == 2
     report["expected"]["expected_sha256"] = shared.digest(args.expected)
     browser = bridge = connection = client = None
     normal_browser = normal_bridge = False
@@ -393,7 +541,11 @@ def inside(args, built, browser_stage, metadata, source, expected, config):
         origin = ready["listening"]
         report["scope"]["actual_http_bridge"] = True
         report["phase"] = "provider"
-        report["checks"]["api_response_sha256"] = api(origin, expected)
+        if v2:
+            for name, product in expected["products"].items():
+                report["products"][name]["checks"]["api_response_sha256"] = api(origin, product, name)
+        else:
+            report["checks"]["api_response_sha256"] = api(origin, expected)
         report["scope"]["real_core_adapter"] = True
         report["phase"] = "browser_start"
         browser = subprocess.Popen([str(browser_stage / metadata["executable"]), "--headless", "--no-remote", "--new-instance",
@@ -419,15 +571,33 @@ def inside(args, built, browser_stage, metadata, source, expected, config):
         client.command("WebDriver:SetTimeouts", {"pageLoad": 15000, "script": 10000})
         report["phase"] = "hydration"
         client.command("WebDriver:Navigate", {"url": origin + "/en/weather/week/"})
-        report["checks"]["initial_dom_display_sha256"] = wait_dom(client, connection, expected, 1)
+        if v2:
+            combined, observed = wait_products_dom(client, connection, expected, 1)
+            report["checks"]["initial_dom_display_sha256"] = combined
+            for name, digest in observed.items():
+                report["products"][name]["checks"].update(initial_dom_display_sha256=digest,
+                    initial_dom_matches_cold_publication=True)
+        else:
+            report["checks"]["initial_dom_display_sha256"] = wait_dom(client, connection, expected, 1)
+            report["checks"]["initial_dom_matches_cold_publication"] = True
         report["scope"]["actual_drizzli_ui"] = True
-        report["checks"]["initial_dom_matches_cold_publication"] = True
         report["phase"] = "refresh"
         require(client.script('const b=document.querySelector("section[aria-label=\\"VOLPAROSSA forecast\\"] button"); if(!b||b.disabled)return false; b.click(); return true;'))
-        report["checks"]["refresh_dom_display_sha256"] = wait_dom(client, connection, expected, 2)
-        report["checks"].update(refresh_dom_matches_cold_publication=True, browser_api_requests=2,
-            provider_requests_checked=1, exact_native_times_and_values=True, explicit_missing_capabilities=True,
-            no_external_resources=True, source_attribution=True)
+        if v2:
+            combined, observed = wait_products_dom(client, connection, expected, 2)
+            report["checks"].update(refresh_dom_display_sha256=combined,
+                browser_api_requests=4, provider_requests_checked=2, no_external_resources=True)
+            for name, digest in observed.items():
+                report["products"][name]["checks"].update(refresh_dom_display_sha256=digest,
+                    refresh_dom_matches_cold_publication=True, browser_api_requests=2, provider_requests_checked=1,
+                    exact_native_times_and_values=True, explicit_missing_capabilities=True,
+                    no_external_resources=True, source_attribution=True)
+            report["scope"]["separate_native_runs"] = True
+        else:
+            report["checks"]["refresh_dom_display_sha256"] = wait_dom(client, connection, expected, 2)
+            report["checks"].update(refresh_dom_matches_cold_publication=True, browser_api_requests=2,
+                provider_requests_checked=1, exact_native_times_and_values=True, explicit_missing_capabilities=True,
+                no_external_resources=True, source_attribution=True)
         report["phase"] = "shutdown"
         client.command("Marionette:Quit", {"flags": ["eForceQuit"]})
         normal_browser = browser.wait(timeout=10) == 0
@@ -484,9 +654,11 @@ def main():
     require(args.output.parent == args.config.parent == args.expected.parent
             and not args.output.is_relative_to(args.bundle_root))
     boundary(args, args.inside)
-    built, browser, metadata, source = validate_bundle(args.bundle_root, args.bundle_manifest_sha256)
     config = read_json(args.config, 16384, 0o600)
-    expected = validate_expected(read_json(args.expected, 192 * 1024, 0o400), config)
+    raw_expected = raw_file(args.expected, 384 * 1024, 0o400)
+    expected = validate_expected(json.loads(raw_expected, object_pairs_hook=pairs), config)
+    require(len(raw_expected) <= (384 if expected["schema"] == 2 else 192) * 1024)
+    built, browser, metadata, source = validate_bundle(args.bundle_root, args.bundle_manifest_sha256, expected["schema"])
     require(config["core"]["scratchParent"] == str(args.output / "scratch"))
     binary = Path(config["core"]["executable"])
     verify_core_binary(binary, expected["core_sha256"], args)

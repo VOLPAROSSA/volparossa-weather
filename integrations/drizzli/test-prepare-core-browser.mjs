@@ -8,7 +8,9 @@ import { join, resolve, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { windForecast, QUERY } from '../../tests/fixtures.mjs';
-import { canonical, prepareExpected } from './prepare-core-browser.mjs';
+import { precipitationForecast } from '../../tests/precipitation-fixtures.mjs';
+import { aqForecast } from '../../tests/air-quality-fixtures.mjs';
+import { canonical, prepareExpected, prepareExpectedV2 } from './prepare-core-browser.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
 const work = await mkdtemp(join(root, 'build/drizzli-core-prepare-test-'));
@@ -16,8 +18,10 @@ after(() => rm(work, { recursive: true }));
 const client = join(work, 'build/drizzli-volparossa/src/lib/services/volparossa');
 await mkdir(client, { recursive: true, mode: 0o700 });
 await copyFile(join(import.meta.dirname, 'overlay/src/lib/services/volparossa/client.mjs'), join(client, 'client.mjs'));
-for (const name of ['provider', 'forecast']) await copyFile(join(root, `src/${name}.mjs`), join(client, `${name}.mjs`));
-const { displayValue } = await import(pathToFileURL(join(client, 'client.mjs')));
+for (const name of ['provider', 'forecast', 'air-quality', 'air-quality-provider']) {
+  await copyFile(join(root, `src/${name}.mjs`), join(client, `${name}.mjs`));
+}
+const { displayValue, displayAccumulationWindow } = await import(pathToFileURL(join(client, 'client.mjs')));
 const sha = value => createHash('sha256').update(value).digest('hex');
 const bytes = value => Buffer.from(JSON.stringify(value));
 
@@ -38,6 +42,63 @@ function fixture() {
     publication_expires_unix_seconds: Math.floor(Date.now() / 1000) + 600 };
   return { forecast, raw, config, receipt };
 }
+
+function productsFixture() {
+  const current = fixture();
+  current.config.core.query.includePrecipitation = true;
+  current.forecast = precipitationForecast(current.config.core.query, new Date().toISOString(), { value: 0.00001234 });
+  current.raw = bytes(current.forecast);
+  Object.assign(current.receipt, { bytes: current.raw.length, peer_bytes: current.raw.length, sha256: sha(current.raw) });
+  const run = new Date(Date.parse(current.config.core.query.run) - 6 * 3600000).toISOString();
+  const query = { latitude: QUERY.latitude, longitude: QUERY.longitude, run, model: 'gefs-aerosols',
+    steps: [3, 6, 12], communityArea: true };
+  const forecast = aqForecast(query, new Date().toISOString()), raw = bytes(forecast);
+  const core = { ...current.config.core, name: 'air-quality/test', cache: '/not-accessed/aq-cache', query };
+  const receipt = { ...current.receipt, name: core.name, cache: core.cache, manifest_id: 'f'.repeat(64),
+    sha256: sha(raw), bytes: raw.length, peer_bytes: raw.length, local_output: '/not-accessed/aq-cold.json',
+    publication_expires_unix_seconds: current.receipt.publication_expires_unix_seconds - 100 };
+  current.config.airQuality = { core, variables: ['pm2_5', 'pm10'] };
+  return { ...current, aq: { forecast, raw, receipt } };
+}
+
+const prepareProducts = f => prepareExpectedV2(f.raw, bytes(f.receipt), f.aq.raw, bytes(f.aq.receipt),
+  f.config, 'c'.repeat(64), displayValue, displayAccumulationWindow);
+
+test('v2 binds two cold publications and actual UI precision, accumulation windows and independent native timelines', () => {
+  const f = productsFixture(), result = prepareProducts(f);
+  assert.equal(result.schema, 2);
+  assert.deepEqual(Object.keys(result.products), ['weather', 'air_quality']);
+  const { weather, air_quality: aq } = result.products;
+  assert.equal(weather.publication.sha256, sha(f.raw));
+  assert.equal(aq.publication.sha256, sha(f.aq.raw));
+  assert.deepEqual(aq.display.values, [['Not available', '11.5959'], ['0', 'Not available'], ['5.53071', '0']]);
+  assert.equal(weather.display.values[0][3], '0.01234');
+  assert.equal(weather.display.values[0][4], f.forecast.samples[0].precipitation.start_at + ' → '
+    + f.forecast.samples[0].precipitation.end_at);
+  assert.notEqual(aq.display.model_run, weather.display.model_run);
+  assert.notDeepEqual(aq.display.native, weather.display.native);
+  assert.notEqual(aq.display.expires_at, weather.display.expires_at);
+  assert.equal(aq.display.attribution, 'NOAA/NWS GEFS-Aerosols');
+  assert.equal(aq.display.license, 'LicenseRef-NOAA-NODD');
+  assert.equal(result.display_sha256, sha(canonical({ weather: weather.display, air_quality: aq.display })));
+  assert.throws(() => prepareExpected(f.raw, bytes(f.receipt), f.config, 'c'.repeat(64), displayValue));
+});
+
+test('v2 rejects cross-product receipt/query substitutions, missing precipitation, shared cache and extra authority', () => {
+  for (const change of [f => { f.aq.receipt = f.receipt; }, f => { f.aq.receipt.origin_body_bytes = 1; },
+    f => { f.aq.receipt.publication_expires_unix_seconds = 1; },
+    f => { f.config.airQuality.core.query.run = f.config.core.query.run; },
+    f => { f.config.airQuality.core.query.steps = [3, 9, 24]; },
+    f => { f.config.airQuality.core.query.latitude = 1; },
+    f => { f.config.airQuality.variables.push('aqi'); }, f => { f.config.core.query.includePrecipitation = false; },
+    f => { f.config.airQuality.core.cache = f.config.core.cache; },
+    f => { f.config.airQuality.core.controlSocket = '/not-accessed/other.sock'; },
+    f => { f.config.airQuality.core.executable = '/not-executed/other'; },
+    f => { f.config.airQuality.core.scratchParent = '/not-accessed/other'; }]) {
+    const f = productsFixture(); change(f);
+    assert.throws(() => prepareProducts(f));
+  }
+});
 
 test('expected native DOM values derive from the actual client formatter and cold receipt', () => {
   const { raw, config, receipt, forecast } = fixture();
@@ -78,7 +139,8 @@ test('mismatched location, run, native steps and non-reusable cache are refused'
 
 test('CLI binds local_output, private modes and exclusive destination without executing core', async () => {
   for (const name of ['integrations/drizzli/prepare-core-browser.mjs',
-    ...['provider-http', 'provider-core', 'core-cache', 'provider', 'forecast'].map(name => `src/${name}.mjs`)]) {
+    ...['provider-http', 'provider-core', 'core-cache', 'provider', 'forecast',
+      'air-quality', 'air-quality-provider', 'air-quality-core'].map(name => `src/${name}.mjs`)]) {
     const target = join(work, name); await mkdir(dirname(target), { recursive: true, mode: 0o700 });
     await copyFile(join(root, name), target);
   }
@@ -102,4 +164,37 @@ test('CLI binds local_output, private modes and exclusive destination without ex
   assert.equal(JSON.parse(saved).publication.sha256, sha(raw));
   result = invoke(); assert.equal(result.status, 1); // Never replace an earlier expected publication.
   assert.deepEqual(await readFile(output), saved);
+});
+
+test('v2 CLI requires both AQ inputs, binds both local outputs and keeps products separate', async () => {
+  for (const name of ['integrations/drizzli/prepare-core-browser.mjs',
+    ...['provider-http', 'provider-core', 'core-cache', 'provider', 'forecast',
+      'air-quality', 'air-quality-provider', 'air-quality-core'].map(name => `src/${name}.mjs`)]) {
+    const target = join(work, name); await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+    await copyFile(join(root, name), target);
+  }
+  const f = productsFixture(), input = join(work, 'weather-v2.json'), aq = join(work, 'aq-v2.json');
+  const receipt = join(work, 'receipt-v2.json'), aqReceipt = join(work, 'aq-receipt-v2.json');
+  const config = join(work, 'config-v2.json'), output = join(work, 'expected-v2.json');
+  f.receipt.local_output = input;
+  await writeFile(input, f.raw, { mode: 0o600 }); await writeFile(aq, f.aq.raw, { mode: 0o600 });
+  await writeFile(receipt, bytes(f.receipt), { mode: 0o600 });
+  await writeFile(aqReceipt, bytes(f.aq.receipt), { mode: 0o600 });
+  await writeFile(config, bytes(f.config), { mode: 0o600 });
+  const args = [join(work, 'integrations/drizzli/prepare-core-browser.mjs'), '--forecast', input,
+    '--receipt', receipt, '--config', config, '--core-sha256', 'c'.repeat(64), '--output', output];
+  const invoke = more => spawnSync(process.execPath, [...args, ...more], { encoding: 'utf8', timeout: 10000,
+    env: { LANG: 'C.UTF-8' }, maxBuffer: 4096 });
+  assert.equal(invoke(['--air-quality', aq]).status, 1);
+  assert.equal(invoke(['--air-quality-receipt', aqReceipt]).status, 1);
+  assert.equal(invoke(['--air-quality', aq, '--air-quality-receipt', aqReceipt]).status, 1);
+  f.aq.receipt.local_output = aq;
+  await writeFile(aqReceipt, bytes(f.aq.receipt), { mode: 0o600 });
+  const result = invoke(['--air-quality', aq, '--air-quality-receipt', aqReceipt]);
+  assert.equal(result.status, 0, result.stderr);
+  const saved = JSON.parse(await readFile(output, 'utf8'));
+  assert.equal(saved.schema, 2); assert.equal((await stat(output)).mode & 0o777, 0o400);
+  assert.equal(saved.products.weather.publication.sha256, sha(f.raw));
+  assert.equal(saved.products.air_quality.publication.sha256, sha(f.aq.raw));
+  assert.equal(invoke(['--air-quality', aq, '--air-quality-receipt', aqReceipt]).status, 1);
 });

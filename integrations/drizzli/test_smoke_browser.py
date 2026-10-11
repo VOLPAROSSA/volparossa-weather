@@ -18,6 +18,20 @@ spec.loader.exec_module(SMOKE)
 
 
 class Boundaries(unittest.TestCase):
+    def test_refresh_waits_for_weather_and_air_quality_to_finish(self):
+        client = Mock()
+        client.script.side_effect = [False, False, True]
+        self.assertFalse(SMOKE.refresh_idle(client))
+        self.assertFalse(SMOKE.refresh_idle(client))
+        self.assertTrue(SMOKE.refresh_idle(client))
+        script = client.script.call_args.args[0]
+        self.assertIn('VOLPAROSSA forecast', script)
+        self.assertIn('VOLPAROSSA air quality', script)
+        self.assertIn('disabled === false', script)
+        client.script.return_value = 1
+        client.script.side_effect = None
+        self.assertFalse(SMOKE.refresh_idle(client))
+
     def test_browser_root_is_explicit_canonical_and_default_is_unchanged(self):
         default = Path('/unchanged/sibling/volparossa-browser')
         self.assertEqual(SMOKE.browser_root_argument([], default), default)
@@ -42,6 +56,10 @@ class Boundaries(unittest.TestCase):
         self.assertNotIn('--precipitation', baseline)
         self.assertEqual(SMOKE.fixture_arguments(Path('/node'), Path('/stage'), Path('/work'), True),
                          [*baseline, '--precipitation'])
+        self.assertEqual(SMOKE.fixture_arguments(Path('/node'), Path('/stage'), Path('/work'), False, True),
+                         [*baseline, '--air-quality'])
+        self.assertEqual(SMOKE.fixture_arguments(Path('/node'), Path('/stage'), Path('/work'), True, True),
+                         [*baseline, '--precipitation', '--air-quality'])
 
     def test_environment_excludes_runtime_injection_and_host_secrets(self):
         with patch.dict(os.environ, {"LD_PRELOAD": "private", "NODE_OPTIONS": "--import=private", "TOKEN": "private"}):
@@ -83,7 +101,7 @@ class PrecipitationDisplay(unittest.TestCase):
         return dict(native=self.times.copy(), values=SMOKE.precipitation_rows(self.times, missing),
             headings=['Valid time', 'Temperature (°C)', 'Wind (m/s)', 'Wind from (°)',
                       'Accumulated precipitation (mm)', 'Accumulation window (UTC)'],
-            explicitWindows=True, noRate=True, airQualityUnavailable=True, notLoading=True,
+            explicitWindows=True, noRate=True, airQualitySeparate=True, notLoading=True,
             localOnly=True, completedRequests=requests)
 
     def test_expected_amounts_and_native_overlapping_windows_are_not_inferred_hours(self):
@@ -116,7 +134,7 @@ class PrecipitationDisplay(unittest.TestCase):
         ]:
             changed = copy.deepcopy(observed); mutate(changed)
             self.assertFalse(SMOKE.precipitation_dom_matches(changed, self.times, 2))
-        for field in ['explicitWindows', 'noRate', 'airQualityUnavailable', 'notLoading', 'localOnly']:
+        for field in ['explicitWindows', 'noRate', 'airQualitySeparate', 'notLoading', 'localOnly']:
             self.assertFalse(SMOKE.precipitation_dom_matches({**observed, field: False}, self.times, 2))
         self.assertFalse(SMOKE.precipitation_dom_matches({**observed, 'completedRequests': True}, self.times, 1))
         self.assertTrue(SMOKE.precipitation_dom_matches(self.observed(missing=True, requests=3), self.times, 3, missing=True))
@@ -125,6 +143,39 @@ class PrecipitationDisplay(unittest.TestCase):
         observed = self.observed(requests=2)
         with patch.object(SMOKE, 'precipitation_dom', return_value=observed) as dom:
             actual = SMOKE.wait_precipitation(Mock(), self.times, 2)
+        expected = SMOKE.hashlib.sha256(json.dumps({'native': observed['native'], 'values': observed['values']},
+            sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        self.assertEqual(actual, expected)
+        dom.assert_called_once()
+
+
+class AirQualityDisplay(unittest.TestCase):
+    times = ['2026-09-29T21:00:00.000Z', '2026-09-30T00:00:00.000Z', '2026-09-30T06:00:00.000Z']
+
+    def observed(self):
+        return dict(native=self.times.copy(), values=[['Not available', '11.5959'], ['0', 'Not available'], ['5.53071', '0']],
+            headings=['Valid time', 'PM2.5 (µg/m³)', 'PM10 (µg/m³)'], noObservation=True, noAqi=True,
+            source=True, license=True, notLoading=True, localOnly=True, completedRequests=2)
+
+    def test_air_quality_requires_native_times_exact_concentrations_and_completed_refresh(self):
+        observed = self.observed()
+        self.assertTrue(SMOKE.air_quality_dom_matches(observed, self.times, 2))
+        self.assertFalse(SMOKE.air_quality_dom_matches(observed, self.times, 3))
+        for change in [lambda v: v['values'][0].__setitem__(0, '0'),
+                       lambda v: v['values'][1].__setitem__(0, 'Not available'),
+                       lambda v: v['values'][2].__setitem__(0, '5.5'),
+                       lambda v: v['headings'].__setitem__(1, 'AQI'),
+                       lambda v: v['native'].__setitem__(0, PrecipitationDisplay.times[0])]:
+            changed = copy.deepcopy(observed); change(changed)
+            self.assertFalse(SMOKE.air_quality_dom_matches(changed, self.times, 2))
+        for field in ['noObservation', 'noAqi', 'source', 'license', 'notLoading', 'localOnly']:
+            self.assertFalse(SMOKE.air_quality_dom_matches({**observed, field: False}, self.times, 2))
+        self.assertFalse(SMOKE.air_quality_dom_matches({**observed, 'completedRequests': True}, self.times, 1))
+
+    def test_hash_binds_actual_observed_air_quality_dom(self):
+        observed = self.observed()
+        with patch.object(SMOKE, 'air_quality_dom', return_value=observed) as dom:
+            actual = SMOKE.wait_air_quality(Mock(), self.times, 2)
         expected = SMOKE.hashlib.sha256(json.dumps({'native': observed['native'], 'values': observed['values']},
             sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         self.assertEqual(actual, expected)
@@ -161,6 +212,15 @@ class FixtureData(unittest.TestCase):
             assert.equal(forecast.samples[0].temperature_2m,mode==='missing'?null:10);
           }
           assert.throws(()=>fixtureForecast(query,now,'invented'));
+          const {fixtureAirQualityQuery}=await import('./integrations/drizzli/browser-fixture.mjs');
+          const {aqForecast}=await import('./tests/air-quality-fixtures.mjs');
+          const aqQuery=fixtureAirQualityQuery(query), aq=aqForecast(aqQuery,now);
+          assert.equal(aqQuery.run,'2026-09-29T18:00:00.000Z');
+          assert.deepEqual(aqQuery.steps,[3,6,12]);
+          assert.equal(aq.area.latitude,query.latitude); assert.equal(aq.area.longitude,query.longitude);
+          assert.deepEqual(aq.samples.map(s=>s.pm2_5),[null,0,5.53071]);
+          assert.deepEqual(aq.samples.map(s=>s.pm10),[11.5959,null,0]);
+          assert.notDeepEqual(aq.samples.map(s=>s.valid_at),baseline.samples.map(s=>s.valid_at));
           console.log(JSON.stringify({inert:true,baseline:true,precipitation:true}));
         '''
         result = subprocess.run([str(node), '--input-type=module', '-'], input=script,

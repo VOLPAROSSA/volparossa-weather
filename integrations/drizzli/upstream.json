@@ -13,15 +13,18 @@
   "baseline_note": "Intentionally uses the inspected pre-SvelteKit-3 baseline; updating the pin requires reviewing framework and integration changes together.",
   "weather_modules": {
     "src/forecast.mjs": "5a3d71b0c1735e5a7716a1d126fe39c5595232d07ef54f876b8838bc5ccd14e4",
-    "src/provider.mjs": "d2dcf5b3817b148721632c74684ce83770bb670feb18872aec5a71157542b7ee"
+    "src/provider.mjs": "d2dcf5b3817b148721632c74684ce83770bb670feb18872aec5a71157542b7ee",
+    "src/air-quality.mjs": "c69432ead935a81d3ae28a5259201f98a8845eaef96019121ab9bf3c8f7fced7",
+    "src/air-quality-provider.mjs": "3ef3c7b3a731e2d41d6c60dc240ec1d0bda0f925c8bf9b814d6f9d7bd09f6fb9"
   },
   "weather_modules_license": "GPL-3.0-only; original Weather modules remain separately identified. Preserve upstream AGPL and all original notices in the combined client distribution.",
   "mode": "VITE_VOLPAROSSA_WEATHER=1",
-  "transport": "GET /api/volparossa/forecast, same-origin, no parameters, one locally configured public-community forecast",
-  "scope": "Actual Drizz.li week-route integration, not a generic demo. Native UTC temperature/wind points and optional precipitation totals with explicit source accumulation windows; other weather capabilities explicitly unavailable in VOLPAROSSA mode. Ordinary upstream build retains upstream providers.",
+  "transport": "Sequential GET /api/volparossa/forecast and /api/volparossa/air-quality, same-origin, no parameters, independently configured public-community products for the same area",
+  "scope": "Actual Drizz.li week-route integration, not a generic demo. Native UTC temperature/wind points, optional precipitation totals with explicit source accumulation windows and a separate NOAA particulate forecast panel. Product timestamps, expiry and failures are independent; no AQI or observations are invented. Ordinary upstream build retains upstream providers.",
   "deployment": "Stage client and bridge together: exact provider capability validation rejects a mismatched old client, including temperature-only responses from the new bridge.",
   "build_caution": "Do not run npm run build blindly: upstream prebuild downloads mutable external assets. Use reviewed locked dependencies and explicit vite build with the mode enabled; no external assets are necessary for the native forecast table. No dependency installation or upstream scripts are performed by stage.py. prepare_build.py replaces upstream CDN localization imports with the SHA512-verified build-plugins.json packages and preserves their MIT notices before compilation.",
   "baseline_verified": ["Before precipitation: 11 client and actual Svelte compiler/render tests, full app svelte-check, full Vite production build, isolated Firefox hydration/interaction with synthetic provider data. browser-smoke.json pins that older build, not the precipitation changes."],
   "verified": ["9 client tests including precipitation projections and native accumulation windows", "5 actual Svelte render/compiler tests", "precipitation app svelte-check with zero errors and warnings", "networkless Vite client/SSR production build with adapter-static; see precipitation-build.json", "actual IFS and AIFS precipitation origin acquisition with the pinned decoder; not an overlay or browser proof", "isolated Firefox precipitation hydration, exact native windows and missing/zero/small values, refresh and cleanup with synthetic weather; see precipitation-browser-smoke.json"],
-  "remaining": ["actual core-to-client joined trial", "additional locations and client configuration", "mobile Overmorrow integration", "air-quality sources and rendering"]
+  "air_quality_verified": ["126 targeted Node tests including 13 client and eight actual Svelte render/compiler tests; 13 inert browser-harness tests", "full app svelte-check with zero errors/warnings and networkless Vite client/SSR static build", "isolated Firefox with synthetic precipitation and particulate forecasts: eleven requests per product, exact native timestamps/concentrations, independent expiry/failure and cleanup; air-quality-browser-smoke.json", "same client build passes baseline temperature/wind scenario with no air-quality configuration; air-quality-baseline-smoke.json"],
+  "remaining": ["actual joined precipitation and particulate core-to-client delivery; temperature/wind Weather phase already passes its retained scope", "additional locations and client configuration", "mobile Overmorrow integration"]
 }

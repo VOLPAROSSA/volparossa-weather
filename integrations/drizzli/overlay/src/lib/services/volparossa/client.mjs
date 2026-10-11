@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { toProviderForecast, PROVIDER_SCHEMA } from './provider.mjs';
+import { toAirQualityProviderForecast, AIR_QUALITY_PROVIDER_SCHEMA } from './air-quality-provider.mjs';
 
 export const ENDPOINT = '/api/volparossa/forecast';
+export const AIR_QUALITY_ENDPOINT = '/api/volparossa/air-quality';
 export const MAX_PROVIDER_BYTES = 524288;
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 
@@ -10,16 +12,29 @@ const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
  * @param {string} now
  */
 export function validateProvider(value, now = new Date().toISOString()) {
-  if (!value || value.schema !== PROVIDER_SCHEMA || value.kind !== 'forecast'
+  return validateProjection(value, now, toProviderForecast, PROVIDER_SCHEMA, 'FORECAST_INVALID');
+}
+
+/** The particulate product has its own source, native timeline and expiry.
+ * @param {any} value @param {string} now */
+export function validateAirQualityProvider(value, now = new Date().toISOString()) {
+  return validateProjection(value, now, toAirQualityProviderForecast,
+    AIR_QUALITY_PROVIDER_SCHEMA, 'AIR_QUALITY_INVALID');
+}
+
+/** @param {any} value @param {string} now @param {Function} project
+ * @param {string} schema @param {string} error */
+function validateProjection(value, now, project, schema, error) {
+  if (!value || value.schema !== schema || value.kind !== 'forecast'
       || value.verification_scope !== 'forecast-schema-and-freshness-only'
       || !Array.isArray(value.series) || value.delivery?.mode !== 'core-cache'
       || value.delivery.upstream_origin_attested !== false
       || value.delivery.manifest_media_type_checked !== false
       || typeof value.delivery.publication_expires_at !== 'string'
       || value.freshness?.publication_expires_at !== value.delivery.publication_expires_at) {
-    throw new Error('FORECAST_INVALID');
+    throw new Error(error);
   }
-  const projected = toProviderForecast(value.forecast, {
+  const projected = project(value.forecast, {
     variables: value.series.map((/** @type {any} */ item) => item?.variable), now,
     publicationExpires: value.delivery.publication_expires_at
   });
@@ -27,19 +42,30 @@ export function validateProvider(value, now = new Date().toISOString()) {
       || !same(value.timeline, projected.timeline) || !same(value.series, projected.series)
       || !same(value.capabilities, projected.capabilities)
       || value.freshness.expires_at !== projected.freshness.expires_at) {
-    throw new Error('FORECAST_INVALID');
+    throw new Error(error);
   }
   return { ...projected, delivery: value.delivery };
 }
 
 /** @param {typeof fetch} fetcher @param {AbortSignal} signal */
 export async function fetchProvider(fetcher, signal) {
-  const response = await fetcher(ENDPOINT, {
+  return fetchProjection(fetcher, signal, ENDPOINT, validateProvider, 'FORECAST');
+}
+
+/** @param {typeof fetch} fetcher @param {AbortSignal} signal */
+export async function fetchAirQualityProvider(fetcher, signal) {
+  return fetchProjection(fetcher, signal, AIR_QUALITY_ENDPOINT, validateAirQualityProvider, 'AIR_QUALITY');
+}
+
+/** @param {typeof fetch} fetcher @param {AbortSignal} signal @param {string} endpoint
+ * @param {Function} validate @param {string} errorPrefix */
+async function fetchProjection(fetcher, signal, endpoint, validate, errorPrefix) {
+  const response = await fetcher(endpoint, {
     method: 'GET', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
     headers: { Accept: 'application/json' }, signal
   });
   if (!response.ok || !response.headers.get('content-type')?.startsWith('application/json')
-      || !response.body) throw new Error('FORECAST_UNAVAILABLE');
+      || !response.body) throw new Error(`${errorPrefix}_UNAVAILABLE`);
   const reader = response.body.getReader();
   const parts = [];
   let size = 0;
@@ -48,7 +74,7 @@ export async function fetchProvider(fetcher, signal) {
       const { value, done } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > MAX_PROVIDER_BYTES) throw new Error('FORECAST_TOO_LARGE');
+      if (size > MAX_PROVIDER_BYTES) throw new Error(`${errorPrefix}_TOO_LARGE`);
       parts.push(value);
     }
   } finally {
@@ -58,7 +84,7 @@ export async function fetchProvider(fetcher, signal) {
   const bytes = new Uint8Array(size);
   let offset = 0;
   for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
-  return validateProvider(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
+  return validate(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
 }
 
 /** Internal display helpers preserve null and genuine zero separately.
@@ -68,7 +94,7 @@ export function displayValue(forecast, variable, index) {
   const value = field?.values?.[index];
   if (!Number.isFinite(value)) return 'Not available';
   // Preserve small nonzero accumulated amounts instead of rounding them dry.
-  return variable === 'precipitation' ? String(value) : Number(value).toFixed(1);
+  return ['precipitation', 'pm2_5', 'pm10'].includes(variable) ? String(value) : Number(value).toFixed(1);
 }
 
 /** @param {any} forecast */

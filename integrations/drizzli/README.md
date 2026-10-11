@@ -7,9 +7,12 @@ not a separate weather demonstration or a complete replacement for Drizz.li.
 The current view shows temperature and wind at the model's native UTC forecast
 times. It identifies the configured coordinates, model run, expiry, ECMWF
 attribution, licence and processing changes. It does not invent hourly values,
-current observations, daily extrema, weather icons or air quality. Optional
+current observations, daily extrema or weather icons. Optional
 precipitation is shown as a total in mm alongside its native UTC accumulation
 window, not as an inferred hourly rate. Overlapping windows must not be summed.
+The separate particulate panel shows a configured NOAA PM2.5/PM10 forecast with
+its own native times, provenance and expiry. It does not infer AQI, observations
+or additional pollutants, or align these values to ECMWF's time axis.
 
 ## What works, and what remains
 
@@ -48,6 +51,17 @@ The older browser receipt above remains evidence for the earlier build.
 Rebuild and deploy the client and bridge together:
 an older client rejects the new provider capability list rather than guessing.
 
+The particulate extension passes a full networkless app build, type checking
+with zero errors/warnings and eight actual Svelte render/compiler tests. The
+[combined Firefox receipt](air-quality-browser-smoke.json) binds that build and
+the production HTTP bridge: eleven requests per product verify display, refresh,
+native times, missing/zero concentrations and separate expiry. Weather failure
+does not erase valid particulate data, and particulate failure does not erase
+valid weather. Location guards, blocked external resources, normal shutdown
+and private-profile cleanup pass. All values in this browser trial are synthetic;
+the original NOAA source trial and real peer delivery are separate evidence.
+The unchanged temperature/wind mode also passes on this build without AQ configured.
+
 A [joined live core-to-browser trial](core-delivery-smoke.json) now passes for
 temperature and wind: real ECMWF fields become one publication, a cold protected
 fetch obtains its 7,149 bytes from a peer, and the actual page displays and
@@ -58,15 +72,25 @@ the cold fetch. The complete topology runner later fails in a separate adaptive
 provider-transfer test, so this is a successful Weather phase, not an all-green
 topology suite; [the run summary](core-delivery-run.json) preserves that distinction.
 Precipitation delivery through that complete path, additional
-location selection, air-quality display and Overmorrow remain open.
+location selection, particulate peer delivery and Overmorrow remain open.
+
+The new two-product joined driver is ready for that disposable trial. It binds
+separate cold receipts for weather and particulates, checks both direct provider
+responses, and waits for both panels before initial display and refresh checks.
+Each product retains its own native forecast times, publication and expiry;
+older model points are not labelled as current observations. Seven preparation
+tests and sixteen browser-driver tests pass. These checks validate the driver,
+not a new live transfer or browser result.
 
 ## Data and privacy boundary
 
-In `VITE_VOLPAROSSA_WEATHER=1` mode the client makes one fixed, same-origin
-`GET /api/volparossa/forecast` request, without parameters or a request body.
-The local bridge selects one explicitly configured **public-community** forecast
-through the existing core-cache provider. The browser cannot choose a publisher,
-file path, control socket or location through this endpoint.
+In `VITE_VOLPAROSSA_WEATHER=1` mode the client sequentially requests fixed,
+same-origin `GET /api/volparossa/forecast` and `GET /api/volparossa/air-quality`
+endpoints, without parameters or a request body. The local bridge selects the
+explicitly configured **public-community** products through the core-cache
+providers. The browser cannot choose a publisher, file path, control socket or
+location. An absent AQ configuration produces a visible unavailable state, not
+a request to NOAA or another external service.
 
 The returned coordinates are shown prominently. City-specific routes redirect to
 the configured week view before geocoding; location selection, automatic
@@ -193,9 +217,15 @@ fresh precipitation-enabled build and choose a separate output directory.
 The retained precipitation receipt uses `build/drizzli-precipitation-01` and
 `build/drizzli-precipitation-browser-01`. It checks five data cells per row,
 including the explicit UTC window, without inventing hourly rain rates or AQI.
+Add `--air-quality` for the separate particulate scenario; combine both flags
+to test independent product failure and expiry. The new receipt uses
+`build/drizzli-air-quality-01` and `build/drizzli-air-quality-browser-01`.
+Eight upstream static assets copied into that build retained group-write bits;
+those specific generated files were made non-group/world-writable before the
+browser preflight. No serving-permission check was relaxed.
 
-Ten inert tests cover helper-root selection, fixture data, exact precipitation
-display checks, environment isolation, process-exit races and guarded cleanup.
+Thirteen inert tests cover helper-root selection, fixture data, exact precipitation
+and particulate display checks, refresh readiness, environment isolation, process-exit races and guarded cleanup.
 Set `VOLPAROSSA_TEST_NODE` to the verified executable to include the inert Node
 fixture test; otherwise that one test is explicitly skipped.
 The browser driver then tests actual fixture child shutdown via a stop
@@ -282,9 +312,33 @@ locations are dedicated core-provider working directories, not the static site.
 the desired UI fields. Older configurations may omit `includePrecipitation`,
 which defaults to false. To consume a precipitation-inclusive publication,
 retrieve it with `--include-precipitation` and set that configuration flag to true.
-Air quality remains unavailable; requesting it does not add a data source.
+Requesting `air_quality` in this weather projection does not add a data source.
 A temperature-only publication can
 use `includeWind: false`; the view then reports missing wind rather than zero.
+
+To enable the separate particulate panel, add an `airQuality` member beside
+`core` and `variables` in the configuration. It contains its own `core` object
+with the same connection/cache/path/publisher/name/revision/reuse fields above,
+plus `variables: ["pm2_5", "pm10"]`. Use the separately trusted particulate
+publication, initialize its cache with `scripts/air-quality.mjs core-cache`,
+and set its `core.query` to the following shape (with an actual fresh NOAA run):
+
+```json
+{
+  "latitude": 52.52,
+  "longitude": 13.41,
+  "run": "REPLACE_WITH_ACTUAL_FRESH_NOAA_RUN_UTC",
+  "model": "gefs-aerosols",
+  "steps": [3, 6, 12],
+  "communityArea": true
+}
+```
+
+Do not include ECMWF wind/precipitation flags in this query. Both products must
+use the same public-area coordinates; their model runs and native lead times
+remain independent. The particulate contract is
+`volparossa.air-quality.provider.v1`, not the weather projection. Publication
+and source acquisition remain separate authorized operations.
 
 Set this **specific file** to mode `0600`, keep scratch space private (`0700`),
 and start from the Weather repository root:
@@ -300,8 +354,11 @@ Open `http://127.0.0.1:8788/en/weather/week/` in a disposable development browse
 profile. Stop the bridge with Ctrl-C. It listens only on IPv4 loopback, checks
 Host/Origin, has no cross-origin API permission, and uses a restrictive policy
 that blocks external connections, frames and workers. Requests cannot supply
-query parameters or bodies. It admits one forecast request at a time, with a
-180-second retrieval deadline; the client waits up to 185 seconds.
+query parameters or bodies. Both endpoints share one retrieval slot and no queue,
+with a 180-second retrieval deadline per request; each client request waits up
+to 185 seconds. Timeout aborts the backend before returning a failure, preserving
+the slot through cleanup. A following product request does not race that cleanup;
+an unresponsive operation cannot gain an extra slot or extend the socket limit.
 
 Select only the dedicated built-site directory, never the repository or a folder
 containing private configuration. The bridge snapshots owner-controlled regular

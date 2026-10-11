@@ -40,8 +40,9 @@
       </p>
     {/if}
     <p class="mt-4 text-sm" data-testid="unsupported-capabilities">
-      {#if !precipitationSupported}Precipitation, air quality{:else}Air quality{/if}, weather-condition icons, daily summaries, current observations,
-      radar, maps and model comparisons: not available through this connection yet.
+      {precipitationSupported ? '' : 'Precipitation, '}weather-condition icons, daily summaries, current observations,
+      radar, maps and model comparisons: not available through this weather feed yet.
+      Air quality has its own separately configured panel, source and native forecast times.
       Missing does not mean dry, clear or clean air.
     </p>
     <p class="mt-3 text-sm text-muted-foreground">

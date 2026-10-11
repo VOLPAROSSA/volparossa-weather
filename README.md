@@ -31,7 +31,9 @@ no intermediate weather API is required.
 
 This is a **temperature, wind, precipitation and particulate-forecast development
 component**, not yet a complete weather app. The separate NOAA particulate
-adapter and core-cache consumer work locally; app display is still required.
+adapter and core-cache consumer work locally. The actual Drizz.li page displays
+and refreshes precipitation and particulate forecasts in isolated tests with
+synthetic data; their joined live peer-delivery trial remains outstanding.
 Observations, trained corrections, model comparison,
 automatic shared acquisition and native mobile integration remain future work.
 The Drizz.li build and isolated browser interaction pass with synthetic weather.
@@ -251,9 +253,12 @@ when present, precipitation amounts with their source accumulation windows,
 publication expiry, source attribution and missing capabilities. Unsupported
 views, geolocation, geocoding, maps and the original weather-service calls are
 disabled in this mode. The ordinary upstream build remains unchanged.
+An independently configured NOAA panel shows PM2.5/PM10 concentrations on their
+own native time axis, with separate source, expiry and unavailable states. It
+does not derive an air-quality index or current observations.
 
 The [local development server](scripts/serve-provider.mjs) serves that built app
-and one fixed forecast from `127.0.0.1`. Its private configuration selects the
+and fixed weather/optional particulate products from `127.0.0.1`. Its private configuration selects the
 trusted publisher, public community area and model run; browser requests cannot
 choose arbitrary locations, publishers, files or commands. One bounded retrieval
 uses the existing core-cache adapter, cancels on disconnect and never falls back
@@ -261,6 +266,10 @@ to an origin service. No CORS access or automatic location publication is enable
 Initialize the exact agent-owned cache with an explicit successful CLI retrieval
 first, then configure the long-lived bridge with `reuseCache: true`; one-shot
 cache creation is rejected by the bridge so refreshes do not try to recreate it.
+The two products must describe the same public area, but may use different
+publishers, models, runs and lead times. Requests are sequential and share one
+retrieval slot; a timed-out request finishes cancellation before releasing its
+response, so its cleanup does not block the next product with a spurious busy error.
 
 The full Drizz.li production build, Svelte/TypeScript checks and actual forecast
 component rendering pass. Isolated Firefox trials verify the real page and HTTP
@@ -268,6 +277,10 @@ bridge with synthetic [temperature/wind](integrations/drizzli/browser-smoke.json
 and [precipitation](integrations/drizzli/precipitation-browser-smoke.json): initial
 display, refresh, missing and stale values, expiry, route guards and cleanup.
 The precipitation trial also preserves zero, small amounts and native time windows.
+A separate [combined particulate browser trial](integrations/drizzli/air-quality-browser-smoke.json)
+passes on the updated full app build: exact PM2.5/PM10 values, native NOAA times,
+refresh, separate source expiry and independent product failures remain visible.
+It uses synthetic data through the actual bridge, not a new particulate peer transfer.
 Separate functional tests exercise the bridge's core-process boundary using a
 synthetic core executable. These synthetic trials remain separate from the new
 [joined core-delivery proof](integrations/drizzli/core-delivery-smoke.json) and
@@ -283,7 +296,7 @@ precipitation delivery or simultaneous two-subflow bulk throughput.
 The complete topology run still exits unsuccessfully at a later, separate
 15 MiB adaptive-provider fetch (`CONTENT_UNAVAILABLE`). The successful Weather
 phase is not an all-green topology result. Interactive location selection,
-precipitation delivery, air-quality display, Overmorrow and deployment packaging
+precipitation/particulate peer delivery, Overmorrow and deployment packaging
 remain required; this is not yet a complete cross-platform weather app.
 
 ### Overmorrow integration still required
@@ -316,15 +329,17 @@ fallback or location publication.
 - [x] Particulate core-cache consumer and CLI: fixed trusted publication/query,
   hash and expiry checks, cancellation and private-output cleanup tested with a
   synthetic core process. This is not a live particulate overlay trial.
-- [ ] Particulate delivery through the real overlay and application display.
+- [x] Drizz.li particulate display, refresh and independent expiry/failure handling:
+  actual isolated Firefox and HTTP bridge with synthetic PM2.5/PM10 values.
+- [ ] Particulate delivery through the real overlay and application clients.
 - [ ] Additional pollutants and any derived air-quality index, with explicit
   averaging periods, index definition and independently tested transformations.
 
 Air quality and the remaining application work are required, not dropped.
 Continue to use direct authorized sources without an Open-Meteo fallback.
-The existing weather UI still returns `unsupported_variable` for air quality;
-the separate particulate contract below does not silently change its model or
-timeline. Precipitation absent from a selected
+The ECMWF weather provider still returns `unsupported_variable` for air quality;
+the separate `volparossa.air-quality.provider.v1` projection feeds the new panel
+without silently changing the weather model or timeline. Precipitation absent from a selected
 forecast returns `field_not_in_forecast`. Neither means a measured zero.
 
 ### NOAA particulate forecasts

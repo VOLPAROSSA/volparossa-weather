@@ -9,6 +9,8 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { parseForecast, requireThat } from '../../src/forecast.mjs';
 import { toProviderForecast } from '../../src/provider.mjs';
+import { parseAirQualityForecast } from '../../src/air-quality.mjs';
+import { toAirQualityProviderForecast } from '../../src/air-quality-provider.mjs';
 import { providerHttpConfiguration } from '../../src/provider-http.mjs';
 
 const hex = value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
@@ -22,8 +24,15 @@ export function canonical(value) {
 
 export function prepareExpected(bytes, receiptBytes, config, coreSha256, displayValue) {
   requireThat(hex(coreSha256) && typeof displayValue === 'function', 'CORE_BROWSER_INPUT_INVALID');
-  const configuration = providerHttpConfiguration(config), core = configuration.core;
-  const forecast = parseForecast(bytes);
+  const configuration = providerHttpConfiguration(config);
+  requireThat(!configuration.airQuality && !configuration.core.query.includePrecipitation, 'CORE_BROWSER_INPUT_INVALID');
+  return { schema: 1, core_sha256: coreSha256,
+    ...prepareProduct(bytes, receiptBytes, configuration, displayValue) };
+}
+
+function prepareProduct(bytes, receiptBytes, configuration, displayValue, accumulationWindow = null, airQuality = false) {
+  const core = configuration.core;
+  const forecast = airQuality ? parseAirQualityForecast(bytes) : parseForecast(bytes);
   const receipt = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(receiptBytes));
   requireThat(receipt?.operation === 'named_content_download' && receipt.publisher_key === core.publisherKey
     && receipt.name === core.name && Number.isSafeInteger(receipt.revision) && receipt.revision >= core.minRevision
@@ -36,26 +45,52 @@ export function prepareExpected(bytes, receiptBytes, config, coreSha256, display
     && Number.isSafeInteger(receipt.publication_expires_unix_seconds)
     && receipt.publication_expires_unix_seconds > 0, 'COLD_CORE_RECEIPT_INVALID');
   const publicationExpires = new Date(receipt.publication_expires_unix_seconds * 1000).toISOString();
-  const provider = toProviderForecast(forecast, { variables: configuration.variables, publicationExpires });
+  const provider = (airQuality ? toAirQualityProviderForecast : toProviderForecast)(forecast,
+    { variables: configuration.variables, publicationExpires });
   requireThat(forecast.area.sharing === 'public-community' && forecast.area.latitude === core.query.latitude
     && forecast.area.longitude === core.query.longitude && forecast.source.model === core.query.model
     && forecast.source.model_run_at === core.query.run
-    && Object.hasOwn(forecast.units, 'wind_10m') === core.query.includeWind
+    && (airQuality || Object.hasOwn(forecast.units, 'wind_10m') === core.query.includeWind
+      && Object.hasOwn(forecast.units, 'precipitation') === core.query.includePrecipitation)
     && canonical(forecast.samples.map(sample => sample.lead_hours)) === canonical(core.query.steps),
   'CORE_BROWSER_QUERY_MISMATCH');
   const display = {
     coordinates: `${forecast.area.latitude}° latitude, ${forecast.area.longitude}° longitude`,
     native: provider.timeline.valid_at,
-    values: provider.timeline.valid_at.map((_, index) => ['temperature_2m', 'wind_speed_10m', 'wind_direction_10m']
-      .map(variable => displayValue(provider, variable, index))),
+    values: provider.timeline.valid_at.map((_, index) => (airQuality ? ['pm2_5', 'pm10']
+      : ['temperature_2m', 'wind_speed_10m', 'wind_direction_10m', ...(accumulationWindow ? ['precipitation'] : [])])
+      .map(variable => displayValue(provider, variable, index))
+      .concat(accumulationWindow ? [accumulationWindow(provider, index)] : [])),
     model_run: `${forecast.source.model} · ${forecast.source.model_run_at}`,
     expires_at: provider.freshness.expires_at,
+    ...(airQuality ? Object.fromEntries(['attribution', 'license', 'license_url', 'changes']
+      .map(key => [key, forecast.source[key]])) : {}),
   };
-  return { schema: 1, core_sha256: coreSha256, cold_receipt_sha256: sha(receiptBytes),
+  return { cold_receipt_sha256: sha(receiptBytes),
     publication: { publisher_key: receipt.publisher_key, name: receipt.name, revision: receipt.revision,
       manifest_id: receipt.manifest_id, sha256: receipt.sha256, bytes: receipt.bytes,
       expires_unix_seconds: receipt.publication_expires_unix_seconds },
     forecast, display, display_sha256: sha(canonical(display)) };
+}
+
+export function prepareExpectedV2(bytes, receiptBytes, airQualityBytes, airQualityReceiptBytes,
+  config, coreSha256, displayValue, displayAccumulationWindow) {
+  requireThat(hex(coreSha256) && typeof displayValue === 'function'
+    && typeof displayAccumulationWindow === 'function', 'CORE_BROWSER_INPUT_INVALID');
+  const configuration = providerHttpConfiguration(config), aq = configuration.airQuality;
+  requireThat(aq && configuration.core.query.includeWind && configuration.core.query.includePrecipitation
+    && ['temperature_2m', 'wind_speed_10m', 'wind_direction_10m', 'precipitation']
+      .every(value => configuration.variables.includes(value))
+    && canonical(aq.variables) === canonical(['pm2_5', 'pm10'])
+    && configuration.core.name !== aq.core.name && configuration.core.cache !== aq.core.cache
+    && ['executable', 'controlSocket', 'scratchParent'].every(key => configuration.core[key] === aq.core[key]),
+  'CORE_BROWSER_PRODUCTS_INVALID');
+  const products = {
+    weather: prepareProduct(bytes, receiptBytes, configuration, displayValue, displayAccumulationWindow),
+    air_quality: prepareProduct(airQualityBytes, airQualityReceiptBytes, aq, displayValue, null, true),
+  };
+  return { schema: 2, core_sha256: coreSha256, products,
+    display_sha256: sha(canonical(Object.fromEntries(Object.entries(products).map(([key, product]) => [key, product.display])))) };
 }
 
 async function readPrivate(path, maximum, mode) {
@@ -76,17 +111,28 @@ async function readPrivate(path, maximum, mode) {
 
 async function main() {
   const { values } = parseArgs({ options: Object.fromEntries(
-    ['forecast', 'receipt', 'config', 'core-sha256', 'output'].map(name => [name, { type: 'string' }])) });
+    ['forecast', 'receipt', 'air-quality', 'air-quality-receipt', 'config', 'core-sha256', 'output']
+      .map(name => [name, { type: 'string' }])) });
+  const v2 = values['air-quality'] !== undefined;
+  requireThat(v2 === (values['air-quality-receipt'] !== undefined), 'CORE_BROWSER_INPUT_INVALID');
   const bytes = await readPrivate(values.forecast, 131072, 0o600);
   const receiptBytes = await readPrivate(values.receipt, 16384, 0o600);
   const receipt = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(receiptBytes));
   requireThat(receipt.local_output === values.forecast, 'COLD_CORE_OUTPUT_MISMATCH');
   const config = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await readPrivate(values.config, 16384, 0o600)));
   // This exact transferred module and both its imports are bound by the core bundle.
-  const { displayValue } = await import('../../build/drizzli-volparossa/src/lib/services/volparossa/client.mjs');
-  const expected = prepareExpected(bytes, receiptBytes, config, values['core-sha256'], displayValue);
+  const { displayValue, displayAccumulationWindow } = await import('../../build/drizzli-volparossa/src/lib/services/volparossa/client.mjs');
+  let expected;
+  if (v2) {
+    const aqBytes = await readPrivate(values['air-quality'], 131072, 0o600);
+    const aqReceiptBytes = await readPrivate(values['air-quality-receipt'], 16384, 0o600);
+    requireThat(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(aqReceiptBytes)).local_output
+      === values['air-quality'], 'COLD_CORE_OUTPUT_MISMATCH');
+    expected = prepareExpectedV2(bytes, receiptBytes, aqBytes, aqReceiptBytes, config,
+      values['core-sha256'], displayValue, displayAccumulationWindow);
+  } else expected = prepareExpected(bytes, receiptBytes, config, values['core-sha256'], displayValue);
   const raw = Buffer.from(JSON.stringify(expected, null, 2) + '\n');
-  requireThat(raw.length <= 192 * 1024 && typeof values.output === 'string'
+  requireThat(raw.length <= (v2 ? 384 : 192) * 1024 && typeof values.output === 'string'
     && isAbsolute(values.output) && resolve(values.output) === values.output
     && await realpath(dirname(values.output)) === dirname(values.output), 'CORE_BROWSER_OUTPUT_INVALID');
   const output = await open(values.output, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o400);

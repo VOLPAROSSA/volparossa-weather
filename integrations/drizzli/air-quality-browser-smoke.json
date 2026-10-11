@@ -1,0 +1,148 @@
+{
+  "schema": 1,
+  "passed": true,
+  "phase": "complete",
+  "scope": {
+    "actual_drizzli_ui": true,
+    "synthetic_weather": true,
+    "actual_http_bridge": true,
+    "core_executed": false,
+    "overlay_proven": false,
+    "upstream_origin_proven": false,
+    "synthetic_air_quality": true
+  },
+  "isolation": {
+    "host_read_only": true,
+    "separate_user_netns": true,
+    "interfaces": [
+      "lo"
+    ],
+    "fresh_private_profile": true
+  },
+  "runtime": {
+    "version": "140.16.0",
+    "source_stamp": "d864999404b3032f682d74ccc60d1ce38c9ce609",
+    "sha256": {
+      "browser/omni.ja": "757f1f47bfbde5603e08cdb7ddc83bd27e9b26695bf843d640df7984842fffd7",
+      "firefox-esr": "22bb2d84f2289622e65fbcde266a30952e6ac64d27a2a1af75cea7229f2e6b14",
+      "libxul.so": "62cc326204668a2dae453c9e89d9c200e513c9e3ad0772b164091bf1e5333fb4",
+      "omni.ja": "c0d453127f9c1310dad39cc3f6971acfe59cdf561fec6918b129ee0c780c6e70"
+    },
+    "node_sha256": "bc17c508ffeed0ec622934f9b7fa72f8e78da65350e63c3eceb56fa688aa5e12"
+  },
+  "source": {
+    "upstream": "d2a6839e2b3f2e561b849d83014fc5959bed39cc",
+    "tree": "7b36709f84a10e082119d245e3bddfe67b209e9b",
+    "patch_sha256": "44fa73a806b9361b066d8f277a7be8fc8ecc46092e53a720fc26dfb42ebd40db",
+    "overlay_sha256": {
+      "src/lib/services/volparossa/client.d.mts": "f655a6c3721c394fd3e167ad27bd4251a114684973d1f718b4037230cc1d956b",
+      "src/lib/services/volparossa/client.mjs": "21c252e6932f5e548dbf030e5836180c074dd21d3d00505906a8bbd2c66e1fbd",
+      "src/lib/services/volparossa-mode.ts": "17da5a4618ff49d81e1ceab1058a5eafdca285f31febe1cce9d9a454cfc2c40c",
+      "src/routes/weather/week/VolparossaAirQuality.svelte": "c22280f5a0e0611851b6392fc18d9bdbba1c7d5f2dda3fdd08d9f71e8e3f695d",
+      "src/routes/weather/week/VolparossaForecast.svelte": "e1e165841edef9fb6d41d3e635969add013c2f04cd226d4992b6d51b77ab5ed2",
+      "src/routes/weather/week/VolparossaWeek.svelte": "3281b20442ed5f35c83fb2a882f70f988826def39c331a20dd5453599debba35"
+    },
+    "weather_modules": {
+      "src/forecast.mjs": "5a3d71b0c1735e5a7716a1d126fe39c5595232d07ef54f876b8838bc5ccd14e4",
+      "src/provider.mjs": "d2dcf5b3817b148721632c74684ce83770bb670feb18872aec5a71157542b7ee",
+      "src/air-quality.mjs": "c69432ead935a81d3ae28a5259201f98a8845eaef96019121ab9bf3c8f7fced7",
+      "src/air-quality-provider.mjs": "3ef3c7b3a731e2d41d6c60dc240ec1d0bda0f925c8bf9b814d6f9d7bd09f6fb9"
+    },
+    "bridge_modules": {
+      "src/provider-http.mjs": "451f5b830f828feec3d6903300e8da9680ec27dbc4aefe1cbe4c6751f6a165db",
+      "src/provider-core.mjs": "436659c9f0a8dced1c9fd07e23156911e8062631f3134edd96afa6bcd3df2eb2",
+      "src/core-cache.mjs": "ab756962c88641484615c5552eb07592d149c7a9a811821d6022ad2ceaa3793b",
+      "src/air-quality-core.mjs": "1fba6eb570eb186fa3fefd2c06ebad8d426983e442cfea7ceab1fb2a6f048db2"
+    },
+    "fixture_modules": {
+      "tests/fixtures.mjs": "e2c5275a6c3b5bf3181007145722b61263ec3edcb83637caf7615d0fbdb2389a",
+      "src/ecmwf.mjs": "afccdb77c28d070a81d761e07e843c761c0b4d35d32037350ebc2cb2badda35e",
+      "tests/air-quality-fixtures.mjs": "60e5c23e5437dd2e01f7bf784ae98906f3812ae3d3e81c5bc3a6f7ad3f8719ed"
+    },
+    "built_tree_sha256": "1904332337590241d30f276d6619c6ecc0af0a63ff10824fd8ae54fee40520c5",
+    "built_files": 88,
+    "built_bytes": 1199723,
+    "browser_helpers": {
+      "scripts/smoke_compute_model.py": "70b8a944ba6322d46690eafa74247526ac3fc13e92ae9870717e8ed7c63f5c1b",
+      "scripts/smoke_privacy.py": "dd8bdc5b73071eb13d3cd80d305266c654be07ec6bdd74cb4c456b26147f9104",
+      "scripts/stage_firefox.py": "5d54e0e35662fae6b19d5f497d68469b0757fe754601c3e016f6fda773375203"
+    },
+    "browser_revision": "08bac388a0abfd06426bebe8f6fabd0157d2e709",
+    "driver_sha256": "ccbc00f268652f7ceed68198ddbe3a3d43913369f19a8a03ca629f5689047bd0",
+    "fixture_sha256": "96bc35143645c1ed0c879ca30d5eade87e2df78bed6d42306615fd24c2b79202"
+  },
+  "checks": {
+    "fixture_lifecycle": {
+      "stop": {
+        "ready": true,
+        "requested": true,
+        "normal_exit": true,
+        "exit_code": 0,
+        "terminated": true
+      },
+      "eof": {
+        "ready": true,
+        "requested": true,
+        "normal_exit": true,
+        "exit_code": 0,
+        "terminated": true
+      },
+      "signal": {
+        "ready": true,
+        "requested": true,
+        "normal_exit": true,
+        "exit_code": 0,
+        "terminated": true
+      }
+    },
+    "precipitation_initial_dom_sha256": "6071d74760803b6ca45d0d4f447a5cffcf886bc1c1422e3f3cbaff79220f0619",
+    "precipitation_five_cells": true,
+    "precipitation_native_windows": true,
+    "precipitation_missing_zero_small_amount": true,
+    "precipitation_no_hourly_rate": true,
+    "air_quality_is_separate_product": true,
+    "hydration": true,
+    "native_times": true,
+    "temperature_wind": true,
+    "explicit_missing_capabilities": true,
+    "attribution": true,
+    "fixed_location": true,
+    "no_external_resources": true,
+    "air_quality_initial_dom_sha256": "0bf22eb5fd85ff380c73008d3547be880622e1ffd336d3895b9bbfbc6043b78e",
+    "air_quality_native_times": true,
+    "air_quality_missing_zero_concentrations": true,
+    "air_quality_not_aqi_or_observations": true,
+    "precipitation_refresh_dom_sha256": "6071d74760803b6ca45d0d4f447a5cffcf886bc1c1422e3f3cbaff79220f0619",
+    "actual_refresh": true,
+    "air_quality_refresh_dom_sha256": "0bf22eb5fd85ff380c73008d3547be880622e1ffd336d3895b9bbfbc6043b78e",
+    "precipitation_missing_dom_sha256": "6e7092dd62e43a024a6cbf3a52fabee84e4bde9ff95e140de170e00c2491616e",
+    "missing_values_not_zero": true,
+    "unavailable_closed": true,
+    "weather_failure_preserves_air_quality": true,
+    "stale_response_closed": true,
+    "display_removed_at_expiry": true,
+    "weather_expiry_preserves_air_quality": true,
+    "aq_unavailable_weather_preserved": true,
+    "aq_stale_weather_preserved": true,
+    "air_quality_expiry_preserves_weather": true,
+    "located_route_redirects": true,
+    "unsupported_maps_not_mounted": true,
+    "provider_requests": 11,
+    "air_quality_provider_requests": 11
+  },
+  "cleanup": {
+    "browser_exited": true,
+    "fixture_exited": true,
+    "private_profile_removed": true,
+    "normal_browser_stop": true,
+    "normal_fixture_stop": true
+  },
+  "scenario": "precipitation",
+  "air_quality_scenario": true,
+  "outer_cleanup": {
+    "namespace_wrapper_exited": true,
+    "private_profile_removed": true,
+    "host_netns_unchanged": true
+  },
+  "wrapper_outcome": "completed"
+}
