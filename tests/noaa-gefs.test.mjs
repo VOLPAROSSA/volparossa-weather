@@ -2,7 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, chmod, writeFile, readdir, rm, symlink } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { mkdtemp, chmod, mkdir, open, writeFile, readdir, rename, rm, stat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { airQualityRequest } from '../src/air-quality.mjs';
@@ -196,6 +197,76 @@ test('origin/license, stale/future run, pin, private scratch and pre-abort gates
     try { await assert.rejects(fetchAirQualityForecast(QUERY, { ...options, decoder: alias, fetchImpl }), code('DECODER_PATH_INVALID')); }
     finally { await rm(alias); }
     assert.equal(calls, 0);
+  });
+});
+
+test('only the private pinned snapshot executes after source replacement or in-place changes', async () => {
+  for (const replace of [false, true]) await fixture(async (options, parent) => {
+    const fetcher = transport(), backup = join(parent, 'original-decoder'); let calls = 0;
+    options.fetchImpl = async (url, config) => {
+      if (calls++ === 0) {
+        const names = (await readdir(parent)).filter(name => name.startsWith('noaa-gefs-'));
+        assert.equal(names.length, 1);
+        const work = join(parent, names[0]), snapshot = join(work, 'decoder', 'grib_ls');
+        for (const directory of [work, join(work, 'decoder')]) {
+          const info = await stat(directory);
+          assert.equal(info.uid, process.getuid()); assert.equal(info.mode & 0o777, 0o700);
+        }
+        const snapshotFile = await open(snapshot, constants.O_RDONLY | constants.O_NOFOLLOW);
+        try {
+          assert.equal((await snapshotFile.stat()).mode & 0o777, 0o500);
+          assert.equal(hash(await snapshotFile.readFile()), options.decoderSha256);
+        } finally { await snapshotFile.close(); }
+        await assert.rejects(stat(join(work, 'lib')), { code: 'ENOENT' });
+        if (replace) await rename(options.decoder, backup);
+        await writeFile(options.decoder,
+          `#!/bin/sh\nprintf compromised > '${join(parent, 'executed-unpinned')}'\nexit 7\n`, { mode: 0o700 });
+      }
+      return fetcher(url, config);
+    };
+    try {
+      const result = await fetchAirQualityForecast(QUERY, options);
+      assert.equal(calls, 3); assert.equal(result.samples[0].pm2_5, 5.53071);
+      assert.equal(result.samples[0].pm10, 11.5959);
+      assert.equal(result.samples[0].evidence.pm2_5.decoder_sha256, options.decoderSha256);
+      await assert.rejects(stat(join(parent, 'executed-unpinned')), { code: 'ENOENT' });
+    } finally { if (replace) await rename(backup, options.decoder); }
+  });
+});
+
+test('nonregular, empty, nonexecutable and oversized decoder descriptors fail before HTTP', async () => {
+  for (const kind of ['directory', 'empty', 'nonexecutable', 'oversized']) await fixture(async options => {
+    if (kind === 'directory') { await rm(options.decoder); await mkdir(options.decoder, { mode: 0o700 }); }
+    else if (kind === 'nonexecutable') await chmod(options.decoder, 0o600);
+    else {
+      const file = await open(options.decoder, 'w');
+      try { await file.truncate(kind === 'empty' ? 0 : 64 * 1024 * 1024 + 1); }
+      finally { await file.close(); }
+    }
+    let calls = 0;
+    await assert.rejects(fetchAirQualityForecast(QUERY, { ...options,
+      fetchImpl: () => { calls++; throw new Error('must not execute'); } }), code('DECODER_PIN_MISMATCH'));
+    assert.equal(calls, 0);
+  });
+});
+
+test('mutation during the bounded descriptor read rejects the pin and closes the opened decoder', async t => {
+  await fixture(async options => {
+    const probe = await open(options.decoder, 'r'), prototype = Object.getPrototypeOf(probe);
+    await probe.close();
+    const read = prototype.read; let handle, readCapacity, calls = 0;
+    const originalSize = (await stat(options.decoder)).size;
+    t.mock.method(prototype, 'read', async function (...args) {
+      handle = this; readCapacity = args[0].length;
+      await writeFile(options.decoder, '#!/bin/sh\nexit 9\n');
+      return Reflect.apply(read, this, args);
+    });
+    try {
+      await assert.rejects(fetchAirQualityForecast(QUERY, { ...options,
+        fetchImpl: () => { calls++; throw new Error('must not execute'); } }), code('DECODER_PIN_MISMATCH'));
+      assert.equal(calls, 0); assert.equal(readCapacity, originalSize + 1);
+      assert.ok(handle); assert.equal(handle.fd, -1);
+    } finally { t.mock.restoreAll(); }
   });
 });
 

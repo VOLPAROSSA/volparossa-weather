@@ -3,7 +3,8 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, copyFile, writeFile, readFile, stat, rm } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { mkdtemp, mkdir, copyFile, writeFile, open, rm } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -24,6 +25,17 @@ for (const name of ['provider', 'forecast', 'air-quality', 'air-quality-provider
 const { displayValue, displayAccumulationWindow } = await import(pathToFileURL(join(client, 'client.mjs')));
 const sha = value => createHash('sha256').update(value).digest('hex');
 const bytes = value => Buffer.from(JSON.stringify(value));
+
+async function readExpected(path) {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const info = await handle.stat();
+    assert.equal(info.isFile(), true);
+    assert.equal(info.mode & 0o777, 0o400);
+    assert.equal(info.nlink, 1);
+    return await handle.readFile();
+  } finally { await handle.close(); }
+}
 
 function fixture() {
   const now = new Date().toISOString(), run = new Date(); run.setUTCHours(0, 0, 0, 0);
@@ -157,13 +169,12 @@ test('CLI binds local_output, private modes and exclusive destination without ex
   assert.equal(result.stderr, '{"error":"CORE_BROWSER_PREPARATION_FAILED"}\n');
   receipt.local_output = input; await writeFile(receiptPath, bytes(receipt), { mode: 0o600 });
   result = invoke(); assert.equal(result.status, 0, result.stderr);
-  assert.equal((await stat(output)).mode & 0o777, 0o400);
-  const saved = await readFile(output), response = JSON.parse(result.stdout);
+  const saved = await readExpected(output), response = JSON.parse(result.stdout);
   assert.equal(response.expected_sha256, sha(saved));
   assert.equal(response.prepared, true);
   assert.equal(JSON.parse(saved).publication.sha256, sha(raw));
   result = invoke(); assert.equal(result.status, 1); // Never replace an earlier expected publication.
-  assert.deepEqual(await readFile(output), saved);
+  assert.deepEqual(await readExpected(output), saved);
 });
 
 test('v2 CLI requires both AQ inputs, binds both local outputs and keeps products separate', async () => {
@@ -192,8 +203,8 @@ test('v2 CLI requires both AQ inputs, binds both local outputs and keeps product
   await writeFile(aqReceipt, bytes(f.aq.receipt), { mode: 0o600 });
   const result = invoke(['--air-quality', aq, '--air-quality-receipt', aqReceipt]);
   assert.equal(result.status, 0, result.stderr);
-  const saved = JSON.parse(await readFile(output, 'utf8'));
-  assert.equal(saved.schema, 2); assert.equal((await stat(output)).mode & 0o777, 0o400);
+  const saved = JSON.parse((await readExpected(output)).toString('utf8'));
+  assert.equal(saved.schema, 2);
   assert.equal(saved.products.weather.publication.sha256, sha(f.raw));
   assert.equal(saved.products.air_quality.publication.sha256, sha(f.aq.raw));
   assert.equal(invoke(['--air-quality', aq, '--air-quality-receipt', aqReceipt]).status, 1);

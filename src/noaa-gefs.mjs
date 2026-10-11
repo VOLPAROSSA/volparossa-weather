@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // NOAA's public NODD GEFS mirror: whole-grid fields, with location lookup local.
 import { createHash } from 'node:crypto';
-import { lstat, realpath, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, realpath, mkdtemp, mkdir, open, writeFile, rm } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { WeatherError, number, requireThat, utc } from './forecast.mjs';
 import { airQualityRequest, airQualityForecastFromSamples, AQ_MAX_AGE_SECONDS,
@@ -45,6 +46,28 @@ const VARIABLE_KEYS = { parameterNumber: 0, scaleFactorOfFirstSize: 0, scaledVal
   startStep: 0, endStep: 0, bitmapPresent: 0, numberOfMissing: 0 };
 const DECODE_KEYS = Object.entries({ ...COMMON, ...VARIABLE_KEYS })
   .map(([key, value]) => `${key}:${typeof value === 'string' ? 's' : Number.isInteger(value) ? 'i' : 'd'}`).join(',');
+
+async function pinnedDecoderBytes(path, digest) {
+  // Inspect and read the same opened object. O_NONBLOCK also prevents a replaced
+  // FIFO from blocking before fstat can reject it; never follow a leaf symlink.
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const before = await handle.stat();
+    requireThat(before.isFile() && before.size > 0 && before.size <= 64 * 1024 * 1024
+      && (before.mode & 0o111) !== 0, 'DECODER_PIN_MISMATCH');
+    // One extra byte detects growth without an unbounded readFile allocation.
+    const bytes = Buffer.alloc(before.size + 1); let size = 0;
+    while (size < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, size, bytes.length - size, size);
+      if (bytesRead === 0) break;
+      size += bytesRead;
+    }
+    const after = await handle.stat(), captured = bytes.subarray(0, size);
+    requireThat(size === before.size && ['size', 'mtimeMs', 'ctimeMs', 'mode', 'uid', 'gid', 'nlink']
+      .every(key => before[key] === after[key]) && sha256(captured) === digest, 'DECODER_PIN_MISMATCH');
+    return captured;
+  } finally { await handle.close(); }
+}
 
 function stepQuery(input, step) {
   const query = airQualityRequest(input);
@@ -209,9 +232,7 @@ export async function fetchAirQualityForecast(input, { mode, acceptDataLicense =
   requireThat(typeof fetchImpl === 'function', 'FETCH_INVALID');
   requireThat(typeof decoderSha256 === 'string' && /^[a-f0-9]{64}$/.test(decoderSha256), 'DECODER_PIN_REQUIRED');
   requireThat(typeof decoder === 'string' && isAbsolute(decoder) && await realpath(decoder) === decoder, 'DECODER_PATH_INVALID');
-  const program = await lstat(decoder);
-  requireThat(program.isFile() && program.size > 0 && program.size <= 64 * 1024 * 1024
-    && sha256(await readFile(decoder)) === decoderSha256, 'DECODER_PIN_MISMATCH');
+  const program = await pinnedDecoderBytes(decoder, decoderSha256);
   requireThat(typeof workDirectory === 'string' && isAbsolute(workDirectory), 'PRIVATE_PARENT_REQUIRED');
   const parent = await lstat(workDirectory);
   requireThat(parent.isDirectory() && parent.uid === process.getuid() && (parent.mode & 0o777) === 0o700
@@ -220,6 +241,15 @@ export async function fetchAirQualityForecast(input, { mode, acceptDataLicense =
   const work = await mkdtemp(join(workDirectory, 'noaa-gefs-'));
   const samples = [];
   try {
+    // Execute the captured, pinned bytes, not the replaceable source pathname.
+    // The supported ecCodes build embeds definitions/static ecCodes+libaec; its
+    // $ORIGIN/../lib lookup remains inside this new private tree (no lib there),
+    // with only the documented system runtime libraries resolved externally.
+    // Arbitrary decoders needing adjacent files are not relocation-compatible.
+    // This is not isolation from root/same-UID tampering or system-library trust.
+    const executableDirectory = join(work, 'decoder'), executable = join(executableDirectory, 'grib_ls');
+    await mkdir(executableDirectory, { mode: 0o700 });
+    await writeFile(executable, program, { mode: 0o500, flag: 'wx' });
     for (const step of query.steps) {
       checkAge(); aborted(signal);
       const url = gefsFieldUrl(query, step);
@@ -234,7 +264,7 @@ export async function fetchAirQualityForecast(input, { mode, acceptDataLicense =
         await writeFile(path, bytes, { mode: 0o600, flag: 'wx' });
         aborted(signal);
         decoded[field] = await runOwnedJsonProcess('/usr/bin/prlimit', ['--as=536870912', '--cpu=20', '--',
-          decoder, '-j', '-l', `${query.latitude},${query.longitude},1`, '-p', DECODE_KEYS, path], work, signal, 30000);
+          executable, '-j', '-l', `${query.latitude},${query.longitude},1`, '-p', DECODE_KEYS, path], work, signal, 30000);
         evidence[field] = { index_sha256: sha256(index), field_sha256: sha256(bytes), range_start: range.offset,
           range_length: range.length, decoder_sha256: decoderSha256 };
         await rm(path);

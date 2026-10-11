@@ -297,7 +297,7 @@ precipitation delivery or simultaneous two-subflow bulk throughput.
 The complete topology run still exits unsuccessfully at a later, separate
 15 MiB adaptive-provider fetch (`CONTENT_UNAVAILABLE`). The successful Weather
 phase is not an all-green topology result. Interactive location selection,
-precipitation/particulate peer delivery, Overmorrow and deployment packaging
+precipitation/particulate peer delivery, core-to-Overmorrow delivery and native packaging
 remain required; this is not yet a complete cross-platform weather app.
 
 ### Overmorrow client integration
@@ -326,9 +326,9 @@ Packaging, background lifecycle and home-screen widgets remain required.
   with synthetic values and native accumulation windows, including refresh.
 - [ ] Complete precipitation delivery through the overlay and application clients;
   the joined real core-to-browser proof currently covers temperature and wind.
-  Overmorrow integration remains a separate requirement.
+  Core-to-Overmorrow delivery remains a separate requirement.
 - [x] Particulate source and contract: real NOAA PM2.5/PM10 acquisition, native
-  instantaneous concentrations, pinned decoder, two verified forecast steps.
+  instantaneous concentrations, pinned decoder, five verified forecast steps.
 - [x] Particulate core-cache consumer and CLI: fixed trusted publication/query,
   hash and expiry checks, cancellation and private-output cleanup tested with a
   synthetic core process. This is not a live particulate overlay trial.
@@ -374,9 +374,9 @@ node scripts/air-quality.mjs origin --latitude 52.52 --longitude 13.41 \
 
 Dates above are examples, not a maintained latest run. A request selects at most
 16 ordered three-hour lead times, within 120 hours, from an explicit six-hourly
-initialization. Real-source acceptance currently covers steps 3 and 6; step zero
-and every other lead are not collectively certified by that trial. An unsupported
-or changed field identity fails closed. Missing values remain `null`, not zero.
+initialization. Retained real-source trials cover steps 3, 6, 12, 24 and 48;
+step zero and the other supported leads remain unverified. An unsupported or
+changed field identity fails closed. Missing values remain `null`, not zero.
 
 Each lead downloads one index of at most 64 KiB and only the two exact field
 ranges, each capped at 2 MiB. Requests are sequential with 30-second deadlines,
@@ -386,9 +386,19 @@ wall deadline per field. Coordinates remain local; the origin sees the source
 IP and selected model files. The decoder reports about six significant digits;
 its missing-value sentinel is retained as `null`.
 
+The adapter validates and reads the decoder through one opened file descriptor,
+then executes those pinned bytes from a private snapshot. Replacing the original
+pathname cannot substitute another executable after the hash check. This supports
+the pinned ecCodes build with embedded definitions; arbitrary decoders needing
+adjacent files are not relocation-compatible. System libraries and same-user/root
+access remain trust boundaries.
+
 The [real CLI acquisition receipt](third_party/noaa-gefs-smoke.json) binds four
 fields totaling 2,841,174 bytes to two native forecast points and a 4,076-byte
 result. Decoder processes exit and their temporary fields/directories are removed.
+The separate [five-lead acquisition receipt](third_party/noaa-gefs-future-smoke.json)
+adds native steps 12, 24 and 48, including two forecast points still in the future
+at acquisition. It binds 6,357,433 field bytes to an 8,773-byte result.
 This is origin/decoder proof, not forecast accuracy, AQI or app delivery.
 
 Use `scripts/air-quality.mjs core-cache` with the same explicit executable,
