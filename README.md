@@ -183,9 +183,10 @@ The public-area flag records intent; it is not anonymization.
 ## Shared application provider
 
 The opt-in `volparossa.weather.provider.v1` contract provides one common data
-boundary for application adapters. Drizz.li now has a source integration and a
-local HTTP bridge; Overmorrow remains to be connected. Neither introduces a
-second network scheduler or an external weather fallback.
+boundary for application adapters. Drizz.li and the pinned Overmorrow Flutter
+client have source integrations using the same local HTTP bridge. Their runtime
+evidence differs, as described below. Neither introduces a second network
+scheduler or an external weather fallback.
 
 [`toProviderForecast`](src/provider.mjs) is a framework-independent, read-only
 function over an already acquired forecast. It preserves the complete validated
@@ -299,21 +300,21 @@ phase is not an all-green topology result. Interactive location selection,
 precipitation/particulate peer delivery, Overmorrow and deployment packaging
 remain required; this is not yet a complete cross-platform weather app.
 
-### Overmorrow integration still required
+### Overmorrow client integration
 
-Overmorrow's current Flutter provider dispatch defaults unknown providers to
-Open-Meteo, including widget paths, and its full weather structure requires more
-fields than this slice supplies. Add an explicit provider branch and missing-data
-handling before connecting it. The author plans a Kotlin/Compose successor to the
-current Android release; choosing that target versus the existing Flutter app is
-separate from this shared contract.
-[Pinned Overmorrow dispatch](https://github.com/bmaroti9/Overmorrow/blob/97995e2e00e454389e00e35f1e65654afe3e8bed/lib/decoders/weather_data.dart),
-[upstream transition](https://github.com/bmaroti9/Overmorrow/discussions/238).
+The [Overmorrow integration](integrations/overmorrow/README.md) adds an explicit
+VOLPAROSSA provider to the actual pinned Flutter app. Its existing phone/tablet
+layouts, forecast surface and air-quality detail route retain native model times,
+precipitation windows and independent particulate forecasts. Unsupported current
+observations, daily products, AQI and radar remain visibly unavailable. This build
+profile disables upstream weather fallback, geolocation and external imagery/fonts.
 
-Overmorrow needs its own explicit provider adapter and capability-aware UI;
-the Drizz.li build is not evidence of a working mobile integration. Both clients
-must preserve absent data, expiry, units and provenance, without hidden provider
-fallback or location publication.
+The actual release web build and fifteen focused Flutter tests pass, including
+phone/tablet layout, missing versus zero values, independent product failures and
+idle expiry. CanvasKit and licenses fit the existing bounded local static server;
+no renderer CDN is configured. These are build and synthetic component results,
+not a completed browser, peer-delivery or native Android/iOS proof. Packaging,
+background lifecycle and home-screen widgets remain required.
 
 ### Additional weather data
 

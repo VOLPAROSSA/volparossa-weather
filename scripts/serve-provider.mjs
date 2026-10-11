@@ -10,6 +10,7 @@ import { requireThat } from '../src/forecast.mjs';
 
 try {
   const { values } = parseArgs({ options: { config: { type: 'string' }, 'static-root': { type: 'string' },
+    'static-profile': { type: 'string', default: 'default' },
     port: { type: 'string', default: '8788' } } });
   requireThat(typeof values.config === 'string' && isAbsolute(values.config) && resolve(values.config) === values.config
     && await realpath(values.config) === values.config && /^\d{1,5}$/.test(values.port), 'BRIDGE_CONFIG_INVALID');
@@ -23,7 +24,8 @@ try {
     requireThat(bytesRead === stat.size, 'BRIDGE_CONFIG_INVALID');
     config = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, bytesRead)));
   } finally { await file.close(); }
-  const server = await startProviderHttp({ config, staticRoot: values['static-root'], port: Number(values.port) });
+  const server = await startProviderHttp({ config, staticRoot: values['static-root'],
+    staticProfile: values['static-profile'], port: Number(values.port) });
   let stopping = false;
   const stop = async () => {
     if (stopping) return; stopping = true;

@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "upstream_commit": "97995e2e00e454389e00e35f1e65654afe3e8bed",
+  "upstream_patch_sha256": "7f6e0461a8e99a37aaafc3759e98242eb0226358ff631c991c5afbc252df3e93",
+  "pubspec_lock_sha256": "fdfb5275aac49a1a62f7424a665f88b7db6fe1314d1e7c9f037ad6d32d906ce3",
+  "flutter": "3.38.5",
+  "flutter_commit": "f6ff1529fd6d8af5f706051d9251ac9231c83407",
+  "dart": "3.10.4",
+  "profile": "VOLPAROSSA_WEATHER=true",
+  "actual_release_web_build": true,
+  "flutter_tests_passed": 15,
+  "synthetic_products": true,
+  "http_tests_passed": 31,
+  "build_driver_tests_passed": 13,
+  "deployment_tests_passed": 12,
+  "deployment": {
+    "static_profile": "flutter-canvaskit",
+    "files": 61,
+    "bytes": 22953717,
+    "tree_sha256": "b70b7736387a8bb691f330b86a6bdb83e2b18ed299841b9b79b7f27084c4d790",
+    "main_js_sha256": "6b3bc0234a39b64914695bab105292dae2df09d912b87f220cb6160d62de7134",
+    "bootstrap_sha256": "9a95291c7a72b1fe9e225ed675cc293826fce09a9cd5f4dce3f5fbc9cd93cab5",
+    "notices_sha256": "56b18ec837108e97a94ff8a1759174226e4316cc00dbd9af8215ecb1f3b2c7a8"
+  },
+  "browser_interaction_verified": false,
+  "core_delivery_verified": false,
+  "native_android_ios_verified": false,
+  "forecast_accuracy_verified": false,
+  "scope": "Actual pinned application build and synthetic component checks; not distributed forecast delivery or native mobile execution."
+}

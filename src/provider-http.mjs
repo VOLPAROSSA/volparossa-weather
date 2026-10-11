@@ -23,6 +23,20 @@ const HEADERS = Object.freeze({ 'Cache-Control': 'no-store', 'X-Content-Type-Opt
   'Referrer-Policy': 'no-referrer', 'Cross-Origin-Resource-Policy': 'same-origin',
   'Permissions-Policy': 'geolocation=(), camera=(), microphone=()', 'Connection': 'close',
   'Content-Security-Policy': "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" });
+// Opt in only for an owner-selected Flutter CanvasKit deployment. This does not
+// permit JavaScript eval, workers, remote engines/fonts or additional API origins.
+const FLUTTER_HEADERS = Object.freeze({ ...HEADERS,
+  'Content-Security-Policy': HEADERS['Content-Security-Policy']
+    .replace("script-src 'self' 'unsafe-inline'", "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'")
+    .replace("base-uri 'none'", "base-uri 'self'") });
+const STATIC_PROFILES = Object.freeze({
+  default: Object.freeze({ mime: MIME, headers: HEADERS, exactMime: Object.freeze({}) }),
+  'flutter-canvaskit': Object.freeze({ mime: Object.freeze({ ...MIME,
+    '.wasm': 'application/wasm', '.bin': 'application/octet-stream', '.otf': 'font/otf',
+    '.frag': 'application/octet-stream' }), headers: FLUTTER_HEADERS,
+  exactMime: Object.freeze({ '/assets/NOTICES': 'text/plain; charset=utf-8',
+    '/LICENSE.txt': 'text/plain; charset=utf-8', '/LICENSE.VOLPAROSSA.txt': 'text/plain; charset=utf-8' }) }),
+});
 
 function exact(value, keys, code) {
   requireThat(value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -73,7 +87,7 @@ export function providerHttpConfiguration(config) {
 // Snapshot an explicit, owner-controlled dedicated build directory. Its eligible
 // assets are public to this local UI: do not select a repository/config directory.
 // No request-time filesystem paths, symlink traversal or directory listings.
-async function staticAssets(directory) {
+async function staticAssets(directory, profile) {
   absolute(directory);
   requireThat(typeof process.getuid === 'function' && await realpath(directory) === directory, 'STATIC_ROOT_INVALID');
   const files = new Map(); let entries = 0, bytes = 0;
@@ -96,7 +110,7 @@ async function staticAssets(directory) {
         const before = await file.stat();
         requireThat(before.isFile() && before.uid === process.getuid() && !(before.mode & 0o022)
           && before.nlink === 1, 'STATIC_ROOT_INVALID');
-        const type = MIME[extname(name)];
+        const type = profile.exactMime[relative] ?? profile.mime[extname(name)];
         if (!type || name.startsWith('.')) continue;
         requireThat(before.size <= MAX_ASSET && (bytes += before.size) <= MAX_STATIC, 'STATIC_BUDGET_EXCEEDED');
         const data = Buffer.alloc(before.size + 1);
@@ -153,18 +167,19 @@ function resultBytes(result, configuration, airQuality = false) {
   return bytes;
 }
 
-export async function startProviderHttp({ config, staticRoot, port = 0, requestDeadlineMs = 180000 },
+export async function startProviderHttp({ config, staticRoot, staticProfile = 'default', port = 0, requestDeadlineMs = 180000 },
   { fetchProvider = fetchCachedProvider, fetchAirQualityProvider = fetchCachedAirQualityProvider } = {}) {
   const configuration = providerHttpConfiguration(config);
   requireThat(Number.isInteger(port) && port >= 0 && port <= 65535
-    && Number.isInteger(requestDeadlineMs) && requestDeadlineMs >= 1 && requestDeadlineMs <= 180000,
+    && Number.isInteger(requestDeadlineMs) && requestDeadlineMs >= 1 && requestDeadlineMs <= 180000
+    && typeof staticProfile === 'string' && Object.hasOwn(STATIC_PROFILES, staticProfile),
   'BRIDGE_CONFIG_INVALID');
-  const assets = await staticAssets(staticRoot);
+  const profile = STATIC_PROFILES[staticProfile], assets = await staticAssets(staticRoot, profile);
   let origin, active = null, closing = false;
   const controllers = new Set();
   function send(response, status, body, type = 'application/json') {
     if (response.destroyed || response.writableEnded) return;
-    response.writeHead(status, { ...HEADERS, 'Content-Type': type, 'Content-Length': body.length });
+    response.writeHead(status, { ...profile.headers, 'Content-Type': type, 'Content-Length': body.length });
     response.end(body);
   }
   const error = (response, status, code) => send(response, status, Buffer.from(JSON.stringify({ error: code })));

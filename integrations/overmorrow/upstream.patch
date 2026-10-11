@@ -1,0 +1,969 @@
+diff --git a/lib/daily.dart b/lib/daily.dart
+index 4322b5e..d942404 100644
+--- a/lib/daily.dart
++++ b/lib/daily.dart
+@@ -19,6 +19,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ import 'dart:math';
+ 
+ import 'package:flutter/material.dart';
++import 'volparossa/views.dart';
+ import 'package:flutter/services.dart';
+ import 'package:flutter_svg/svg.dart';
+ import 'package:overmorrow/decoders/weather_data.dart';
+@@ -99,6 +100,7 @@ class _BuildDaysState extends State<BuildDays> with AutomaticKeepAliveClientMixi
+   @override
+   Widget build(BuildContext context) {
+     super.build(context);
++    if (widget.data.nativeProducts != null) return const MissingCapability('Daily totals and temperature extrema');
+ 
+     int daysToShow = min(dayCap, widget.data.days.length);
+     bool showButton = maxToShow < widget.data.days.length;
+@@ -443,4 +445,4 @@ class DailyExpanded extends StatelessWidget {
+       ),
+     );
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/lib/decoders/weather_data.dart b/lib/decoders/weather_data.dart
+index 7ef569c..194d8da 100644
+--- a/lib/decoders/weather_data.dart
++++ b/lib/decoders/weather_data.dart
+@@ -17,6 +17,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+ 
+ import 'dart:async';
++import '../volparossa/products.dart';
++import '../volparossa/provider.dart';
++import '../volparossa/profile.dart';
+ import 'package:overmorrow/decoders/decode_OM.dart';
+ import 'package:overmorrow/decoders/decode_RV.dart';
+ import 'package:overmorrow/decoders/decode_mn.dart';
+@@ -183,17 +186,19 @@ class WeatherData {
+ 
+   final List<WeatherDay> days;
+   final List<WeatherHour> hourly72;
+-  final WeatherCurrent current;
+-  final WeatherAqi aqi;
+-  final WeatherSunStatus sunStatus;
+-  final WeatherRain15Minutes minutely15Precip;
++  final WeatherCurrent? current;
++  final WeatherAqi? aqi;
++  final WeatherSunStatus? sunStatus;
++  final WeatherRain15Minutes? minutely15Precip;
+   final List<WeatherAlert> alerts;
+ 
+-  final RainviewerRadar radar;
++  final RainviewerRadar? radar;
++  final NativeProducts? nativeProducts;
+ 
+   final List<double> dailyMinMaxTemp;
+ 
+   WeatherData({
++    this.nativeProducts,
+     required this.place,
+     required this.lat,
+     required this.lng,
+@@ -218,6 +223,7 @@ class WeatherData {
+   });
+ 
+   static Future<WeatherData> getFullData(String placeName, latLon, String provider) async {
++    if (volparossaProfile || provider == 'volparossa') return volparossaWeatherData();
+ 
+     List<String> split = latLon.split(",");
+     double lat = double.parse(split[0]);
+@@ -273,6 +279,7 @@ class LightCurrentWeatherData {
+   });
+ 
+   static Future<LightCurrentWeatherData> getLightCurrentWeatherData(placeName, latlong, provider, SharedPreferences prefs) async {
++    if (volparossaProfile || provider == 'volparossa') throw UnsupportedError('Native current observations unavailable');
+ 
+     List<String> split = latlong.split(",");
+     double lat = double.parse(split[0]);
+@@ -301,6 +308,7 @@ class LightWindData {
+   });
+ 
+   static Future<LightWindData> getLightWindData(placeName, latlong, provider, SharedPreferences prefs) async {
++    if (volparossaProfile || provider == 'volparossa') throw UnsupportedError('Native current wind observations unavailable');
+ 
+     List<String> split = latlong.split(",");
+     double lat = double.parse(split[0]);
+@@ -325,6 +333,7 @@ class LightUvData {
+   });
+ 
+   static Future<LightUvData> getLightUvData(placeName, latlong, provider, SharedPreferences prefs) async {
++    if (volparossaProfile || provider == 'volparossa') throw UnsupportedError('Native UV observations unavailable');
+ 
+     List<String> split = latlong.split(",");
+     double lat = double.parse(split[0]);
+@@ -371,6 +380,7 @@ class LightHourlyForecastData {
+   });
+ 
+   static Future<LightHourlyForecastData> getLightForecastData(placeName, latLon, provider, SharedPreferences prefs) async {
++    if (volparossaProfile || provider == 'volparossa') throw UnsupportedError('Native widget forecast mapping not connected');
+ 
+     List<String> split = latLon.split(",");
+     double lat = double.parse(split[0]);
+@@ -385,4 +395,4 @@ class LightHourlyForecastData {
+         return omGetHourlyForecast(placeName, lat, lon, prefs);
+     }
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/lib/hourly.dart b/lib/hourly.dart
+index 7091e80..fc7f0e0 100644
+--- a/lib/hourly.dart
++++ b/lib/hourly.dart
+@@ -17,6 +17,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+ 
+ import 'dart:math';
++import 'volparossa/products.dart';
++import 'volparossa/views.dart';
+ 
+ import 'package:flutter/material.dart';
+ import 'package:flutter/services.dart';
+@@ -31,10 +33,11 @@ import 'l10n/app_localizations.dart';
+ import 'package:provider/provider.dart';
+ 
+ class NewHourly extends StatefulWidget {
++  final NativeProducts? nativeProducts;
+   final hours;
+   final elevated;
+ 
+-  NewHourly({Key? key, required this.hours, required this.elevated}) : super(key: key);
++  NewHourly({Key? key, required this.hours, required this.elevated, this.nativeProducts}) : super(key: key);
+ 
+   @override
+   _NewHourlyState createState() => _NewHourlyState();
+@@ -50,6 +53,8 @@ class _NewHourlyState extends State<NewHourly> with AutomaticKeepAliveClientMixi
+   @override
+   Widget build(BuildContext context) {
+     super.build(context);
++    if (widget.nativeProducts != null) return NativeProductView(
++        product: widget.nativeProducts!.weather, error: widget.nativeProducts!.weatherError);
+ 
+     String dateFormat = context.select((SettingsProvider p) => p.getDateFormat);
+ 
+diff --git a/lib/main.dart b/lib/main.dart
+index 7ea9fe1..8d688ea 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -38,18 +38,20 @@ import 'decoders/weather_data.dart';
+ import 'package:flutter/services.dart';
+ import '../l10n/app_localizations.dart';
+ import 'main_ui.dart';
++import 'volparossa/profile.dart';
+ 
+ Future<void> main() async {
+   WidgetsFlutterBinding.ensureInitialized();
++  if (volparossaProfile) GoogleFonts.config.allowRuntimeFetching = false;
+ 
+   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+ 
+-  if (!kIsWeb) {
++  if (!kIsWeb && !volparossaProfile) {
+     initializeWidgetServices();
+   }
+ 
+   await PreferenceUtils.init();
+-  await NotificationService().init();
++  if (!volparossaProfile) await NotificationService().init();
+ 
+   final display = PlatformDispatcher.instance.views.first.display;
+ 
+@@ -156,7 +158,7 @@ class BuildMaterialApp extends StatelessWidget {
+         theme: ThemeData(
+             colorScheme: lightColorScheme ?? dynamicLightColorScheme,
+             useMaterial3: true,
+-            fontFamily: GoogleFonts.outfit().fontFamily,
++            fontFamily: volparossaProfile ? 'NotoSans' : GoogleFonts.outfit().fontFamily,
+             fontFamilyFallback: const ['NotoSans',],
+             pageTransitionsTheme: const PageTransitionsTheme(
+                 builders: {
+@@ -167,7 +169,7 @@ class BuildMaterialApp extends StatelessWidget {
+         darkTheme: ThemeData(
+             colorScheme: darkColorScheme ?? dynamicDarkColorScheme,
+             useMaterial3: true,
+-            fontFamily: GoogleFonts.outfit().fontFamily,
++            fontFamily: volparossaProfile ? 'NotoSans' : GoogleFonts.outfit().fontFamily,
+             fontFamilyFallback: const ['NotoSans',],
+             pageTransitionsTheme: const PageTransitionsTheme(
+                 builders: {
+@@ -242,7 +244,7 @@ class MyHomePageState extends State<MyHomePage> {
+     String latLon = context.read<SettingsProvider>().getLatLon;
+     String location = context.read<SettingsProvider>().getLocation;
+ 
+-    if (!kIsWeb && Platform.isAndroid) {
++    if (!volparossaProfile && !kIsWeb && Platform.isAndroid) {
+       Uri? appLaunchUri = await HomeWidget.initiallyLaunchedFromHomeWidget();
+ 
+       if (appLaunchUri != null && appLaunchUri.host == "opened" && appLaunchUri.queryParameters.containsKey("location")
+@@ -283,9 +285,10 @@ class MyHomePageState extends State<MyHomePage> {
+   }
+ 
+   Future<void> updateLocation(String latLon, String location) async {
++    if (isLoading) return;
+     try {
+       await fetchData(location, latLon);
+-      if (mounted) {
++      if (mounted && !volparossaProfile) {
+         context.read<SettingsProvider>().setLocationAndLatLon(location, latLon);
+       }
+       weatherError = null;
+@@ -380,6 +383,7 @@ class MyHomePageState extends State<MyHomePage> {
+   }
+ 
+   Future<void> loadOldImageServiceFromCache() async {
++    if (volparossaProfile) return;
+     String imageSource = context.read<SettingsProvider>().getImageSource;
+     ImageService? _imageService = await ImageService.getOldImageServiceFromCache(imageSource);
+     if (_imageService != null) {
+@@ -396,11 +400,12 @@ class MyHomePageState extends State<MyHomePage> {
+   }
+ 
+   Future<void> updateImage(WeatherData data) async {
++    if (data.nativeProducts != null) return;
+     final settingsProvider = context.read<SettingsProvider>();
+     final themeProvider = context.read<ThemeProvider>();
+ 
+     ImageService _imageService = await ImageService.getImageService(
+-        data.current.condition, data.place, settingsProvider.getImageSource);
++        data.current!.condition, data.place, settingsProvider.getImageSource);
+ 
+     ImageProvider imageProvider = _imageService.image.image;
+ 
+@@ -445,4 +450,4 @@ class MyHomePageState extends State<MyHomePage> {
+     );
+ 
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/lib/main_screens.dart b/lib/main_screens.dart
+index 9f03bf5..347845d 100644
+--- a/lib/main_screens.dart
++++ b/lib/main_screens.dart
+@@ -17,6 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+ 
+ import 'dart:math';
++import 'volparossa/views.dart';
+ import 'dart:ui';
+ 
+ import 'package:flutter/material.dart';
+@@ -146,7 +147,7 @@ class PhoneLayout extends StatelessWidget {
+     final Map<String, Widget> widgetsMap = {
+       'sunstatus': NewSunriseSunset(data: data, width: size.width,),
+       'rain indicator': Rain15MinuteChart(data: data),
+-      'hourly': NewHourly(hours: data.hourly72, elevated: false,),
++      'hourly': NewHourly(hours: data.hourly72, elevated: false, nativeProducts: data.nativeProducts,),
+       'alerts' : AlertWidget(data: data),
+       'radar': RadarSmall(data: data, radarHapticsOn: context.select((SettingsProvider p) => p.getRadarHapticsOn),),
+       'daily': BuildDays(data: data),
+@@ -292,17 +293,17 @@ class TabletLayout extends StatelessWidget {
+                               child: Row(
+                                 crossAxisAlignment: CrossAxisAlignment.start,
+                                 children: [
+-                                  Padding(
++                                  Expanded(child: Padding(
+                                     padding: const EdgeInsets.only(
+                                         bottom: 7, left: 30),
+-                                    child: Column(
++                                    child: data.current == null ? const NativeCurrentHeader() : Column(
+                                       crossAxisAlignment: CrossAxisAlignment.start,
+                                       children: [
+-                                        SmoothTempTransition(target: unitConversion(data.current.tempC,
++                                        SmoothTempTransition(target: unitConversion(data.current!.tempC,
+                                             context.select((SettingsProvider p) => p.getTempUnit), decimals: 1) * 1.0,
+                                           color: Theme.of(context).colorScheme.tertiary, fontSize: 68,),
+                                         Text(
+-                                          translateCondition(data.current.condition, AppLocalizations.of(context)!),
++                                          translateCondition(data.current!.condition, AppLocalizations.of(context)!),
+                                           style: TextStyle(
+                                               color: Theme.of(context).colorScheme.onSurface,
+                                               fontSize: 30, height: 1.05
+@@ -310,8 +311,7 @@ class TabletLayout extends StatelessWidget {
+                                         )
+                                       ],
+                                     ),
+-                                  ),
+-                                  const Spacer(),
++                                  )),
+                                   SizedBox(
+                                       width: 397,
+                                       child: Circles(data : data)
+@@ -321,7 +321,7 @@ class TabletLayout extends StatelessWidget {
+                             ),
+ 
+                             NewSunriseSunset(data: data, width: constraints.maxWidth,),
+-                            NewHourly(hours: data.hourly72, elevated: false,),
++                            NewHourly(hours: data.hourly72, elevated: false, nativeProducts: data.nativeProducts,),
+                             Row(
+                               crossAxisAlignment: CrossAxisAlignment.start,
+                               children: [
+diff --git a/lib/main_ui.dart b/lib/main_ui.dart
+index e3ceaf3..e37263c 100644
+--- a/lib/main_ui.dart
++++ b/lib/main_ui.dart
+@@ -17,6 +17,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+ 
+ import 'dart:async';
++import 'volparossa/profile.dart';
++import 'volparossa/views.dart';
+ import 'dart:ui';
+ 
+ import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
+@@ -129,19 +131,20 @@ class _TempAndConditionTextState extends State<TempAndConditionText> {
+ 
+   @override
+   Widget build(BuildContext context) {
++    if (widget.data.current == null) return NativeCurrentHeader(color: Theme.of(context).colorScheme.onInverseSurface);
+     return Column(
+       crossAxisAlignment: CrossAxisAlignment.start,
+       mainAxisAlignment: MainAxisAlignment.end,
+       children: [
+         //Container(width: 100, height: 100, color: colorsOnImage.regionColor,),
+         SmoothTempTransition(
+-          target: unitConversion(widget.data.current.tempC,
++          target: unitConversion(widget.data.current!.tempC,
+           context.select((SettingsProvider p) => p.getTempUnit), decimals: 1) * 1.0,
+           color: colorsOnImage?.colorPop ?? Theme.of(context).colorScheme.tertiaryFixedDim,
+           fontSize: 80,
+         ),
+         Text(
+-          translateCondition(widget.data.current.condition,
++          translateCondition(widget.data.current!.condition,
+               AppLocalizations.of(context)!),
+           style: GoogleFonts.outfit(
+             color: colorsOnImage?.descColor ?? Theme.of(context).colorScheme.surface,
+@@ -207,36 +210,37 @@ class Circles extends StatelessWidget {
+ 
+   @override
+   Widget build(BuildContext context) {
++    if (data.current == null) return const MissingCapability('Current feels-like, humidity, precipitation and wind');
+     return Padding(
+         padding: const EdgeInsets.only(left: 19, right: 19, bottom: 21, top: 1),
+         child: Row(
+             crossAxisAlignment: CrossAxisAlignment.start,
+             children: [
+               DescriptionCircle(
+-                text: '${unitConversion(data.current.feelsLikeC,
++                text: '${unitConversion(data.current!.feelsLikeC,
+                     context.select((SettingsProvider p) => p.getTempUnit), decimals: 0)}°',
+                 undercaption: AppLocalizations.of(context)!.feelsLike,
+                 extra: '',
+                 dir: -1,
+               ),
+               DescriptionCircle(
+-                text: '${data.current.humidity}',
++                text: '${data.current!.humidity}',
+                 undercaption: AppLocalizations.of(context)!.humidity,
+                 extra: '%',
+                 dir: -1,
+               ),
+               DescriptionCircle(
+-                text: '${unitConversion(data.current.precipMm ,context.select((SettingsProvider p) => p.getPrecipUnit))}',
++                text: '${unitConversion(data.current!.precipMm ,context.select((SettingsProvider p) => p.getPrecipUnit))}',
+                 undercaption: AppLocalizations.of(context)!.precipCapital,
+                 extra: context.select((SettingsProvider p) => p.getPrecipUnit),
+                 dir: -1,
+               ),
+               DescriptionCircle(
+-                text: '${unitConversion(data.current.windKmh,
++                text: '${unitConversion(data.current!.windKmh,
+                     context.select((SettingsProvider p) => p.getWindUnit), decimals: 0)}',
+                 undercaption: AppLocalizations.of(context)!.windCapital,
+                 extra: context.select((SettingsProvider p) => p.getWindUnit),
+-                dir: data.current.windDirA + 180,
++                dir: data.current!.windDirA + 180,
+               ),
+             ]
+         )
+@@ -558,6 +562,12 @@ class ProviderSelector extends StatelessWidget {
+ 
+   @override
+   Widget build(BuildContext context) {
++    if (volparossaProfile) return Padding(padding: const EdgeInsets.all(24),
++      child: Column(children: [
++        const Text('Provider: VOLPAROSSA shared core. No upstream fallback.'),
++        const Text('Mobile background updates and home-screen widgets: not yet connected.'),
++        FilledButton(onPressed: () => updateLocation(latLon, loc), child: const Text('Refresh forecasts')),
++      ]));
+     return Padding(
+       padding: const EdgeInsets.only(left: 24, right: 24, bottom: 110, top: 35),
+       child: Column(
+diff --git a/lib/new_displays.dart b/lib/new_displays.dart
+index 2478929..c8d691e 100644
+--- a/lib/new_displays.dart
++++ b/lib/new_displays.dart
+@@ -20,6 +20,7 @@ import 'dart:async';
+ import 'dart:math';
+ 
+ import 'package:flutter/material.dart';
++import 'volparossa/views.dart';
+ import 'package:flutter/services.dart';
+ import 'package:flutter_svg/svg.dart';
+ import 'package:overmorrow/services/preferences_service.dart';
+@@ -203,6 +204,7 @@ class _NewSunriseSunsetState extends State<NewSunriseSunset> with AutomaticKeepA
+   @override
+   Widget build(BuildContext context) {
+     super.build(context);
++    if (widget.data.sunStatus == null) return const MissingCapability('Sunrise and sunset');
+ 
+     final currentTime = DateTime.now();
+ 
+@@ -210,7 +212,7 @@ class _NewSunriseSunsetState extends State<NewSunriseSunset> with AutomaticKeepA
+ 
+     int hourDiff = localtimeOld.hour - currentTime.hour;
+ 
+-    final double targetProgress = widget.data.sunStatus.sunstatus;
++    final double targetProgress = widget.data.sunStatus!.sunstatus;
+ 
+     return TweenAnimationBuilder<double>(
+       tween: Tween<double>(begin: 0.0, end: targetProgress),
+@@ -250,10 +252,10 @@ class _NewSunriseSunsetState extends State<NewSunriseSunset> with AutomaticKeepA
+                         size: 14,
+                       ),
+                     ),
+-                    Text(convertTime(widget.data.sunStatus.sunrise, context),
++                    Text(convertTime(widget.data.sunStatus!.sunrise, context),
+                       style: TextStyle(fontSize: 15, color: Theme.of(context).colorScheme.tertiary),),
+                     const Spacer(),
+-                    Text(convertTime(widget.data.sunStatus.sunset, context),
++                    Text(convertTime(widget.data.sunStatus!.sunset, context),
+                       style: TextStyle(fontSize: 15, color: Theme.of(context).colorScheme.secondary),),
+                     Padding(
+                       padding: const EdgeInsets.only(left: 4, top: 1),
+@@ -330,6 +332,14 @@ class AqiWidget extends StatelessWidget {
+ 
+   @override
+   Widget build(BuildContext context) {
++    if (data.nativeProducts != null) return Column(children: [
++      NativeProductView(product: data.nativeProducts!.airQuality,
++          error: data.nativeProducts!.airQualityError, airQuality: true),
++      TextButton(onPressed: () => Navigator.push(context,
++          MaterialPageRoute(builder: (context) => AllergensPage(data: data))),
++          child: const Text('Air quality details')),
++    ]);
++    if (data.aqi == null) return const MissingCapability('Air quality');
+     return Column(
+       children: [
+         Padding(
+@@ -369,7 +379,7 @@ class AqiWidget extends StatelessWidget {
+                       height: 88,
+                     ),
+                     Text(
+-                      data.aqi.aqiIndex.toString(),
++                      data.aqi!.aqiIndex.toString(),
+                       style: TextStyle(
+                         color: Theme.of(context).colorScheme.primary,
+                         fontSize: 24,
+@@ -383,11 +393,11 @@ class AqiWidget extends StatelessWidget {
+                   child: Column(
+                     crossAxisAlignment: CrossAxisAlignment.start,
+                     children: [
+-                      Text(aqiTitleLocalization(data.aqi.aqiIndex, AppLocalizations.of(context)!),
++                      Text(aqiTitleLocalization(data.aqi!.aqiIndex, AppLocalizations.of(context)!),
+                         style: TextStyle( color: Theme.of(context).colorScheme.secondary, fontSize: 18,
+                         fontWeight: FontWeight.w600, height: 1.1),),
+                       const SizedBox(height: 7,),
+-                      Text(aqiDescLocalization(data.aqi.aqiIndex, AppLocalizations.of(context)!),
++                      Text(aqiDescLocalization(data.aqi!.aqiIndex, AppLocalizations.of(context)!),
+                         style: TextStyle( color: Theme.of(context).colorScheme.outline, fontSize: 14, height: 1.1),)
+                     ],
+                   ),
+@@ -419,6 +429,7 @@ class AlertWidget extends StatelessWidget {
+ 
+   @override
+   Widget build(BuildContext context) {
++    if (data.nativeProducts != null) return const MissingCapability('Weather alerts');
+     if (data.alerts.isNotEmpty) {
+       return Padding(
+           padding: const EdgeInsets.only(
+@@ -501,11 +512,12 @@ class Rain15MinuteChart extends StatelessWidget {
+ 
+   @override
+   Widget build(BuildContext context) {
++    if (data.minutely15Precip == null) return const MissingCapability('15-minute rain nowcast');
+ 
+-    String text = getRain15MinuteLocalization(data.minutely15Precip.text,
+-        data.minutely15Precip.timeTo, AppLocalizations.of(context)!);
++    String text = getRain15MinuteLocalization(data.minutely15Precip!.text,
++        data.minutely15Precip!.timeTo, AppLocalizations.of(context)!);
+ 
+-    if (data.minutely15Precip.text != "") {
++    if (data.minutely15Precip!.text != "") {
+       return Container(
+         margin: const EdgeInsets.only(left: 24, right: 24, bottom: 30, top: 10),
+         padding: const EdgeInsets.all(22),
+@@ -533,7 +545,7 @@ class Rain15MinuteChart extends StatelessWidget {
+                     crossAxisAlignment: CrossAxisAlignment.end,
+                     children: [
+                       Text(
+-                        unitConversion(data.minutely15Precip.precipSumMm,
++                        unitConversion(data.minutely15Precip!.precipSumMm,
+                             context.select((SettingsProvider p) => p.getPrecipUnit)).toString(),
+                         style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 24, height: 1.2),
+                       ),
+@@ -563,18 +575,18 @@ class Rain15MinuteChart extends StatelessWidget {
+                 child: Row(
+                     crossAxisAlignment: CrossAxisAlignment.end,
+                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+-                    children: List<Widget>.generate(data.minutely15Precip.precipListMm.length, (int index)  {
++                    children: List<Widget>.generate(data.minutely15Precip!.precipListMm.length, (int index)  {
+                       return Expanded(
+                         child: Padding(
+                           padding: const EdgeInsets.only(left: 1, right: 1),
+                           child: Container(
+                             //i'm doing this because otherwise you wouldn't be
+                             // able to tell the 0mm rain apart from the 0.1mm, or just low values in general
+-                            height: data.minutely15Precip.precipListMm[index] == 0 ?
+-                            5 : 6.0 + data.minutely15Precip.precipListMm[index] * 30,
++                            height: data.minutely15Precip!.precipListMm[index] == 0 ?
++                            5 : 6.0 + data.minutely15Precip!.precipListMm[index] * 30,
+                             decoration: BoxDecoration(
+                               borderRadius: BorderRadius.circular(10),
+-                              color: data.minutely15Precip.precipListMm[index] == 0 ?
++                              color: data.minutely15Precip!.precipListMm[index] == 0 ?
+                               Theme.of(context).colorScheme.outlineVariant : Theme.of(context).colorScheme.primary,
+                             ),
+                           ),
+@@ -606,4 +618,4 @@ class Rain15MinuteChart extends StatelessWidget {
+     return Container();
+   }
+ 
+-}
+\ No newline at end of file
++}
+diff --git a/lib/pages/aqi_page.dart b/lib/pages/aqi_page.dart
+index 3409fa0..b1cb358 100644
+--- a/lib/pages/aqi_page.dart
++++ b/lib/pages/aqi_page.dart
+@@ -17,6 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+ 
+ import 'dart:math';
++import '../volparossa/views.dart';
+ 
+ import 'package:expressive_loading_indicator/expressive_loading_indicator.dart';
+ import 'package:flutter/foundation.dart';
+@@ -206,6 +207,11 @@ class _AllergensPageState extends State<AllergensPage> {
+ 
+   @override
+   Widget build(BuildContext context) {
++    if (widget.data.nativeProducts != null) return Scaffold(
++      appBar: AppBar(title: const Text('Air quality')),
++      body: SingleChildScrollView(child: NativeProductView(
++        product: widget.data.nativeProducts!.airQuality,
++        error: widget.data.nativeProducts!.airQualityError, airQuality: true)));
+     return Material(
+       color: Theme.of(context).colorScheme.surface,
+       child: CustomScrollView(
+@@ -468,6 +474,7 @@ class ThreeRowLayout extends StatelessWidget {
+ }
+ 
+ Widget aqiCircleAndDesc(WeatherData data, context) {
++  if (data.aqi == null) return const MissingCapability('AQI');
+   return Column(
+     children: [
+       Padding(
+@@ -485,7 +492,7 @@ Widget aqiCircleAndDesc(WeatherData data, context) {
+                   mainAxisAlignment: MainAxisAlignment.center,
+                   children: [
+                     Text(
+-                      data.aqi.aqiIndex.toString(),
++                      data.aqi!.aqiIndex.toString(),
+                       style: GoogleFonts.outfit(
+                         color: Theme.of(context).colorScheme.secondary,
+                         fontSize: 65,
+@@ -493,7 +500,7 @@ Widget aqiCircleAndDesc(WeatherData data, context) {
+                         fontWeight: FontWeight.w300,
+                       ),
+                     ),
+-                    Text(aqiTitleLocalization(data.aqi.aqiIndex, AppLocalizations.of(context)!), style: TextStyle(
++                    Text(aqiTitleLocalization(data.aqi!.aqiIndex, AppLocalizations.of(context)!), style: TextStyle(
+                         color: Theme.of(context).colorScheme.secondary, fontSize: 21, height: 1.2, fontWeight: FontWeight.w600),)
+                   ],
+                 ),
+@@ -505,7 +512,7 @@ Widget aqiCircleAndDesc(WeatherData data, context) {
+ 
+       Padding(
+           padding: const EdgeInsets.only(top: 0, bottom: 30, left: 40, right: 40),
+-        child: Text(aqiDescLocalization(data.aqi.aqiIndex, AppLocalizations.of(context)!),
++        child: Text(aqiDescLocalization(data.aqi!.aqiIndex, AppLocalizations.of(context)!),
+             textAlign: TextAlign.center,
+             style: TextStyle(
+             color: Theme.of(context).colorScheme.outline, fontSize: 18, height: 1.15)
+diff --git a/lib/radar.dart b/lib/radar.dart
+index 2e6a11a..9ddbc39 100644
+--- a/lib/radar.dart
++++ b/lib/radar.dart
+@@ -31,6 +31,7 @@ import 'package:provider/provider.dart';
+ import '../l10n/app_localizations.dart';
+ 
+ import 'decoders/weather_data.dart';
++import 'volparossa/views.dart';
+ 
+ class RadarSmall extends StatefulWidget {
+ 
+@@ -46,7 +47,7 @@ class RadarSmall extends StatefulWidget {
+ class _RadarSmallState extends State<RadarSmall> {
+ 
+   final ValueNotifier<double> _frameNotifier = ValueNotifier<double>(0);
+-  late Timer timer;
++  Timer? timer;
+ 
+   bool hasBeenPlayed = false;
+ 
+@@ -55,8 +56,9 @@ class _RadarSmallState extends State<RadarSmall> {
+   @override
+   void initState() {
+     super.initState();
++    if (widget.data.radar == null) return;
+ 
+-    _frameNotifier.value = widget.data.radar.startingIndex * 1.0;
++    _frameNotifier.value = widget.data.radar!.startingIndex * 1.0;
+ 
+     timer = Timer.periodic(const Duration(milliseconds: 1000), (Timer t) {
+       if (isPlaying) {
+@@ -65,10 +67,10 @@ class _RadarSmallState extends State<RadarSmall> {
+         }
+         //setState(() {
+         //currentFrameIndex =
+-        //((currentFrameIndex + 1) % (widget.data.radar.images.length - 1));
++        //((currentFrameIndex + 1) % (widget.data.radar!.images.length - 1));
+         //});
+ 
+-        double nextFrame = (_frameNotifier.value + 1) % (widget.data.radar.images.length - 1);
++        double nextFrame = (_frameNotifier.value + 1) % (widget.data.radar!.images.length - 1);
+         _frameNotifier.value = nextFrame;
+       }
+     });
+@@ -76,7 +78,7 @@ class _RadarSmallState extends State<RadarSmall> {
+ 
+   @override
+   void dispose() {
+-    timer.cancel();
++    timer?.cancel();
+     super.dispose();
+   }
+ 
+@@ -97,6 +99,7 @@ class _RadarSmallState extends State<RadarSmall> {
+ 
+   @override
+   Widget build(BuildContext context) {
++    if (widget.data.radar == null) return const MissingCapability('Radar');
+ 
+     String mode = context.watch<ThemeProvider>().getBrightness;
+ 
+@@ -170,7 +173,7 @@ class _RadarSmallState extends State<RadarSmall> {
+                           builder: (context, frameIndex, child) {
+                             return TileLayer(
+                               tileProvider: NetworkTileProvider(abortObsoleteRequests: true),
+-                              urlTemplate: "${widget.data.radar.images[_frameNotifier.value
++                              urlTemplate: "${widget.data.radar!.images[_frameNotifier.value
+                                   .toInt()]}/256/{z}/{x}/{y}/2/1_1.png",
+                               //whoah i didn't know that the radar stuttering was because of a fading animation
+                               //this makes it so much more fluid, because there is no fade between frames
+@@ -294,9 +297,9 @@ class _RadarSmallState extends State<RadarSmall> {
+                           return Slider(
+                             value: frameIndex,
+                             min: 0,
+-                            max:  widget.data.radar.images.length - 1,
+-                            divisions: widget.data.radar.images.length,
+-                            label: convertTime(widget.data.radar.times[frameIndex.toInt()], context),
++                            max:  widget.data.radar!.images.length - 1,
++                            divisions: widget.data.radar!.images.length,
++                            label: convertTime(widget.data.radar!.times[frameIndex.toInt()], context),
+ 
+                             padding: const EdgeInsets.symmetric(horizontal: 15),
+ 
+@@ -374,7 +377,7 @@ class _RadarBigState extends State<RadarBig> {
+   String selectedLayer = layerOptions[0];
+ 
+   final ValueNotifier<double> _frameNotifier = ValueNotifier<double>(0);
+-  late Timer timer;
++  Timer? timer;
+ 
+   bool hasBeenPlayed = false;
+ 
+@@ -388,7 +391,7 @@ class _RadarBigState extends State<RadarBig> {
+   String frameIndexToUrl(int frameIndex) {
+     String formattedDate = DateFormat('yyyyMMddHH').format(getDateTimeFromFrameIndex(frameIndex));
+     return {
+-      "live radar" : "${widget.data.radar.images[min(frameIndex, widget.data.radar.images.length - 1)]}/256/{z}/{x}/{y}/2/1_1.png",
++      "live radar" : "${widget.data.radar!.images[min(frameIndex, widget.data.radar!.images.length - 1)]}/256/{z}/{x}/{y}/2/1_1.png",
+       "precip": "https://weathermaps.weatherapi.com/precip/tiles/$formattedDate/{z}/{x}/{y}.png",
+       "temp": "https://weathermaps.weatherapi.com/tmp2m/tiles/$formattedDate/{z}/{x}/{y}.png",
+       "wind": "https://weathermaps.weatherapi.com/wind/tiles/$formattedDate/{z}/{x}/{y}.png",
+@@ -399,9 +402,9 @@ class _RadarBigState extends State<RadarBig> {
+   String labelFromFrameIndex(int frameIndex, String timeMode) {
+     if (selectedLayer == "live radar") {
+       if (timeMode == "12 hour") {
+-        return DateFormat('h:mm a').format(widget.data.radar.times[frameIndex.toInt()]).toLowerCase();
++        return DateFormat('h:mm a').format(widget.data.radar!.times[frameIndex.toInt()]).toLowerCase();
+       }
+-      return DateFormat('HH:mm').format(widget.data.radar.times[frameIndex.toInt()]);
++      return DateFormat('HH:mm').format(widget.data.radar!.times[frameIndex.toInt()]);
+     } else {
+       if (timeMode == "12 hour") {
+         return DateFormat('E ha', Localizations.localeOf(context).toString())
+@@ -414,8 +417,9 @@ class _RadarBigState extends State<RadarBig> {
+   @override
+   void initState() {
+     super.initState();
++    if (widget.data.radar == null) return;
+ 
+-    _frameNotifier.value = widget.data.radar.startingIndex * 1.0;
++    _frameNotifier.value = widget.data.radar!.startingIndex * 1.0;
+ 
+     timer = Timer.periodic(const Duration(milliseconds: 1000), (Timer t) {
+       if (isPlaying) {
+@@ -424,7 +428,7 @@ class _RadarBigState extends State<RadarBig> {
+         }
+ 
+         double nextFrame = (_frameNotifier.value + 1)
+-            % (selectedLayer == "live radar" ? (widget.data.radar.images.length - 1) : 71);
++            % (selectedLayer == "live radar" ? (widget.data.radar!.images.length - 1) : 71);
+         _frameNotifier.value = nextFrame;
+       }
+     });
+@@ -432,7 +436,7 @@ class _RadarBigState extends State<RadarBig> {
+ 
+   @override
+   void dispose() {
+-    timer.cancel();
++    timer?.cancel();
+     _frameNotifier.dispose();
+     super.dispose();
+   }
+@@ -454,6 +458,7 @@ class _RadarBigState extends State<RadarBig> {
+ 
+   @override
+   Widget build(BuildContext context) {
++    if (widget.data.radar == null) return const MissingCapability('Radar');
+ 
+     double topPad = MediaQuery.of(context).padding.top;
+ 
+@@ -651,8 +656,8 @@ class _RadarBigState extends State<RadarBig> {
+                                       return Slider(
+                                         value: frameIndex,
+                                         min: 0,
+-                                        max: (selectedLayer == "live radar" ? (widget.data.radar.images.length - 1) : 71),
+-                                        divisions: (selectedLayer == "live radar" ? (widget.data.radar.images.length) : 72),
++                                        max: (selectedLayer == "live radar" ? (widget.data.radar!.images.length - 1) : 71),
++                                        divisions: (selectedLayer == "live radar" ? (widget.data.radar!.images.length) : 72),
+                                         label: labelFromFrameIndex(frameIndex.toInt(), timeMode),
+ 
+                                         padding: const EdgeInsets.symmetric(horizontal: 15),
+@@ -738,7 +743,7 @@ class _RadarBigState extends State<RadarBig> {
+                         setState(() {
+                           selectedLayer = value;
+                           if (selectedLayer == "live radar") {
+-                            _frameNotifier.value = min(_frameNotifier.value, (widget.data.radar.images.length - 1));
++                            _frameNotifier.value = min(_frameNotifier.value, (widget.data.radar!.images.length - 1));
+                           }
+                         });
+                       }
+@@ -781,4 +786,4 @@ class _RadarBigState extends State<RadarBig> {
+       ),
+     );
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/lib/search_screens.dart b/lib/search_screens.dart
+index 14b5604..7b5b375 100644
+--- a/lib/search_screens.dart
++++ b/lib/search_screens.dart
+@@ -21,6 +21,7 @@ import 'dart:convert';
+ 
+ import 'package:flutter/foundation.dart';
+ import 'package:flutter/material.dart';
++import 'volparossa/profile.dart';
+ import 'package:flutter/services.dart';
+ import 'package:geocoding/geocoding.dart';
+ import 'package:geolocator/geolocator.dart';
+@@ -109,6 +110,9 @@ class _MySearchWidgetState extends State<MySearchWidget> {
+ 
+   @override
+   Widget build(BuildContext context){
++    if (volparossaProfile) return SafeArea(child: Container(margin: const EdgeInsets.all(20),
++      padding: const EdgeInsets.all(12), color: Theme.of(context).colorScheme.surface,
++      child: Text('${widget.place}\nArea configured in the shared core provider; location search is unavailable.')));
+ 
+     if (widget.isTabletMode) {
+       return HeroSearchPage(place: widget.place, recommend: recommend,
+@@ -1058,4 +1062,4 @@ Widget reorderableItem(List<dynamic> items, index, onFavChanged, isTabletMode, c
+       ),
+     ),
+   );
+-}
+\ No newline at end of file
++}
+diff --git a/lib/services/location_service.dart b/lib/services/location_service.dart
+index c43cb26..2474206 100644
+--- a/lib/services/location_service.dart
++++ b/lib/services/location_service.dart
+@@ -18,6 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ 
+ import 'dart:io';
+ import 'dart:convert';
++import '../volparossa/profile.dart';
+ 
+ import '../api_key.dart';
+ import 'caching_service.dart';
+@@ -25,6 +26,7 @@ import 'caching_service.dart';
+ class LocationService {
+ 
+   static Future<List<String>> getRecommendation(String query, String searchProvider) async {
++    if (volparossaProfile) throw UnsupportedError('Configure the public area in the shared core provider');
+ 
+     query = _sanitizeQuery(query);
+     if (query == '') {
+@@ -113,4 +115,4 @@ class LocationService {
+     final trimmedInput = safeInput.trim();
+     return trimmedInput.length > 100 ? trimmedInput.substring(0, 100) : trimmedInput;
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/lib/services/notification_service.dart b/lib/services/notification_service.dart
+index 2692c52..bd2b3f1 100644
+--- a/lib/services/notification_service.dart
++++ b/lib/services/notification_service.dart
+@@ -18,6 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ 
+ 
+ import 'dart:convert';
++import '../volparossa/profile.dart';
+ 
+ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+ import 'package:overmorrow/decoders/weather_data.dart';
+@@ -42,6 +43,7 @@ class NotificationService {
+   );
+ 
+   Future<void> init() async {
++    if (volparossaProfile) return;
+     if (PreferenceUtils.getBool("Ongoing notification", false)) {
+       const androidSettings = AndroidInitializationSettings('@drawable/weather_partly_cloudy');
+         const settings = InitializationSettings(android: androidSettings);
+@@ -59,6 +61,7 @@ class NotificationService {
+   }
+ 
+   Future<bool> handleNotificationToggle(bool to) async {
++    if (volparossaProfile) return false;
+     AndroidFlutterLocalNotificationsPlugin? androidFlutterLocalNotificationsPlugin = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+     if (androidFlutterLocalNotificationsPlugin != null) {
+       if (to == true) {
+@@ -102,6 +105,7 @@ class NotificationService {
+   }
+ 
+   Future<void> updateOngoingNotification(SharedPreferences prefs) async {
++    if (volparossaProfile) return;
+     String location = prefs.getString("Ongoing place") ?? "unknown";
+     String latLon = prefs.getString("Ongoing latLon") ?? "unknown";
+     String provider = prefs.getString("Ongoing provider") ?? "open-meteo";
+@@ -154,4 +158,4 @@ class NotificationService {
+     );
+   }
+ 
+-}
+\ No newline at end of file
++}
+diff --git a/lib/services/preferences_service.dart b/lib/services/preferences_service.dart
+index 51929a1..bd832e6 100644
+--- a/lib/services/preferences_service.dart
++++ b/lib/services/preferences_service.dart
+@@ -23,6 +23,7 @@ import 'package:overmorrow/weather_refact.dart';
+ import 'package:shared_preferences/shared_preferences.dart';
+ 
+ import 'color_service.dart';
++import '../volparossa/profile.dart';
+ 
+ Map<String, List<String>> settingSwitches = {
+   'Language' : [
+@@ -255,7 +256,7 @@ class SettingsProvider with ChangeNotifier {
+   String _ongoingNotificationLatLon = "unknown";
+   String _ongoingNotificationProvider = "open-meteo";
+ 
+-  String get getWeatherProvider => _weatherProvider;
++  String get getWeatherProvider => volparossaProfile ? 'volparossa' : _weatherProvider;
+ 
+   String get getTempUnit => _tempUnit;
+   String get getWindUnit => _windUnit;
+@@ -268,7 +269,7 @@ class SettingsProvider with ChangeNotifier {
+ 
+   String get getSearchProvider => _searchProvider;
+ 
+-  String get getImageSource => _imageSource;
++  String get getImageSource => volparossaProfile ? 'asset' : _imageSource;
+ 
+   List<String> get getLayout => _layout;
+ 
+@@ -280,10 +281,10 @@ class SettingsProvider with ChangeNotifier {
+   String get getLocation => _location;
+   String get getLatLon => _latLon;
+ 
+-  bool get getOngoingNotificationOn => _ongoingNotificationOn;
++  bool get getOngoingNotificationOn => !volparossaProfile && _ongoingNotificationOn;
+   String get getOngoingNotificationPlace => _ongoingNotificationPlace;
+   String get getOngoingNotificationLatLon => _ongoingNotificationLatLon;
+-  String get getOngoingNotificationProvider => _ongoingNotificationProvider;
++  String get getOngoingNotificationProvider => volparossaProfile ? 'volparossa' : _ongoingNotificationProvider;
+ 
+   SettingsProvider() {
+     _load();
+@@ -454,4 +455,4 @@ class SettingsProvider with ChangeNotifier {
+     _textScale = to;
+     notifyListeners();
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/lib/services/widget_service.dart b/lib/services/widget_service.dart
+index 3eb4b30..4653d7f 100644
+--- a/lib/services/widget_service.dart
++++ b/lib/services/widget_service.dart
+@@ -17,6 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+ 
+ import 'dart:convert';
++import '../volparossa/profile.dart';
+ import 'package:flutter/foundation.dart';
+ import 'package:home_widget/home_widget.dart';
+ import 'package:intl/intl.dart';
+@@ -38,6 +39,7 @@ const forecastWidgetReceiver = 'com.marotidev.overmorrow.receivers.ForecastWidge
+ const oneHourlyWidgetReceiver = 'com.marotidev.overmorrow.receivers.OneHourlyWidgetReceiver';
+ 
+ void initializeWidgetServices() {
++  if (volparossaProfile) return;
+   Workmanager().initialize(
+       myCallbackDispatcher, // The top level function, aka callbackDispatcher
+       isInDebugMode: kDebugMode // If enabled it will post a notification whenever the task is running. Handy for debugging tasks
+@@ -179,6 +181,7 @@ class WidgetService {
+ //this is the best solution i found to trigger an update of the data after the preferences have been changed
+ @pragma('vm:entry-point')
+ Future<void> interactiveCallback(Uri? uri) async {
++  if (volparossaProfile) return;
+   print("INTERACTIVE CALLBACK, ${uri.toString()}");
+   if (uri?.host == 'update') {
+     await Workmanager().registerOneOffTask(
+@@ -190,6 +193,7 @@ Future<void> interactiveCallback(Uri? uri) async {
+ void myCallbackDispatcher() {
+ 
+   Workmanager().executeTask((task, inputData) async {
++    if (volparossaProfile) return false;
+     print("Native called background task: $task"); //simpleTask will be emitted here.
+ 
+     final SharedPreferences prefs = await SharedPreferences.getInstance();
+@@ -295,4 +299,4 @@ void myCallbackDispatcher() {
+     WidgetService.logUpdateTime(prefs);
+     return Future.value(true);
+   });
+-}
+\ No newline at end of file
++}
