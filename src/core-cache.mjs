@@ -11,6 +11,13 @@ import { MAX_BYTES, WeatherError, freshness, parseForecast, request, requireThat
 const HEX = /^[a-f0-9]{64}$/;
 const MAX_REPORT_BYTES = 16384;
 
+// Only these fixed product wrappers select validation. Callers cannot inject a
+// parser, a freshness function or a different interpretation of trusted bytes.
+const WEATHER = Object.freeze({ maxBytes: MAX_BYTES, request, parse: parseForecast, freshness,
+  matchesFields: (forecast, expected) => Object.hasOwn(forecast.units, 'wind_10m') === expected.includeWind
+    && Object.hasOwn(forecast.units, 'precipitation') === expected.includePrecipitation,
+  mismatch: 'FORECAST_QUERY_MISMATCH' });
+
 function absolute(value) {
   requireThat(typeof value === 'string' && isAbsolute(value) && resolve(value) === value
     && !/[\x00-\x1f\x7f]/.test(value), 'PATH_INVALID');
@@ -67,11 +74,27 @@ export async function runOwnedJsonProcess(executable, args, cwd, signal, timeout
   try { return JSON.parse(stdout); } catch { throw new WeatherError('CORE_REPORT_INVALID'); }
 }
 
-export async function fetchCachedForecast({ mode, executable, controlSocket, cache, scratchParent,
-  publisherKey, name, minRevision, query, reuseCache = false }, { signal } = {}) {
+export async function fetchCachedForecast(options, { signal } = {}) {
+  return fetchCachedProduct(options, WEATHER, signal);
+}
+
+export async function fetchCachedAirQuality(options, { signal } = {}) {
+  // A fixed, lazy dependency keeps existing weather-only application bundles
+  // independent of this additional product. No input selects the module path.
+  const { AQ_MAX_BYTES, airQualityFreshness, airQualityRequest, parseAirQualityForecast } = await import('./air-quality.mjs');
+  const product = Object.freeze({ maxBytes: AQ_MAX_BYTES, request: airQualityRequest,
+    parse: parseAirQualityForecast, freshness: airQualityFreshness,
+    // The AQ parser separately checks units, native evidence and NOAA model source.
+    matchesFields: forecast => Object.keys(forecast.units).sort().join('|') === 'pm10|pm2_5',
+    mismatch: 'AQ_QUERY_MISMATCH' });
+  return fetchCachedProduct(options, product, signal);
+}
+
+async function fetchCachedProduct({ mode, executable, controlSocket, cache, scratchParent,
+  publisherKey, name, minRevision, query, reuseCache = false }, product, signal) {
   requireThat(mode === 'core-cache', 'CORE_MODE_REQUIRED');
   requireThat(process.platform === 'linux' && typeof process.getuid === 'function', 'CORE_PLATFORM_UNAVAILABLE');
-  const expected = request(query);
+  const expected = product.request(query);
   requireThat(expected.communityArea, 'PUBLIC_COMMUNITY_AREA_REQUIRED');
   requireThat(typeof publisherKey === 'string' && HEX.test(publisherKey), 'PUBLISHER_INVALID');
   requireThat(typeof name === 'string' && Buffer.byteLength(name) > 0 && Buffer.byteLength(name) <= 128
@@ -92,7 +115,7 @@ export async function fetchCachedForecast({ mode, executable, controlSocket, cac
   try {
     const args = ['--control-socket', controlSocket, 'content', 'fetch-name',
       '--publisher-key', publisherKey, '--name', name, '--min-revision', String(minRevision),
-      '--cache', cache, '--local-output', output, '--quota-bytes', String(MAX_BYTES),
+      '--cache', cache, '--local-output', output, '--quota-bytes', String(product.maxBytes),
       '--max-entries', '16', '--min-free-bytes', '67108864'];
     if (reuseCache) args.push('--reuse-cache');
     const receipt = await runOwnedJsonProcess(executable, args, work, signal);
@@ -102,7 +125,7 @@ export async function fetchCachedForecast({ mode, executable, controlSocket, cac
       && receipt.origin_authenticated === false && receipt.globally_latest === false && receipt.cache_only === false
       && receipt.local_output === output && receipt.cache === cache && HEX.test(receipt.manifest_id)
       && HEX.test(receipt.sha256) && Number.isSafeInteger(receipt.bytes) && receipt.bytes > 0
-      && receipt.bytes <= MAX_BYTES && Number.isSafeInteger(receipt.publication_expires_unix_seconds)
+      && receipt.bytes <= product.maxBytes && Number.isSafeInteger(receipt.publication_expires_unix_seconds)
       && receipt.publication_expires_unix_seconds > 0, 'CORE_RECEIPT_INVALID');
     const file = await open(output, constants.O_RDONLY | constants.O_NOFOLLOW);
     let bytes;
@@ -116,16 +139,15 @@ export async function fetchCachedForecast({ mode, executable, controlSocket, cac
       bytes = bytes.subarray(0, bytesRead);
     } finally { await file.close(); }
     requireThat(createHash('sha256').update(bytes).digest('hex') === receipt.sha256, 'CORE_HASH_MISMATCH');
-    const forecast = parseForecast(bytes);
+    const forecast = product.parse(bytes);
     requireThat(forecast.area.sharing === 'public-community' && forecast.area.latitude === expected.latitude
       && forecast.area.longitude === expected.longitude && forecast.source.model === expected.model
       && forecast.source.model_run_at === expected.run
-      && Object.hasOwn(forecast.units, 'wind_10m') === expected.includeWind
-      && Object.hasOwn(forecast.units, 'precipitation') === expected.includePrecipitation
-      && JSON.stringify(forecast.samples.map(sample => sample.lead_hours)) === JSON.stringify(expected.steps), 'FORECAST_QUERY_MISMATCH');
+      && product.matchesFields(forecast, expected)
+      && JSON.stringify(forecast.samples.map(sample => sample.lead_hours)) === JSON.stringify(expected.steps), product.mismatch);
     const expiry = new Date(receipt.publication_expires_unix_seconds * 1000);
     requireThat(Number.isFinite(expiry.getTime()), 'CORE_RECEIPT_INVALID');
-    const age = freshness(forecast, new Date().toISOString(), expiry.toISOString());
+    const age = product.freshness(forecast, new Date().toISOString(), expiry.toISOString());
     requireThat(!age.stale, 'STALE_FORECAST');
     requireThat(!signal?.aborted, 'CANCELLED');
     return { forecast, delivery: { mode: 'core-cache', publisher_key: publisherKey, name,

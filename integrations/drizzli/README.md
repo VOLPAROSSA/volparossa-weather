@@ -48,9 +48,17 @@ The older browser receipt above remains evidence for the earlier build.
 Rebuild and deploy the client and bridge together:
 an older client rejects the new provider capability list rather than guessing.
 
-A joined live core-to-browser trial, additional location selection,
-air-quality inputs, and the Overmorrow mobile integration remain open.
-Synthetic browser success does not prove those capabilities.
+A [joined live core-to-browser trial](core-delivery-smoke.json) now passes for
+temperature and wind: real ECMWF fields become one publication, a cold protected
+fetch obtains its 7,149 bytes from a peer, and the actual page displays and
+refreshes that same publication. The [browser report](core-browser-smoke.json)
+binds the display, build and runtime hashes and confirms cleanup. Acquisition
+from ECMWF happens before and outside the overlay; the browser does not initiate
+the cold fetch. The complete topology runner later fails in a separate adaptive
+provider-transfer test, so this is a successful Weather phase, not an all-green
+topology suite; [the run summary](core-delivery-run.json) preserves that distinction.
+Precipitation delivery through that complete path, additional
+location selection, air-quality display and Overmorrow remain open.
 
 ## Data and privacy boundary
 

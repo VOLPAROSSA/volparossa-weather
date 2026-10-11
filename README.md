@@ -29,12 +29,14 @@ no intermediate weather API is required.
 - Build the pinned Drizz.li web client with a VOLPAROSSA forecast view, served by
   an explicit local HTTP bridge to that same core-cache consumer.
 
-This is a **temperature, wind and precipitation development component**, not yet a complete weather
-app. Air quality, observations, trained corrections, model comparison,
+This is a **temperature, wind, precipitation and particulate-forecast development
+component**, not yet a complete weather app. The separate NOAA particulate
+adapter and core-cache consumer work locally; app display is still required.
+Observations, trained corrections, model comparison,
 automatic shared acquisition and native mobile integration remain future work.
-The Drizz.li build and isolated browser interaction pass with synthetic weather;
-displaying a real forecast delivered through the live overlay still needs a
-joined trial. Rain accumulation must
+The Drizz.li build and isolated browser interaction pass with synthetic weather.
+A joined trial also displays and refreshes real temperature/wind data obtained
+from a peer through the protected core. Rain accumulation must
 not be presented as hourly rainfall; unsupported values are not invented.
 
 The [real IFS origin-to-native-decoder smoke](third_party/ecmwf-smoke.json) passes:
@@ -267,10 +269,22 @@ and [precipitation](integrations/drizzli/precipitation-browser-smoke.json): init
 display, refresh, missing and stale values, expiry, route guards and cleanup.
 The precipitation trial also preserves zero, small amounts and native time windows.
 Separate functional tests exercise the bridge's core-process boundary using a
-synthetic core executable. These trials do not yet prove a real overlay
-publication reaching the rendered app. That joined trial, interactive location
-selection and deployment packaging remain required; this is not yet a complete
-cross-platform weather app.
+synthetic core executable. These synthetic trials remain separate from the new
+[joined core-delivery proof](integrations/drizzli/core-delivery-smoke.json) and
+[actual browser report](integrations/drizzli/core-browser-smoke.json): real ECMWF
+temperature/wind data was published, fetched cold from a peer after the publisher
+sources were removed, then displayed and refreshed through the production bridge
+in Drizz.li. The same 7,149-byte publication is bound across those phases; the cold
+transfer used zero origin bytes. Browser, bridge and private-state cleanup pass.
+Acquisition from ECMWF happens outside the overlay; the browser reuses the result
+of the earlier cold fetch. This does not prove browser-triggered cold acquisition,
+precipitation delivery or simultaneous two-subflow bulk throughput.
+
+The complete topology run still exits unsuccessfully at a later, separate
+15 MiB adaptive-provider fetch (`CONTENT_UNAVAILABLE`). The successful Weather
+phase is not an all-green topology result. Interactive location selection,
+precipitation delivery, air-quality display, Overmorrow and deployment packaging
+remain required; this is not yet a complete cross-platform weather app.
 
 ### Overmorrow integration still required
 
@@ -295,16 +309,79 @@ fallback or location publication.
 - [x] Drizz.li precipitation display and interaction: actual isolated Firefox
   with synthetic values and native accumulation windows, including refresh.
 - [ ] Complete precipitation delivery through the overlay and application clients;
-  the joined real core-to-browser proof and Overmorrow
-  integration remain separate requirements.
-- [ ] Air quality: acquire suitable licensed pollutant data, retain concentration
-  units and averaging periods, explicitly identify any derived index and its
-  definition, test those transformations, then add application display.
+  the joined real core-to-browser proof currently covers temperature and wind.
+  Overmorrow integration remains a separate requirement.
+- [x] Particulate source and contract: real NOAA PM2.5/PM10 acquisition, native
+  instantaneous concentrations, pinned decoder, two verified forecast steps.
+- [x] Particulate core-cache consumer and CLI: fixed trusted publication/query,
+  hash and expiry checks, cancellation and private-output cleanup tested with a
+  synthetic core process. This is not a live particulate overlay trial.
+- [ ] Particulate delivery through the real overlay and application display.
+- [ ] Additional pollutants and any derived air-quality index, with explicit
+  averaging periods, index definition and independently tested transformations.
 
 Air quality and the remaining application work are required, not dropped.
 Continue to use direct authorized sources without an Open-Meteo fallback.
-Air quality returns `unsupported_variable`; precipitation absent from a selected
+The existing weather UI still returns `unsupported_variable` for air quality;
+the separate particulate contract below does not silently change its model or
+timeline. Precipitation absent from a selected
 forecast returns `field_not_in_forecast`. Neither means a measured zero.
+
+### NOAA particulate forecasts
+
+The separate `volparossa.air-quality.forecast.v1` contract contains PM2.5 and PM10
+surface concentrations in `ug/m3`, with their own model run, original valid times,
+grid point, byte-range evidence and expiry. These are **instantaneous model
+forecasts**, not current measurements, hourly averages, an AQI or health advice.
+They must not be spliced into ECMWF's time axis or advertised as all air pollutants.
+
+The adapter reads the official anonymous [NOAA GEFS public-data mirror](https://registry.opendata.aws/noaa-gefs/).
+The [GEFS-Aerosols source description](https://www.emc.ncep.noaa.gov/emc/pages/numerical_forecast_systems/gefs_aero.php)
+identifies the surface particulate products. Retain NOAA attribution and the
+linked data-use terms; VOLPAROSSA's point extraction is a modified presentation,
+not an official NOAA product or endorsement. The source reference is recorded in
+[noaa-gefs.json](third_party/noaa-gefs.json).
+
+```sh
+# Preview only. Choose an available initialization explicitly.
+node scripts/air-quality.mjs origin --latitude 52.52 --longitude 13.41 \
+  --run 2026-10-10T00:00:00.000Z --steps 3,6
+
+# Real acquisition: existing pinned decoder and private mode-0700 parent required.
+node scripts/air-quality.mjs origin --latitude 52.52 --longitude 13.41 \
+  --run 2026-10-10T00:00:00.000Z --steps 3,6 \
+  --decoder /absolute/path/to/grib_ls --decoder-sha256 VERIFIED_BINARY_SHA256 \
+  --scratch-parent /absolute/PRIVATE_PARENT --execute --accept-data-license
+```
+
+Dates above are examples, not a maintained latest run. A request selects at most
+16 ordered three-hour lead times, within 120 hours, from an explicit six-hourly
+initialization. Real-source acceptance currently covers steps 3 and 6; step zero
+and every other lead are not collectively certified by that trial. An unsupported
+or changed field identity fails closed. Missing values remain `null`, not zero.
+
+Each lead downloads one index of at most 64 KiB and only the two exact field
+ranges, each capped at 2 MiB. Requests are sequential with 30-second deadlines,
+no redirects, no full-file fallback and no automatic retries. The same pinned
+native decoder uses a 512 MiB address-space limit, 20 CPU seconds and a 30-second
+wall deadline per field. Coordinates remain local; the origin sees the source
+IP and selected model files. The decoder reports about six significant digits;
+its missing-value sentinel is retained as `null`.
+
+The [real CLI acquisition receipt](third_party/noaa-gefs-smoke.json) binds four
+fields totaling 2,841,174 bytes to two native forecast points and a 4,076-byte
+result. Decoder processes exit and their temporary fields/directories are removed.
+This is origin/decoder proof, not forecast accuracy, AQI or app delivery.
+
+Use `scripts/air-quality.mjs core-cache` with the same explicit executable,
+control socket, cache, private scratch parent, trusted publisher/name/revision
+and `--community-area` options described above. The source product is fixed to
+GEFS-Aerosols; do not pass the ECMWF `--model` or field-extension flags. The
+consumer checks the exact requested location, run and steps, preserves original
+and signed-publication expiry, and never falls back to NOAA. Private requests
+cannot be consumed as shared public products. Publication remains a separate
+authorized operation with a distinct name and content type
+`application/vnd.volparossa.air-quality.forecast.v1+json`.
 
 ## Time, models and evidence
 
