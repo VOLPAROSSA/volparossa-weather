@@ -39,6 +39,27 @@ unverified. This synthetic browser proof establishes neither forecast accuracy
 nor mobile execution; background lifecycle and native home-screen widgets remain
 open.
 
+## Joined core delivery trial
+
+The core's version-three Weather bundle selects this actual Overmorrow client,
+the production HTTP bridge and the existing protected peer-delivery path. It
+acquires weather and particulate products separately, publishes both, removes
+the original publisher inputs and retrieves each product through the core before
+opening the UI. Drizz.li's earlier bundle profiles remain unchanged.
+
+The [preparer](prepare_core_browser.mjs) binds the raw products and cold-transfer
+receipts to expected native values. The [browser driver](smoke_core_browser.py)
+checks ordered Flutter table rows and cells, source metadata and a real pointer
+refresh. It distinguishes missing values from zero, preserves precipitation
+windows and keeps weather and particulate timelines separate. Three Node tests
+and ten Python tests pass; CI includes their pinned Browser helper sources.
+
+The joined Overmorrow trial has not yet run. These component checks do not prove
+live table extraction or core-to-client delivery. Even a successful joined trial
+would prove a prior cold core transfer followed by UI use of those publications,
+not that opening the browser initiated the first cold fetch. The retained
+synthetic browser result and historical origin results keep their original scope.
+
 ## Data and privacy
 
 `--dart-define=VOLPAROSSA_WEATHER=true` selects the shared provider. The web client

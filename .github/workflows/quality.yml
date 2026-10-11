@@ -17,6 +17,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Read pinned browser helper sources for joined-proof checks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: VOLPAROSSA/volparossa-browser
+          ref: 08bac388a0abfd06426bebe8f6fabd0157d2e709
+          path: build/test-browser-support
+          sparse-checkout: scripts
+          persist-credentials: false
       - name: Identify the runner test runtime
         run: |
           node --version
@@ -27,8 +35,10 @@ jobs:
         run: node --test integrations/drizzli/test-client.mjs
       - name: Check Overmorrow integration without downloading upstream dependencies
         run: |
-          node --test integrations/overmorrow/test-browser-fixture.mjs
-          VOLPAROSSA_TEST_NODE="$(command -v node)" python3 -B -m unittest discover \
+          node --test integrations/overmorrow/test-browser-fixture.mjs integrations/overmorrow/test_prepare_core_browser.mjs
+          test -f "$GITHUB_WORKSPACE/build/test-browser-support/scripts/smoke_privacy.py"
+          VOLPAROSSA_TEST_NODE="$(command -v node)" \
+            VOLPAROSSA_TEST_BROWSER_ROOT="$GITHUB_WORKSPACE/build/test-browser-support" python3 -B -m unittest discover \
             -s integrations/overmorrow -p 'test_*.py'
       - name: Check source metadata and whitespace
         run: |
