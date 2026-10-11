@@ -23,6 +23,23 @@
     "notices_sha256": "56b18ec837108e97a94ff8a1759174226e4316cc00dbd9af8215ecb1f3b2c7a8"
   },
   "browser_interaction_verified": false,
+  "browser_trial": {
+    "passed": false,
+    "initial_render_verified": true,
+    "actual_canvaskit_ui": true,
+    "actual_local_http_bridge": true,
+    "synthetic_products": true,
+    "failure_phase": "refresh",
+    "failure_type": "TimeoutError",
+    "failure_cause_resolved": false,
+    "report_sha256": "36d70cb863624009759f5087dd67c8dd6382860f7b9e8b390a89933d6886523c",
+    "initial_semantics_sha256": "a533cb42a4c67ceeb02013143ff84a6424fcec85d5eec5ec27e105e9bfbcf7aa",
+    "browser_and_fixture_exited": true,
+    "private_profile_removed": true,
+    "host_network_namespace_unchanged": true,
+    "harness_tests_passed": 5,
+    "fixture_tests_passed": 4
+  },
   "core_delivery_verified": false,
   "native_android_ios_verified": false,
   "forecast_accuracy_verified": false,

@@ -20,6 +20,16 @@ produced assets. Actual browser interaction, core-to-Overmorrow delivery and
 Android/iOS packaging remain unverified. The web build is not mobile execution
 evidence; background lifecycle and native home-screen widgets remain open.
 
+The first bounded Firefox trial to reach the actual CanvasKit UI verifies initial
+rendering through the local bridge: independent native timelines, values, missing
+current observations/AQI, the configured area and attribution. The trial then
+times out during refresh and remains failed. It does not yet distinguish click
+dispatch, request handling or UI completion as the cause. Browser and fixture
+processes exit, the private profile is removed and the host network namespace is
+unchanged. Five harness checks and four synthetic-fixture checks pass separately;
+they do not establish successful refresh, failure handling or idle expiry in the
+browser.
+
 ## Data and privacy
 
 `--dart-define=VOLPAROSSA_WEATHER=true` selects the shared provider. The web client
