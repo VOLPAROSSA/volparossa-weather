@@ -261,9 +261,11 @@ first, then configure the long-lived bridge with `reuseCache: true`; one-shot
 cache creation is rejected by the bridge so refreshes do not try to recreate it.
 
 The full Drizz.li production build, Svelte/TypeScript checks and actual forecast
-component rendering pass. An [isolated Firefox trial](integrations/drizzli/browser-smoke.json)
-also verifies the real page and HTTP bridge with synthetic weather: initial
+component rendering pass. Isolated Firefox trials verify the real page and HTTP
+bridge with synthetic [temperature/wind](integrations/drizzli/browser-smoke.json)
+and [precipitation](integrations/drizzli/precipitation-browser-smoke.json): initial
 display, refresh, missing and stale values, expiry, route guards and cleanup.
+The precipitation trial also preserves zero, small amounts and native time windows.
 Separate functional tests exercise the bridge's core-process boundary using a
 synthetic core executable. These trials do not yet prove a real overlay
 publication reaching the rendered app. That joined trial, interactive location
@@ -290,8 +292,10 @@ fallback or location publication.
 
 - [x] Precipitation source and shared provider: IFS/AIFS native totals, checked
   units/time windows and missing values, with real origin/decoder trials.
+- [x] Drizz.li precipitation display and interaction: actual isolated Firefox
+  with synthetic values and native accumulation windows, including refresh.
 - [ ] Complete precipitation delivery through the overlay and application clients;
-  the Drizz.li component is added, while the joined browser proof and Overmorrow
+  the joined real core-to-browser proof and Overmorrow
   integration remain separate requirements.
 - [ ] Air quality: acquire suitable licensed pollutant data, retain concentration
   units and averaging periods, explicitly identify any derived index and its

@@ -6,6 +6,7 @@ No core, weather origin, host profile or host network mutation is used. Reuses t
 reviewed Browser runtime validator, Marionette framing and isolated-home helper.
 """
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -22,7 +23,31 @@ import time
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
-BROWSER_ROOT = ROOT.parent / "volparossa-browser"
+
+
+def browser_root_argument(arguments, default):
+    """Only explicit operator configuration overrides the normal sibling layout."""
+    parser = argparse.ArgumentParser(add_help=False, exit_on_error=False)
+    parser.add_argument("--browser-root")
+    selected, _ = parser.parse_known_args(arguments)
+    if selected.browser_root is None:
+        return default
+    root = Path(selected.browser_root)
+    if (str(root) != selected.browser_root or not root.is_absolute()
+            or root.resolve(strict=True) != root or not root.is_dir()):
+        raise ValueError("browser_root_invalid")
+    for name in ("smoke_compute_model.py", "smoke_privacy.py", "stage_firefox.py"):
+        helper = root / "scripts" / name
+        if helper.resolve(strict=True) != helper or not helper.is_file():
+            raise ValueError("browser_root_invalid")
+    return root
+
+
+try:
+    BROWSER_ROOT = browser_root_argument(sys.argv[1:], ROOT.parent / "volparossa-browser")
+except (OSError, ValueError, argparse.ArgumentError):
+    print("invalid explicit browser helper root", file=sys.stderr)
+    raise SystemExit(1) from None
 sys.path.insert(0, str(BROWSER_ROOT / "scripts"))
 from smoke_compute_model import validate_stage
 from smoke_privacy import Marionette
@@ -172,14 +197,18 @@ def fixture_command(process, mode):
     return read_line(process)
 
 
-def check_fixture_lifecycle(node, stage, work, environment, outcomes):
+def fixture_arguments(node, stage, work, precipitation=False):
+    return [str(node), "--max-old-space-size=256", str(HERE / "browser-fixture.mjs"),
+            str(stage / "build"), str(work), *(["--precipitation"] if precipitation else [])]
+
+
+def check_fixture_lifecycle(node, stage, work, environment, outcomes, precipitation=False):
     for operation in ("stop", "eof", "signal"):
         process = None
         item = dict(ready=False, requested=False, normal_exit=False, exit_code=None, terminated=False)
         outcomes[operation] = item
         try:
-            process = subprocess.Popen([str(node), "--max-old-space-size=256", str(HERE / "browser-fixture.mjs"),
-                str(stage / "build"), str(work)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            process = subprocess.Popen(fixture_arguments(node, stage, work, precipitation), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, env=environment, start_new_session=True)
             require(read_line(process)["ready"] is True)
             item["ready"] = True
@@ -214,6 +243,63 @@ def wait_for(check, timeout=12):
     raise TimeoutError("browser_condition_timeout")
 
 
+def precipitation_rows(valid_at, missing=False):
+    """Independent expected display for the fixed synthetic 3/9/24-hour query."""
+    require(type(valid_at) is list and len(valid_at) == 3 and all(type(value) is str for value in valid_at))
+    parsed = [datetime.datetime.fromisoformat(value.replace("Z", "+00:00")) for value in valid_at]
+    run = parsed[0] - datetime.timedelta(hours=3)
+    stamp = lambda value: value.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    require(run.tzinfo == datetime.timezone.utc
+            and valid_at == [stamp(run + datetime.timedelta(hours=step)) for step in (3, 9, 24)])
+    rows = []
+    for i, (start, amount) in enumerate(zip((0, 0, 6), ("Not available", "0", "0.01"))):
+        values = ["Not available"] * 3 if missing and i == 0 else ["10.0", "5.0", "216.9"]
+        rows.append([*values, amount, f"{stamp(run + datetime.timedelta(hours=start))} → {valid_at[i]}"])
+    return rows
+
+
+def precipitation_dom(client):
+    return client.script('''
+      const area=document.querySelector('section[aria-label="VOLPAROSSA forecast"]');
+      if (!area) return null;
+      const rows=[...area.querySelectorAll('tbody tr')];
+      const text=area.textContent;
+      const missing=area.querySelector('[data-testid="unsupported-capabilities"]')?.textContent || '';
+      const explanation=area.querySelector('[data-testid="precipitation-accumulation"]')?.textContent || '';
+      return {native: rows.map(r=>r.children[0].textContent.trim()),
+        values: rows.map(r=>[...r.querySelectorAll('td')].map(c=>c.textContent.trim())),
+        headings: [...area.querySelectorAll('thead th')].map(c=>c.textContent.trim()),
+        explicitWindows: explanation.includes('not an hourly rain rate') && explanation.includes('Windows may overlap'),
+        noRate: !/mm\\s*\\/\\s*h\\b/i.test(text),
+        airQualityUnavailable: missing.includes('Air quality') && missing.includes('not available') && !missing.includes('Precipitation'),
+        notLoading: area.querySelector('button')?.disabled === false && !area.querySelector('[role="status"]'),
+        completedRequests: performance.getEntriesByType('resource').filter(e=>e.name===location.origin+'/api/volparossa/forecast' && e.responseEnd>0).length,
+        localOnly: performance.getEntriesByType('resource').every(e=>e.name.startsWith(location.origin+'/') && !e.name.includes('/api/geo'))};
+    ''')
+
+
+def precipitation_dom_matches(value, valid_at, minimum_requests, missing=False):
+    return (type(value) is dict and value.get("native") == valid_at
+            and value.get("values") == precipitation_rows(valid_at, missing)
+            and value.get("headings") == ["Valid time", "Temperature (°C)", "Wind (m/s)", "Wind from (°)",
+                                            "Accumulated precipitation (mm)", "Accumulation window (UTC)"]
+            and all(value.get(key) is True for key in
+                    ("explicitWindows", "noRate", "airQualityUnavailable", "notLoading", "localOnly"))
+            and type(value.get("completedRequests")) is int and value["completedRequests"] >= minimum_requests)
+
+
+def wait_precipitation(client, valid_at, minimum_requests, missing=False):
+    observed = None
+    def accepted():
+        nonlocal observed
+        observed = precipitation_dom(client)
+        return precipitation_dom_matches(observed, valid_at, minimum_requests, missing)
+    wait_for(accepted)
+    # Hash the actual observed five-cell display, not a generated expected table.
+    return hashlib.sha256(json.dumps({"native": observed["native"], "values": observed["values"]},
+                                    sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 def inside(args, stage, work, node, browser_stage, metadata, source):
     require(args.host_netns and os.readlink("/proc/self/ns/net") != args.host_netns)
     require(all(os.statvfs(path).f_flag & os.ST_RDONLY for path in (Path("/"), ROOT, stage, browser_stage)))
@@ -243,23 +329,25 @@ def inside(args, stage, work, node, browser_stage, metadata, source):
                      sha256=metadata["runtime_sha256"], node_sha256=NODE_SHA256),
         source=source,
         checks={}, cleanup={})
+    if args.precipitation:
+        report["scenario"] = "precipitation"
     fixture = browser = client = connection = None
     normal_browser_stop = normal_fixture_stop = False
     try:
         report["phase"] = "fixture_lifecycle"
         report["checks"]["fixture_lifecycle"] = {}
-        check_fixture_lifecycle(node, stage, work, environment, report["checks"]["fixture_lifecycle"])
+        check_fixture_lifecycle(node, stage, work, environment, report["checks"]["fixture_lifecycle"], args.precipitation)
         if args.fixture_only:
             normal_browser_stop = normal_fixture_stop = True
             report["passed"] = True
             report["phase"] = "fixture_lifecycle_complete"
             return
         report["phase"] = "fixture_start"
-        fixture = subprocess.Popen([str(node), "--max-old-space-size=256", str(HERE / "browser-fixture.mjs"),
-            str(stage / "build"), str(work)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        fixture = subprocess.Popen(fixture_arguments(node, stage, work, args.precipitation), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, env=environment, start_new_session=True)
         ready = read_line(fixture)
         require(ready["ready"] is True and ready["synthetic"] is True and ready["core_executed"] is False)
+        require((ready.get("scenario") == "precipitation") == args.precipitation)
         origin = ready["origin"]
         require(origin.startswith("http://127.0.0.1:") and origin.rsplit(":", 1)[1].isdigit())
         report["phase"] = "browser_start"
@@ -320,15 +408,26 @@ def inside(args, stage, work, node, browser_stage, metadata, source):
         require(all(initial[key] for key in ("coords", "unavailable", "source", "licence", "footer", "noCityLinks", "localOnly")))
         require(initial["native"] == ready["valid_at"])
         require(all(row[:2] == ["10.0", "5.0"] for row in initial["values"]))
+        if args.precipitation:
+            report["checks"]["precipitation_initial_dom_sha256"] = wait_precipitation(client, ready["valid_at"], 1)
+            report["checks"].update(precipitation_five_cells=True, precipitation_native_windows=True,
+                precipitation_missing_zero_small_amount=True, precipitation_no_hourly_rate=True,
+                air_quality_still_unavailable=True)
         report["checks"].update(hydration=True, native_times=True, temperature_wind=True,
             explicit_missing_capabilities=True, attribution=True, fixed_location=True, no_external_resources=True)
         report["scope"]["actual_drizzli_ui"] = True
         report["phase"] = "refresh"
         click_refresh("valid"); wait_for(table)
+        if args.precipitation:
+            report["checks"]["precipitation_refresh_dom_sha256"] = wait_precipitation(client, ready["valid_at"], 2)
+            require(report["checks"]["precipitation_refresh_dom_sha256"] == report["checks"]["precipitation_initial_dom_sha256"])
         report["checks"]["actual_refresh"] = True
         report["phase"] = "missing_values"
         click_refresh("missing"); wait_for(table)
-        require(client.script('return [...document.querySelectorAll("tbody tr:first-child td")].every(c=>c.textContent==="Not available");'))
+        if args.precipitation:
+            report["checks"]["precipitation_missing_dom_sha256"] = wait_precipitation(client, ready["valid_at"], 3, missing=True)
+        else:
+            require(client.script('return [...document.querySelectorAll("tbody tr:first-child td")].every(c=>c.textContent==="Not available");'))
         report["checks"]["missing_values_not_zero"] = True
         report["phase"] = "unavailable"
         click_refresh("unavailable")
@@ -393,6 +492,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("stage", "browser-stage", "node", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--browser-root", type=Path, help="explicit canonical Browser checkout for helper imports")
+    parser.add_argument("--precipitation", action="store_true", help="separate synthetic accumulated-precipitation scenario")
     parser.add_argument("--inside", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--fixture-only", action="store_true", help="test only child stop/EOF/signal, without Firefox")
     parser.add_argument("--host-netns", help=argparse.SUPPRESS)
@@ -439,6 +540,8 @@ def main():
         report = dict(schema=1, passed=False, phase="wrapper_failed", source=source,
             scope=dict(actual_drizzli_ui=False, synthetic_weather=True, actual_http_bridge=False,
                        core_executed=False, overlay_proven=False, upstream_origin_proven=False))
+        if args.precipitation:
+            report["scenario"] = "precipitation"
         if report_path.exists():
             try:
                 require(not report_path.is_symlink() and report_path.stat().st_size <= 16384)

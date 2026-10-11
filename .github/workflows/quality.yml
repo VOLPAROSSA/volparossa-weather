@@ -30,10 +30,13 @@ jobs:
           python3 -m json.tool third_party/ecmwf.json > /dev/null
           python3 -m json.tool third_party/ecmwf-smoke.json > /dev/null
           python3 -m json.tool third_party/ecmwf-wind-smoke.json > /dev/null
+          python3 -m json.tool third_party/ecmwf-precipitation-smoke.json > /dev/null
           python3 -m json.tool third_party/eccodes-sources.json > /dev/null
           python3 -m json.tool integrations/drizzli/upstream.json > /dev/null
           python3 -m json.tool integrations/drizzli/build-plugins.json > /dev/null
           python3 -m json.tool integrations/drizzli/browser-smoke.json > /dev/null
+          python3 -m json.tool integrations/drizzli/precipitation-build.json > /dev/null
+          python3 -m json.tool integrations/drizzli/precipitation-browser-smoke.json > /dev/null
           git diff --check
 
 # No live weather requests, dependency installation, decoder build, model

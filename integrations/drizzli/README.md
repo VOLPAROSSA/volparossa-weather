@@ -38,10 +38,14 @@ The precipitation extension adds independently checked model units and source
 windows, including missing and genuine zero values. Nine client tests and five
 actual Svelte render/compiler tests pass. The new full app type check and
 networkless production build also pass; [its receipt](precipitation-build.json)
-binds the updated source and assets. The source adapter separately passes real
-IFS and AIFS native acquisition trials.
-The retained synthetic browser receipt above predates precipitation and does
-not attest the new build. Rebuild and deploy the client and bridge together:
+binds the updated source and assets. A separate [Firefox precipitation trial](precipitation-browser-smoke.json)
+passes on that build with synthetic values: missing, zero and 0.01 mm remain
+distinct; native accumulation windows survive initial display and refresh.
+Unavailable/stale responses, display expiry, route guards and private-profile
+cleanup also pass. The source adapter separately passes real IFS and AIFS
+native acquisition trials; the browser trial does not contact those origins.
+The older browser receipt above remains evidence for the earlier build.
+Rebuild and deploy the client and bridge together:
 an older client rejects the new provider capability list rather than guessing.
 
 A joined live core-to-browser trial, additional location selection,
@@ -155,6 +159,10 @@ Marionette helpers, and an already staged Firefox 140.16.0 runtime with the exac
 hashes accepted by those helpers. It does not install or download a browser.
 The Node executable must match the recorded Node 24.19.0 SHA256. Provide your
 actual verified executable path below, and choose a new output directory.
+For a nested worktree, set `--browser-root` to the absolute canonical path of
+that Browser checkout. The driver rejects symlinked or incomplete helper roots
+and records the actual helper hashes. Built assets must not be group- or
+world-writable; build with the restrictive `umask` shown above.
 
 ```sh
 python3 -B integrations/drizzli/test_smoke_browser.py
@@ -172,8 +180,17 @@ All other arguments match the command above. Earlier failed runs remain failed;
 they exposed test-fixture shutdown/readiness bugs which were corrected before
 the retained pass.
 
-Four inert tests cover environment isolation, process-exit races and guarded
-cleanup. The browser driver then tests actual fixture child shutdown via a stop
+Add `--precipitation` to exercise the accumulated-precipitation scenario on a
+fresh precipitation-enabled build and choose a separate output directory.
+The retained precipitation receipt uses `build/drizzli-precipitation-01` and
+`build/drizzli-precipitation-browser-01`. It checks five data cells per row,
+including the explicit UTC window, without inventing hourly rain rates or AQI.
+
+Ten inert tests cover helper-root selection, fixture data, exact precipitation
+display checks, environment isolation, process-exit races and guarded cleanup.
+Set `VOLPAROSSA_TEST_NODE` to the verified executable to include the inert Node
+fixture test; otherwise that one test is explicitly skipped.
+The browser driver then tests actual fixture child shutdown via a stop
 command, EOF and SIGTERM before starting Firefox. `--fixture-only` runs just those
 lifecycle cases. This is a test-only dependency injection into the actual HTTP
 bridge, not a production synthetic-weather mode.

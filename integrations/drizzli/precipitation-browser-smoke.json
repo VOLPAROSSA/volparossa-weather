@@ -1,0 +1,130 @@
+{
+  "schema": 1,
+  "passed": true,
+  "phase": "complete",
+  "scope": {
+    "actual_drizzli_ui": true,
+    "synthetic_weather": true,
+    "actual_http_bridge": true,
+    "core_executed": false,
+    "overlay_proven": false,
+    "upstream_origin_proven": false
+  },
+  "isolation": {
+    "host_read_only": true,
+    "separate_user_netns": true,
+    "interfaces": [
+      "lo"
+    ],
+    "fresh_private_profile": true
+  },
+  "runtime": {
+    "version": "140.16.0",
+    "source_stamp": "d864999404b3032f682d74ccc60d1ce38c9ce609",
+    "sha256": {
+      "browser/omni.ja": "757f1f47bfbde5603e08cdb7ddc83bd27e9b26695bf843d640df7984842fffd7",
+      "firefox-esr": "22bb2d84f2289622e65fbcde266a30952e6ac64d27a2a1af75cea7229f2e6b14",
+      "libxul.so": "62cc326204668a2dae453c9e89d9c200e513c9e3ad0772b164091bf1e5333fb4",
+      "omni.ja": "c0d453127f9c1310dad39cc3f6971acfe59cdf561fec6918b129ee0c780c6e70"
+    },
+    "node_sha256": "bc17c508ffeed0ec622934f9b7fa72f8e78da65350e63c3eceb56fa688aa5e12"
+  },
+  "source": {
+    "upstream": "d2a6839e2b3f2e561b849d83014fc5959bed39cc",
+    "tree": "7b36709f84a10e082119d245e3bddfe67b209e9b",
+    "patch_sha256": "44fa73a806b9361b066d8f277a7be8fc8ecc46092e53a720fc26dfb42ebd40db",
+    "overlay_sha256": {
+      "src/lib/services/volparossa/client.d.mts": "37bd54e5a40d64288d8dedb1823c83ec7a72abe140aedcd71c4dceb652d1447d",
+      "src/lib/services/volparossa/client.mjs": "9b1746ffb5d5895e45b414fe009950394573dab462339b488d0a6cd2c2588790",
+      "src/lib/services/volparossa-mode.ts": "17da5a4618ff49d81e1ceab1058a5eafdca285f31febe1cce9d9a454cfc2c40c",
+      "src/routes/weather/week/VolparossaForecast.svelte": "edab0d6132d6f42bde9f012ce21b3dc8cfcb59cc0ff1cf9e5c55820e3707d24c",
+      "src/routes/weather/week/VolparossaWeek.svelte": "82e56bc2e0a68856cc49070ebb003fa578c80b6eddef9da35a575a600c4a3096"
+    },
+    "weather_modules": {
+      "src/forecast.mjs": "5a3d71b0c1735e5a7716a1d126fe39c5595232d07ef54f876b8838bc5ccd14e4",
+      "src/provider.mjs": "d2dcf5b3817b148721632c74684ce83770bb670feb18872aec5a71157542b7ee"
+    },
+    "bridge_modules": {
+      "src/provider-http.mjs": "d625220b24c4a235212f463a3db967dcbc390db0841e2fe14b6704ed72e9c4cb",
+      "src/provider-core.mjs": "64540cdd981ab192dfb62d885124191a1e7f04d7996fcf6254a337f6d4bd3784",
+      "src/core-cache.mjs": "06c138835f25749e716b88cadbb72843597d885eeed9648b8b08af5cf399db91"
+    },
+    "fixture_modules": {
+      "tests/fixtures.mjs": "e2c5275a6c3b5bf3181007145722b61263ec3edcb83637caf7615d0fbdb2389a",
+      "src/ecmwf.mjs": "afccdb77c28d070a81d761e07e843c761c0b4d35d32037350ebc2cb2badda35e"
+    },
+    "built_tree_sha256": "bd5902c64c1edc3673f5d3fc161060cb1f7898e8506128fcf92ab85cd29f5c32",
+    "built_files": 88,
+    "built_bytes": 1189480,
+    "browser_helpers": {
+      "scripts/smoke_compute_model.py": "70b8a944ba6322d46690eafa74247526ac3fc13e92ae9870717e8ed7c63f5c1b",
+      "scripts/smoke_privacy.py": "dd8bdc5b73071eb13d3cd80d305266c654be07ec6bdd74cb4c456b26147f9104",
+      "scripts/stage_firefox.py": "5d54e0e35662fae6b19d5f497d68469b0757fe754601c3e016f6fda773375203"
+    },
+    "browser_revision": "08bac388a0abfd06426bebe8f6fabd0157d2e709",
+    "driver_sha256": "d9a3ec45968fe44f8e3e344d21ea97862e61a19cbcaeb55e4e59c11aaf6b9f7a",
+    "fixture_sha256": "ec3952dbbc3b2d51d5caad98e241026d085464506fcb0df688994f56784a02fe"
+  },
+  "checks": {
+    "fixture_lifecycle": {
+      "stop": {
+        "ready": true,
+        "requested": true,
+        "normal_exit": true,
+        "exit_code": 0,
+        "terminated": true
+      },
+      "eof": {
+        "ready": true,
+        "requested": true,
+        "normal_exit": true,
+        "exit_code": 0,
+        "terminated": true
+      },
+      "signal": {
+        "ready": true,
+        "requested": true,
+        "normal_exit": true,
+        "exit_code": 0,
+        "terminated": true
+      }
+    },
+    "precipitation_initial_dom_sha256": "6071d74760803b6ca45d0d4f447a5cffcf886bc1c1422e3f3cbaff79220f0619",
+    "precipitation_five_cells": true,
+    "precipitation_native_windows": true,
+    "precipitation_missing_zero_small_amount": true,
+    "precipitation_no_hourly_rate": true,
+    "air_quality_still_unavailable": true,
+    "hydration": true,
+    "native_times": true,
+    "temperature_wind": true,
+    "explicit_missing_capabilities": true,
+    "attribution": true,
+    "fixed_location": true,
+    "no_external_resources": true,
+    "precipitation_refresh_dom_sha256": "6071d74760803b6ca45d0d4f447a5cffcf886bc1c1422e3f3cbaff79220f0619",
+    "actual_refresh": true,
+    "precipitation_missing_dom_sha256": "6e7092dd62e43a024a6cbf3a52fabee84e4bde9ff95e140de170e00c2491616e",
+    "missing_values_not_zero": true,
+    "unavailable_closed": true,
+    "stale_response_closed": true,
+    "display_removed_at_expiry": true,
+    "located_route_redirects": true,
+    "unsupported_maps_not_mounted": true,
+    "provider_requests": 7
+  },
+  "cleanup": {
+    "browser_exited": true,
+    "fixture_exited": true,
+    "private_profile_removed": true,
+    "normal_browser_stop": true,
+    "normal_fixture_stop": true
+  },
+  "scenario": "precipitation",
+  "outer_cleanup": {
+    "namespace_wrapper_exited": true,
+    "private_profile_removed": true,
+    "host_netns_unchanged": true
+  },
+  "wrapper_outcome": "completed"
+}
