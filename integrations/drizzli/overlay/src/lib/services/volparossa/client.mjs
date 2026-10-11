@@ -66,5 +66,23 @@ export async function fetchProvider(fetcher, signal) {
 export function displayValue(forecast, variable, index) {
   const field = forecast.series.find((/** @type {any} */ item) => item.variable === variable);
   const value = field?.values?.[index];
-  return Number.isFinite(value) ? Number(value).toFixed(1) : 'Not available';
+  if (!Number.isFinite(value)) return 'Not available';
+  // Preserve small nonzero accumulated amounts instead of rounding them dry.
+  return variable === 'precipitation' ? String(value) : Number(value).toFixed(1);
+}
+
+/** @param {any} forecast */
+export function hasSupportedPrecipitation(forecast) {
+  const field = forecast.series.find((/** @type {any} */ item) => item.variable === 'precipitation');
+  return field?.availability === 'supported' && field.unit === 'mm'
+    && field.statistic === 'accumulation' && Array.isArray(field.accumulation_windows);
+}
+
+/** Use the supplied accumulation window, never infer it from adjacent points.
+ * @param {any} forecast @param {number} index */
+export function displayAccumulationWindow(forecast, index) {
+  const field = forecast.series.find((/** @type {any} */ item) => item.variable === 'precipitation');
+  const window = field?.accumulation_windows?.[index];
+  return hasSupportedPrecipitation(forecast) && typeof window?.start_at === 'string'
+    && typeof window?.end_at === 'string' ? `${window.start_at} → ${window.end_at}` : 'Not available';
 }

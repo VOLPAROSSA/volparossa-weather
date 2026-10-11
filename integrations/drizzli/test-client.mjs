@@ -5,6 +5,7 @@ import { mkdtemp, cp, copyFile, rm, mkdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { forecast, windForecast, NOW, QUERY } from '../../tests/fixtures.mjs';
+import { precipitationForecast } from '../../tests/precipitation-fixture.mjs';
 import { toProviderForecast } from '../../src/provider.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
@@ -12,13 +13,14 @@ await mkdir(join(root, 'build'), { recursive: true });
 const work = await mkdtemp(join(root, 'build/drizzli-client-test-'));
 await cp(join(import.meta.dirname, 'overlay/src/lib/services/volparossa'), work, { recursive: true });
 for (const file of ['provider.mjs', 'forecast.mjs']) await copyFile(join(root, 'src', file), join(work, file));
-const { validateProvider, displayValue, fetchProvider, MAX_PROVIDER_BYTES } = await import(pathToFileURL(join(work, 'client.mjs')));
+const { validateProvider, displayValue, displayAccumulationWindow, hasSupportedPrecipitation,
+  fetchProvider, MAX_PROVIDER_BYTES } = await import(pathToFileURL(join(work, 'client.mjs')));
 after(() => rm(work, { recursive: true }));
 
 function response(source = windForecast(), now = NOW) {
   const expiry = new Date(Date.parse(now) + 600000).toISOString();
   return { ...toProviderForecast(source, { now, publicationExpires: expiry,
-    variables: ['temperature_2m', 'wind_speed_10m', 'wind_direction_10m'] }),
+    variables: ['temperature_2m', 'wind_speed_10m', 'wind_direction_10m', 'precipitation', 'air_quality'] }),
   delivery: { mode: 'core-cache', publication_expires_at: expiry,
     upstream_origin_attested: false, manifest_media_type_checked: false } };
 }
@@ -38,6 +40,43 @@ test('unsupported precipitation and AQI do not become zero', () => {
   assert.equal(displayValue(value, 'wind_speed_10m', 0), 'Not available');
   assert.equal(displayValue(value, 'precipitation', 0), 'Not available');
   assert.equal(displayValue(value, 'air_quality', 0), 'Not available');
+  assert.equal(hasSupportedPrecipitation(value), false);
+  assert.equal(displayAccumulationWindow(value, 0), 'Not available');
+});
+
+test('precipitation keeps source accumulation windows, amounts, missing values and genuine zero', () => {
+  const source = precipitationForecast({ ...QUERY, steps: [3, 9, 24], includeWind: true });
+  source.samples[0].precipitation.amount = source.samples[0].precipitation.source_value = null;
+  source.samples[1].precipitation.amount = source.samples[1].precipitation.source_value = 0;
+  source.samples[2].precipitation.start_lead_hours = 6;
+  source.samples[2].precipitation.start_at = '2026-09-30T18:00:00.000Z';
+  source.samples[2].precipitation.source_value = 0.00001;
+  source.samples[2].precipitation.amount = 0.01;
+  const value = validateProvider(response(source), NOW);
+  assert.equal(hasSupportedPrecipitation(value), true);
+  assert.equal(displayValue(value, 'precipitation', 0), 'Not available');
+  assert.equal(displayValue(value, 'precipitation', 1), '0');
+  assert.equal(displayValue(value, 'precipitation', 2), '0.01');
+  assert.equal(displayAccumulationWindow(value, 0), `${QUERY.run} → ${source.samples[0].valid_at}`);
+  assert.equal(displayAccumulationWindow(value, 2), `2026-09-30T18:00:00.000Z → ${source.samples[2].valid_at}`);
+  assert.equal(displayValue(value, 'air_quality', 0), 'Not available');
+});
+
+test('precipitation projection cannot replace native windows, units or totals with inferred rates', () => {
+  const value = response(precipitationForecast({ ...QUERY, steps: [3, 9, 24] }));
+  for (const mutate of [
+    rain => { rain.accumulation_windows[1].start_at = value.timeline.valid_at[0]; },
+    rain => { rain.accumulation_windows[1].end_at = value.timeline.valid_at[0]; },
+    rain => { rain.accumulation_windows.pop(); },
+    rain => { delete rain.accumulation_windows; },
+    rain => { rain.values[1] /= 9; },
+    rain => { rain.unit = 'mm/h'; },
+    rain => { rain.statistic = 'rate'; },
+  ]) {
+    const changed = structuredClone(value);
+    mutate(changed.series.find(item => item.variable === 'precipitation'));
+    assert.throws(() => validateProvider(changed, NOW), /FORECAST_INVALID/);
+  }
 });
 
 test('genuine zero differs from a missing value', () => {

@@ -12,14 +12,16 @@
   "reviewed_main": "1d3183b90fcf84163741b7ffa4bc3f411ed555eb",
   "baseline_note": "Intentionally uses the inspected pre-SvelteKit-3 baseline; updating the pin requires reviewing framework and integration changes together.",
   "weather_modules": {
-    "src/forecast.mjs": "cb232710aae64564107a4c24122b19e87ad8ff112c2fe56163fc13996cdd816c",
-    "src/provider.mjs": "db07eac4a8f7df334206ca3f39a4ecd85f89db1196e4042e32edd4956b998754"
+    "src/forecast.mjs": "5a3d71b0c1735e5a7716a1d126fe39c5595232d07ef54f876b8838bc5ccd14e4",
+    "src/provider.mjs": "d2dcf5b3817b148721632c74684ce83770bb670feb18872aec5a71157542b7ee"
   },
   "weather_modules_license": "GPL-3.0-only; original Weather modules remain separately identified. Preserve upstream AGPL and all original notices in the combined client distribution.",
   "mode": "VITE_VOLPAROSSA_WEATHER=1",
   "transport": "GET /api/volparossa/forecast, same-origin, no parameters, one locally configured public-community forecast",
-  "scope": "Actual Drizz.li week-route integration, not a generic demo. Native UTC temperature/wind points; other weather capabilities explicitly unavailable in VOLPAROSSA mode. Ordinary upstream build retains upstream providers.",
+  "scope": "Actual Drizz.li week-route integration, not a generic demo. Native UTC temperature/wind points and optional precipitation totals with explicit source accumulation windows; other weather capabilities explicitly unavailable in VOLPAROSSA mode. Ordinary upstream build retains upstream providers.",
+  "deployment": "Stage client and bridge together: exact provider capability validation rejects a mismatched old client, including temperature-only responses from the new bridge.",
   "build_caution": "Do not run npm run build blindly: upstream prebuild downloads mutable external assets. Use reviewed locked dependencies and explicit vite build with the mode enabled; no external assets are necessary for the native forecast table. No dependency installation or upstream scripts are performed by stage.py. prepare_build.py replaces upstream CDN localization imports with the SHA512-verified build-plugins.json packages and preserves their MIT notices before compilation.",
-  "verified": ["11 client and actual Svelte compiler/render tests", "4 inert browser harness boundary tests", "full app svelte-check", "full Vite production client and SSR build with adapter-static", "actual Drizz.li hydration and interaction through the real local HTTP bridge in isolated Firefox with synthetic provider data; see browser-smoke.json"],
-  "remaining": ["actual core-to-client joined trial", "additional locations and client configuration", "mobile Overmorrow integration", "precipitation and air-quality sources and rendering"]
+  "baseline_verified": ["Before precipitation: 11 client and actual Svelte compiler/render tests, full app svelte-check, full Vite production build, isolated Firefox hydration/interaction with synthetic provider data. browser-smoke.json pins that older build, not the precipitation changes."],
+  "verified": ["9 client tests including precipitation projections and native accumulation windows", "5 actual Svelte render/compiler tests", "precipitation app svelte-check with zero errors and warnings", "networkless Vite client/SSR production build with adapter-static; see precipitation-build.json", "actual IFS and AIFS precipitation origin acquisition with the pinned decoder; not an overlay or browser proof"],
+  "remaining": ["precipitation browser hydration and interaction", "actual core-to-client joined trial", "additional locations and client configuration", "mobile Overmorrow integration", "air-quality sources and rendering"]
 }

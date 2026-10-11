@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "kind": "precipitation-client-build-and-render",
+  "success": true,
+  "upstream_commit": "d2a6839e2b3f2e561b849d83014fc5959bed39cc",
+  "node_sha256": "bc17c508ffeed0ec622934f9b7fa72f8e78da65350e63c3eceb56fa688aa5e12",
+  "package_lock_sha256": "9b04f44d254fff82180b32716353c2e7b4e444de7da26cd3fad7eb92512f3454",
+  "node_modules_lock_sha256": "90bd71370de636534945e6a66966ad012b25de1dc10de903671d8d7cb1cb442c",
+  "settings_sha256": "be2fe7b5f7f93e63fdd218c9c6048f16bb1390b4a943c355b99e859fc51990ff",
+  "source": {
+    "src/forecast.mjs": "5a3d71b0c1735e5a7716a1d126fe39c5595232d07ef54f876b8838bc5ccd14e4",
+    "src/provider.mjs": "d2dcf5b3817b148721632c74684ce83770bb670feb18872aec5a71157542b7ee",
+    "upstream.patch": "44fa73a806b9361b066d8f277a7be8fc8ecc46092e53a720fc26dfb42ebd40db",
+    "overlay/src/lib/services/volparossa/client.mjs": "9b1746ffb5d5895e45b414fe009950394573dab462339b488d0a6cd2c2588790",
+    "overlay/src/lib/services/volparossa/client.d.mts": "37bd54e5a40d64288d8dedb1823c83ec7a72abe140aedcd71c4dceb652d1447d",
+    "overlay/src/routes/weather/week/VolparossaForecast.svelte": "edab0d6132d6f42bde9f012ce21b3dc8cfcb59cc0ff1cf9e5c55820e3707d24c",
+    "test-render.mjs": "f70f5536594a5a44d5088c56ad12e803f2ae32d36c3c7cb0afae8367389be1ad"
+  },
+  "built_tree": {
+    "algorithm": "SHA256 of compact JSON sorted relative-path to SHA256 mapping",
+    "files": 88,
+    "bytes": 1189480,
+    "sha256": "bd5902c64c1edc3673f5d3fc161060cb1f7898e8506128fcf92ab85cd29f5c32"
+  },
+  "checks": {
+    "paraglide_compile_exit_status": 0,
+    "sveltekit_sync_exit_status": 0,
+    "svelte_check_exit_status": 0,
+    "svelte_errors": 0,
+    "svelte_warnings": 0,
+    "vite_client_ssr_static_build_exit_status": 0,
+    "svelte_render_tests_passed": 5,
+    "synthetic_precipitation_rendered": true,
+    "networkless_build": true,
+    "old_stage_unchanged": true
+  },
+  "limits": {"node_heap_mib": 768, "command_wall_seconds": 180},
+  "dependencies": "Independent copies of the previously reviewed locked dependency tree and verified local plugins; no downloads, npm lifecycle scripts or fresh npm integrity claim.",
+  "local_proof_sha256": "32b596ab7e5a74559944437dea2f5211c719a645ba806a55a8fd3a5f5b6960b5",
+  "browser_execution_proven": false,
+  "core_overlay_roundtrip_proven": false,
+  "live_origin_proven_by_this_build": false
+}

@@ -7,11 +7,13 @@ not a separate weather demonstration or a complete replacement for Drizz.li.
 The current view shows temperature and wind at the model's native UTC forecast
 times. It identifies the configured coordinates, model run, expiry, ECMWF
 attribution, licence and processing changes. It does not invent hourly values,
-current observations, daily extrema, weather icons, precipitation or air quality.
+current observations, daily extrema, weather icons or air quality. Optional
+precipitation is shown as a total in mm alongside its native UTC accumulation
+window, not as an inferred hourly rate. Overlapping windows must not be summed.
 
 ## What works, and what remains
 
-Verified in this development slice:
+The baseline temperature/wind build was verified as follows:
 
 - Eleven tests cover the client validator, fixed request boundary, native and
   missing values, upstream integration guards, actual Svelte rendering, escaped
@@ -32,9 +34,19 @@ Verified in this development slice:
   source, built assets, runtime and driver hashes; it does not claim a live core,
   overlay or weather-origin fetch.
 
+The precipitation extension adds independently checked model units and source
+windows, including missing and genuine zero values. Nine client tests and five
+actual Svelte render/compiler tests pass. The new full app type check and
+networkless production build also pass; [its receipt](precipitation-build.json)
+binds the updated source and assets. The source adapter separately passes real
+IFS and AIFS native acquisition trials.
+The retained synthetic browser receipt above predates precipitation and does
+not attest the new build. Rebuild and deploy the client and bridge together:
+an older client rejects the new provider capability list rather than guessing.
+
 A joined live core-to-browser trial, additional location selection,
-precipitation/air-quality inputs, and the Overmorrow mobile integration remain
-open. Synthetic browser success does not prove those capabilities.
+air-quality inputs, and the Overmorrow mobile integration remain open.
+Synthetic browser success does not prove those capabilities.
 
 ## Data and privacy boundary
 
@@ -204,7 +216,7 @@ cache to make it pass.
 The long-running bridge requires `reuseCache: true` and uses that **same cache**
 for its first request and later refreshes. This checks the existing owned store;
 it neither creates a cache nor relaxes its ownership checks. Its area, model run,
-lead times, wind presence, publisher, name and minimum revision must match the
+lead times, wind/precipitation presence, publisher, name and minimum revision must match the
 selected publication. Expired publications must be replaced with genuinely fresh
 data, not given new timestamps. The bridge does not acquire data from an Internet
 origin or publish it when a request fails.
@@ -232,7 +244,8 @@ locations are dedicated core-provider working directories, not the static site.
       "model": "ifs",
       "steps": [3, 9, 24],
       "communityArea": true,
-      "includeWind": true
+      "includeWind": true,
+      "includePrecipitation": false
     },
     "reuseCache": true
   },
@@ -240,9 +253,12 @@ locations are dedicated core-provider working directories, not the static site.
 }
 ```
 
-`includeWind` must match the publication, not merely the desired UI fields.
-Precipitation and air quality currently return explicit unavailable capabilities;
-requesting them does not add a data source. A temperature-only publication can
+`includeWind` and `includePrecipitation` must match the publication, not merely
+the desired UI fields. Older configurations may omit `includePrecipitation`,
+which defaults to false. To consume a precipitation-inclusive publication,
+retrieve it with `--include-precipitation` and set that configuration flag to true.
+Air quality remains unavailable; requesting it does not add a data source.
+A temperature-only publication can
 use `includeWind: false`; the view then reports missing wind rather than zero.
 
 Set this **specific file** to mode `0600`, keep scratch space private (`0700`),

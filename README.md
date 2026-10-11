@@ -20,14 +20,17 @@ no intermediate weather API is required.
 - Opt into real 10 m wind components, speed and meteorological direction with
   `--include-wind`. Decode `2t`, `10u` and `10v` independently and require matching
   initialization, valid time, full grid geometry and nearest grid point.
+- Add native precipitation totals with `--include-precipitation`, independently
+  of wind. Retain the source accumulation window and normalize to millimetres;
+  do not turn cumulative totals into invented hourly rain.
 - Read an explicitly trusted publisher's forecast through core `content fetch-name`,
   checking receipt identity, hash, bytes, requested location/model/run/steps and
   both original forecast expiry and signed publication expiry.
 - Build the pinned Drizz.li web client with a VOLPAROSSA forecast view, served by
   an explicit local HTTP bridge to that same core-cache consumer.
 
-This is a **temperature-and-wind development component**, not yet a complete weather
-app. Precipitation, air quality, observations, trained corrections, model comparison,
+This is a **temperature, wind and precipitation development component**, not yet a complete weather
+app. Air quality, observations, trained corrections, model comparison,
 automatic shared acquisition and native mobile integration remain future work.
 The Drizz.li build and isolated browser interaction pass with synthetic weather;
 displaying a real forecast delivered through the live overlay still needs a
@@ -38,8 +41,7 @@ The [real IFS origin-to-native-decoder smoke](third_party/ecmwf-smoke.json) pass
 658,325 selected GRIB bytes produced a 15.396 °C nearest-grid forecast for the
 explicit public Berlin test point, with exact initialization/valid time and full
 temporary-process cleanup. This establishes decoding, not measured accuracy.
-The AIFS request contract is supported but its native end-to-end run is not yet
-proven. The original twenty-two focused tests use synthetic payloads and a real subprocess
+The original twenty-two focused tests use synthetic payloads and a real subprocess
 fixture; those are not a live Weather-to-core overlay proof.
 
 The [real opt-in wind smoke](third_party/ecmwf-wind-smoke.json) also passes through
@@ -47,6 +49,12 @@ the CLI and the same pinned native decoder: one IFS initialization, three select
 fields totaling 2,292,842 bytes, and a co-located Berlin vector of −1.87405 m/s
 eastward and 1.56929 m/s northward. That gives 2.444327 m/s from 129.942097°;
 it is a decoded forecast, not evidence that the forecast is accurate.
+
+The [native precipitation trial](third_party/ecmwf-precipitation-smoke.json)
+passes for both IFS and AIFS Single. It checks three native lead times per model,
+including AIFS step-zero precipitation, through the actual CLI and decoder.
+IFS additionally includes wind. These are bounded origin/decoder trials, not
+proof of forecast accuracy or complete overlay-to-browser delivery.
 
 ## Try a deliberately chosen model run
 
@@ -94,6 +102,27 @@ no arbitrary calm threshold is imposed. Missing or ambiguous whole model fields,
 rotated vectors, or mismatched grids fail explicitly. These are instantaneous
 10 m vectors, not gusts, observations or newly interpolated hourly values.
 
+### Precipitation totals with explicit time windows
+
+Add `--include-precipitation` to `origin` or `core-cache` to request the optional
+`precipitation` block. It contains `amount` in millimetres, `source_value`, native
+start/end lead hours and UTC times, and the field's evidence. The cache request
+must match that field set exactly; selecting a display variable alone does not
+enable acquisition or change the requested publication.
+
+IFS total precipitation uses parameter 228 in metres; AIFS Single uses 228228
+in kilograms per square metre. The adapter checks the model-specific identity
+and unit before converting to millimetres of water equivalent. See the
+[ECMWF AIFS field definitions](https://confluence.ecmwf.int/plugins/viewsource/viewpagesrc.action?pageId=496875126).
+All requested fields must share the model run, grid and nearest point.
+
+Each amount covers its **own source accumulation window**. Windows may overlap;
+do not add their totals together. The adapter neither differences adjacent
+samples nor derives a rain rate or probability. Nonconsecutive requested lead
+times do not define new intervals. Missing values remain `null`, genuine zero
+remains zero, and a zero-length window is accepted only at model step zero with
+a zero or missing value. Unknown statistical metadata fails explicitly.
+
 The original field covers a global grid, but contains **only one parameter at one
 lead time**, not an entire multi-parameter model file. A field can supply many
 local points. Coordinates are used locally and are not included in upstream URLs;
@@ -102,7 +131,8 @@ files. There is no geolocation, location history, telemetry or implicit training
 publication. Explicit stdout output may contain the chosen location.
 
 Requests are sequential, require exact HTTP 206 ranges, and bound each index to
-512 KiB and field to 8 MiB; wind selects three fields per lead instead of one.
+512 KiB and field to 8 MiB; wind selects three fields per lead instead of one,
+and precipitation adds one field. All fields reuse the same index for that lead.
 Each transfer has a 30-second deadline. ecCodes receives
 a single temporary field with a 512 MiB address-space limit, 20 CPU seconds and a
 30-second wall deadline. Its subprocess is joined on cancellation; the exact new
@@ -170,24 +200,26 @@ Neither case claims that a reused forecast was freshly downloaded from ECMWF.
 | Provider field | Meaning |
 | --- | --- |
 | `timeline.valid_at` and `lead_hours` | Original UTC model-valid times in the supplied order, not an invented hourly grid |
-| `capabilities.implemented_variables` | Temperature, wind speed and wind direction understood by this version |
+| `capabilities.implemented_variables` | Temperature, wind speed, wind direction and precipitation understood by this version |
 | `capabilities.available_variables` | Fields present in this particular forecast; individual samples may still be missing |
 | `series` | Requested variables with units, values and an aligned `value_status` array |
 | `freshness.expires_at` | Earlier of the original forecast expiry and supplied signed-publication expiry |
 
-The variables are `temperature_2m` in `degC`, `wind_speed_10m` in `m/s` and
-`wind_direction_10m` in degrees clockwise **from** north. `availability: supported`
+The variables are `temperature_2m` in `degC`, `wind_speed_10m` in `m/s`,
+`wind_direction_10m` in degrees clockwise **from** north and `precipitation` in
+`mm`. Precipitation additionally carries `statistic: accumulation` and an aligned
+`accumulation_windows` array. `availability: supported`
 does not mean every value is known: `value_status: missing` retains `null`.
 Actual calm wind retains speed `0`, direction `null` and status `calm`.
-An unsupported variable, such as precipitation or AQI, has
+An unsupported variable, such as AQI, has
 `availability: unavailable`, reason `unsupported_variable` and no units or values.
-Wind requested from a temperature-only forecast instead has reason
+Wind or precipitation requested from a forecast without that field instead has reason
 `field_not_in_forecast`. The adapter never fills these gaps with zeros, weather
 icons, current observations, interpolation or an external provider.
 
 Use the existing CLI with `--output-contract provider` and optional `--variables`.
 The default output contract and temperature-only behaviour remain unchanged.
-Selecting a wind variable does not silently add `--include-wind` or choose another
+Selecting wind or precipitation does not silently add its acquisition flag or choose another
 published field set. Variable lists are bounded to 16 distinct identifiers and
 are validated before retrieval; the underlying forecast retains its 16-sample limit.
 
@@ -196,7 +228,7 @@ are validated before retrieval; the underlying forecast retains its 16-sample li
 # to retrieve a deliberately selected publication through an already configured core.
 node scripts/forecast.mjs core-cache \
   --latitude 52.52 --longitude 13.41 --run 2026-09-30T12:00:00.000Z \
-  --model ifs --steps 12,15,24 --community-area --include-wind \
+  --model ifs --steps 12,15,24 --community-area --include-wind --include-precipitation \
   --output-contract provider \
   --variables temperature_2m,wind_speed_10m,wind_direction_10m,precipitation
 ```
@@ -212,7 +244,8 @@ the result: `checked_at` records validation time and never resets acquisition ag
 
 The [Drizz.li integration guide](integrations/drizzli/README.md) stages a pinned
 upstream checkout with a VOLPAROSSA mode in its actual weekly forecast route.
-It displays the configured area's native UTC temperature and wind points,
+It displays the configured area's native UTC temperature and wind points and,
+when present, precipitation amounts with their source accumulation windows,
 publication expiry, source attribution and missing capabilities. Unsupported
 views, geolocation, geocoding, maps and the original weather-service calls are
 disabled in this mode. The ordinary upstream build remains unchanged.
@@ -253,18 +286,21 @@ the Drizz.li build is not evidence of a working mobile integration. Both clients
 must preserve absent data, expiry, units and provenance, without hidden provider
 fallback or location publication.
 
-### Planned additional weather data
+### Additional weather data
 
-- [ ] Precipitation: acquire suitable licensed source fields, distinguish accumulated
-  totals from interval amounts and rates, verify units/time windows and missing
-  values, then expose the validated result in the application adapters.
+- [x] Precipitation source and shared provider: IFS/AIFS native totals, checked
+  units/time windows and missing values, with real origin/decoder trials.
+- [ ] Complete precipitation delivery through the overlay and application clients;
+  the Drizz.li component is added, while the joined browser proof and Overmorrow
+  integration remain separate requirements.
 - [ ] Air quality: acquire suitable licensed pollutant data, retain concentration
   units and averaging periods, explicitly identify any derived index and its
   definition, test those transformations, then add application display.
 
-Both are required follow-up work, not present provider capabilities. Continue to
-use direct authorized sources without an Open-Meteo fallback; until verified data
-exists, the current provider must keep returning `unsupported_variable`.
+Air quality and the remaining application work are required, not dropped.
+Continue to use direct authorized sources without an Open-Meteo fallback.
+Air quality returns `unsupported_variable`; precipitation absent from a selected
+forecast returns `field_not_in_forecast`. Neither means a measured zero.
 
 ## Time, models and evidence
 

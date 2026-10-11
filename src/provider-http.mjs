@@ -45,7 +45,8 @@ export function providerHttpConfiguration(config) {
     && typeof core.name === 'string' && Buffer.byteLength(core.name) >= 1 && Buffer.byteLength(core.name) <= 128
     && !/[\x00-\x1f\x7f]/.test(core.name) && Number.isSafeInteger(core.minRevision)
     && core.minRevision >= 1, 'BRIDGE_CONFIG_INVALID');
-  exact(core.query, ['latitude', 'longitude', 'run', 'model', 'steps', 'communityArea', 'includeWind'], 'BRIDGE_CONFIG_INVALID');
+  exact(core.query, ['latitude', 'longitude', 'run', 'model', 'steps', 'communityArea', 'includeWind',
+    ...(core.query && Object.hasOwn(core.query, 'includePrecipitation') ? ['includePrecipitation'] : [])], 'BRIDGE_CONFIG_INVALID');
   core.query = request(core.query);
   requireThat(core.query.communityArea, 'PUBLIC_COMMUNITY_AREA_REQUIRED');
   return Object.freeze({ core: Object.freeze(core), variables: providerVariables(config.variables) });
@@ -121,6 +122,7 @@ function resultBytes(result, configuration) {
   requireThat(forecast.area.sharing === 'public-community' && forecast.area.latitude === query.latitude
     && forecast.area.longitude === query.longitude && forecast.source.model === query.model
     && forecast.source.model_run_at === query.run && Object.hasOwn(forecast.units, 'wind_10m') === query.includeWind
+    && Object.hasOwn(forecast.units, 'precipitation') === query.includePrecipitation
     && isDeepStrictEqual(forecast.samples.map(sample => sample.lead_hours), [...query.steps]), 'FORECAST_QUERY_MISMATCH');
   requireThat(!freshness(forecast, new Date().toISOString(), delivery.publication_expires_at).stale, 'STALE_FORECAST');
   const bytes = Buffer.from(JSON.stringify(result));
