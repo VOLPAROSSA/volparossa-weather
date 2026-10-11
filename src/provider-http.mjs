@@ -175,14 +175,16 @@ export async function startProviderHttp({ config, staticRoot, staticProfile = 'd
     && typeof staticProfile === 'string' && Object.hasOwn(STATIC_PROFILES, staticProfile),
   'BRIDGE_CONFIG_INVALID');
   const profile = STATIC_PROFILES[staticProfile], assets = await staticAssets(staticRoot, profile);
-  let origin, active = null, closing = false;
+  let origin, active = null, closing = false, cleanupUnconfirmed = false;
   const controllers = new Set();
-  function send(response, status, body, type = 'application/json') {
+  function send(response, status, body, type = 'application/json', extraHeaders = {}) {
     if (response.destroyed || response.writableEnded) return;
-    response.writeHead(status, { ...profile.headers, 'Content-Type': type, 'Content-Length': body.length });
+    response.writeHead(status, { ...profile.headers, ...extraHeaders, 'Content-Type': type, 'Content-Length': body.length });
     response.end(body);
   }
-  const error = (response, status, code) => send(response, status, Buffer.from(JSON.stringify({ error: code })));
+  // Retry pacing is not a reservation or a promise that cleanup has completed.
+  const error = (response, status, code) => send(response, status, Buffer.from(JSON.stringify({ error: code })),
+    'application/json', status === 429 && code === 'FORECAST_BUSY' ? { 'Retry-After': '1' } : {});
   const server = createServer({ maxHeaderSize: 8192, headersTimeout: 5000, requestTimeout: 5000,
     keepAliveTimeout: 1000, connectionsCheckingInterval: 1000 }, (incoming, response) => {
     const counts = {};
@@ -216,7 +218,7 @@ export async function startProviderHttp({ config, staticRoot, staticProfile = 'd
     }
     const selected = airQuality ? configuration.airQuality : configuration;
     const unavailable = airQuality ? 'AIR_QUALITY_UNAVAILABLE' : 'FORECAST_UNAVAILABLE';
-    if (!selected) return error(response, 503, unavailable);
+    if (!selected || cleanupUnconfirmed) return error(response, 503, unavailable);
     if (active) return error(response, 429, 'FORECAST_BUSY');
     const controller = new AbortController(); controllers.add(controller);
     const abort = () => controller.abort();
@@ -235,7 +237,13 @@ export async function startProviderHttp({ config, staticRoot, staticProfile = 'd
           { variables: selected.variables, signal: controller.signal }));
         if (controller.signal.aborted) throw new Error('CANCELLED');
         send(response, 200, resultBytes(result, selected, airQuality));
-      } catch { error(response, 503, unavailable); }
+      } catch (failure) {
+        // The subprocess adapter distinguishes an ordinary failure after joined
+        // cleanup from an unconfirmed process group. Settling that promise alone
+        // cannot authorize another operation or report a clean bridge shutdown.
+        if (failure?.code === 'CORE_CLEANUP_UNCONFIRMED') cleanupUnconfirmed = true;
+        error(response, 503, unavailable);
+      }
       finally {
         clearTimeout(timer); incoming.removeListener('aborted', abort); response.removeListener('close', disconnected);
         controllers.delete(controller); active = null;
@@ -261,6 +269,7 @@ export async function startProviderHttp({ config, staticRoot, staticProfile = 'd
       await Promise.race([Promise.all([stopped, running]), new Promise((_, reject) => {
         timer = setTimeout(() => reject(new Error('BRIDGE_CLEANUP_UNCONFIRMED')), 5000);
       })]);
+      if (cleanupUnconfirmed) throw new Error('BRIDGE_CLEANUP_UNCONFIRMED');
     } finally { clearTimeout(timer); }
   } });
 }

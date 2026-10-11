@@ -112,6 +112,7 @@ async function fetchCachedProduct({ mode, executable, controlSocket, cache, scra
   requireThat(socket.isSocket() && !socket.isSymbolicLink(), 'CONTROL_SOCKET_INVALID');
   const work = await mkdtemp(join(scratchParent, 'forecast-'));
   const output = join(work, 'forecast.json');
+  let cleanupUnconfirmed;
   try {
     const args = ['--control-socket', controlSocket, 'content', 'fetch-name',
       '--publisher-key', publisherKey, '--name', name, '--min-revision', String(minRevision),
@@ -154,8 +155,17 @@ async function fetchCachedProduct({ mode, executable, controlSocket, cache, scra
       revision: receipt.revision, manifest_id: receipt.manifest_id, sha256: receipt.sha256,
       publication_expires_at: expiry.toISOString(), freshness: age,
       upstream_origin_attested: false, manifest_media_type_checked: false } };
+  } catch (failure) {
+    if (failure?.code === 'CORE_CLEANUP_UNCONFIRMED') cleanupUnconfirmed = failure;
+    throw failure;
   } finally {
     // Only our new, exact temporary output directory. The agent's verified cache remains.
-    await rm(work, { recursive: true, force: false });
+    try { await rm(work, { recursive: true, force: false }); }
+    catch (failure) {
+      // Preserve the process-cleanup failure used by the HTTP admission guard,
+      // even when removing our scratch directory independently fails as well.
+      // Ordinary filesystem cleanup errors remain visible to their caller.
+      throw cleanupUnconfirmed ?? failure;
+    }
   }
 }
