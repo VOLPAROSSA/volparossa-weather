@@ -319,6 +319,9 @@ Cold retrieval uses a bounded per-product deadline aligned with the core bridge,
 with actual request cancellation and short retries only for explicit busy replies.
 Core-to-Overmorrow delivery and native Android/iOS execution remain unverified.
 Packaging, background lifecycle and home-screen widgets remain required.
+The [joined core-delivery trial](integrations/overmorrow/README.md#joined-core-delivery-trial)
+now has a separate Overmorrow bundle profile and exact native table checks;
+its thirteen preparation/driver tests pass, but the live trial remains open.
 
 ### Additional weather data
 

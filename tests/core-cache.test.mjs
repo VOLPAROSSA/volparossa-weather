@@ -10,10 +10,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fetchCachedForecast } from '../src/core-cache.mjs';
 import { fetchCachedProvider } from '../src/provider-core.mjs';
+import { MAX_AGE_SECONDS, validateForecast } from '../src/forecast.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { forecast, windForecast, QUERY } from './fixtures.mjs';
+import { forecast, windForecast, NOW, QUERY } from './fixtures.mjs';
 import { precipitationForecast } from './precipitation-fixture.mjs';
 
 const query = { ...QUERY, run: new Date(Math.floor(Date.now() / 21600000) * 21600000).toISOString() };
@@ -96,16 +97,41 @@ test('wrong signer/name/revision/expiry/hash/type never becomes a forecast or or
   }
 });
 
+function staleForecast(data) {
+  // One clock sample: a later expiry read could exceed the maximum validity by
+  // even one millisecond and test malformed input instead of a stale forecast.
+  const now = Date.now(), old = structuredClone(data);
+  old.source.acquired_at = new Date(now - 3600000).toISOString();
+  old.freshness.expires_at = new Date(now - 1800000).toISOString();
+  // Choose an older run too, so this stays valid if the test crosses a run boundary.
+  old.source.model_run_at = new Date(Date.parse(data.source.model_run_at) - 21600000).toISOString();
+  for (const sample of old.samples) {
+    sample.valid_at = new Date(Date.parse(old.source.model_run_at) + sample.lead_hours * 3600000).toISOString();
+  }
+  return old;
+}
+
+test('stale fixture stays structurally valid when the wall clock advances between reads', t => {
+  const data = forecast(QUERY, NOW);
+  let reads = 0;
+  const clock = t.mock.method(Date, 'now', () => Date.parse(NOW) + reads++);
+  let old;
+  try { old = staleForecast(data); } finally { clock.mock.restore(); }
+  assert.equal(reads, 1);
+  assert.equal(Date.parse(old.freshness.expires_at) - Date.parse(old.source.acquired_at), MAX_AGE_SECONDS * 1000);
+  assert.strictEqual(validateForecast(old), old);
+  assert.ok(Date.parse(old.freshness.expires_at) < Date.parse(NOW));
+  const overlong = structuredClone(old);
+  overlong.freshness.expires_at = new Date(Date.parse(old.freshness.expires_at) + 1).toISOString();
+  assert.throws(() => validateForecast(overlong), error => error.code === 'EXPIRY_INVALID');
+});
+
 test('stale public forecast remains stale despite newly signed publication and fresh retrieval', async t => {
   const base = await fixture(t);
-  const old = structuredClone(base.data);
-  old.source.acquired_at = new Date(Date.now() - 3600000).toISOString();
-  old.freshness.expires_at = new Date(Date.now() - 1800000).toISOString();
-  // Choose an older run too, so this stays valid if the test crosses a run boundary.
-  old.source.model_run_at = new Date(Date.parse(query.run) - 21600000).toISOString();
-  old.samples[0].valid_at = new Date(Date.parse(old.source.model_run_at) + old.samples[0].lead_hours * 3600000).toISOString();
-  const { options } = await fixture(t, { forecast: old });
+  const old = staleForecast(base.data);
+  const { root, options } = await fixture(t, { forecast: old });
   await assert.rejects(fetchCachedForecast({ ...options, query: { ...query, run: old.source.model_run_at } }), error => error.code === 'STALE_FORECAST');
+  assert.deepEqual((await readdir(root)).sort(), ['control.sock', 'fake-core']);
 });
 
 test('location publicity/query binding is explicit and private work directory is enforced', async t => {
