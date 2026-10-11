@@ -104,6 +104,26 @@ const nodes=[]; const visit=root=>{for(const n of root.querySelectorAll('*')){
 }}; visit(document);
 """
 
+# Flutter's pinned engine identifies semantics objects by this ID prefix and
+# represents their labels as aria-label, direct DOM text, or owned sized spans.
+# Heading/header roles replace flt-semantics with h1..h6/header elements.
+SEMANTIC_LABELS_JS = """
+const semanticNodes=nodes.filter(n=>/^flt-semantic-node-[0-9]+$/.test(n.id));
+const semanticSet=new Set(semanticNodes), labels=[];
+function ownerOf(n){
+  for(let p=n.parentElement;p;p=p.parentElement)if(semanticSet.has(p))return p;
+  return null;
+}
+for(const n of semanticNodes){
+  const label=n.getAttribute('aria-label');if(label)labels.push(label);
+  for(const child of n.childNodes)
+    if(child.nodeType===3&&child.textContent.trim())labels.push(child.textContent);
+  for(const span of n.querySelectorAll('span'))
+    if(ownerOf(span)===n&&span.childElementCount===0&&span.textContent)
+      labels.push(span.textContent);
+}
+"""
+
 
 def activate_semantics(client):
     return client.script(NODES_JS + """
@@ -114,16 +134,7 @@ return nodes.some(n=>n.tagName.toLowerCase()==='flt-semantics');
 
 
 def snapshot(client):
-    return client.script(NODES_JS + """
-const labels=[];
-for(const n of nodes){
-  if(n.tagName.toLowerCase()==='flt-semantics'){
-    const label=n.getAttribute('aria-label'); if(label)labels.push(label);
-    for(const span of n.querySelectorAll('span'))
-      if(span.closest('flt-semantics')===n&&span.childElementCount===0&&span.textContent)
-        labels.push(span.textContent);
-  }
-}
+    return client.script(NODES_JS + SEMANTIC_LABELS_JS + """
 // Flutter may merge a whole forecast card into one accessible label. Bound
 // the entire snapshot as well as each label; do not mistake that normal merge
 // for an oversized application response or truncate a native time/value.
@@ -152,22 +163,120 @@ def labels_contain(observed, *values):
     return all(any(value in label for label in labels) for value in values)
 
 
-def click_label(client, label):
+def button_state(client, label):
+    """Read readiness/geometry; do not execute a synthetic DOM click."""
     require(label in ("Refresh forecasts", "Air quality details", "Back"))
     encoded = json.dumps(label)
     return client.script(NODES_JS + f"""
 const wanted={encoded};
-const b=nodes.find(n=>(n.getAttribute('role')==='button'||n.tagName.toLowerCase()==='button')
-  &&(n.getAttribute('aria-label')===wanted||n.textContent.trim()===wanted)
-  &&n.getAttribute('aria-disabled')!=='true'&&!n.disabled);
-if(!b)return false;b.click();return true;
-""") is True
+const candidates=nodes.filter(n=>(n.getAttribute('role')==='button'||n.tagName.toLowerCase()==='button')
+  &&(n.getAttribute('aria-label')===wanted||n.textContent.trim()===wanted));
+if(candidates.length!==1)return {{found:false,count:candidates.length,enabled:false,
+  tappable:false,in_viewport:false,hit_target:false,x:0,y:0}};
+const b=candidates[0], r=b.getBoundingClientRect(), style=getComputedStyle(b);
+const x=Math.floor(r.left+r.width/2), y=Math.floor(r.top+r.height/2);
+let hit=document.elementFromPoint(x,y);
+for(let depth=0;depth<8&&hit?.shadowRoot;depth++){{
+  const next=hit.shadowRoot.elementFromPoint(x,y);if(!next||next===hit)break;hit=next;
+}}
+return {{found:true,count:1,enabled:b.getAttribute('aria-disabled')!=='true'&&!b.disabled,
+  tappable:b.hasAttribute('flt-tappable'),
+  in_viewport:r.width>0&&r.height>0&&x>=0&&y>=0&&x<innerWidth&&y<innerHeight
+    &&style.visibility!=='hidden'&&style.display!=='none',
+  hit_target:!!hit&&(hit===b||b.contains(hit)),x,y}};
+""")
+
+
+def button_ready(value):
+    return (type(value) is dict and set(value) == {
+        "found", "count", "enabled", "tappable", "in_viewport", "hit_target", "x", "y"}
+        and all(type(value[key]) is bool for key in
+                ("found", "enabled", "tappable", "in_viewport", "hit_target"))
+        and all(value[key] is True for key in ("found", "enabled", "tappable", "in_viewport"))
+        and type(value["count"]) is int and value["count"] == 1
+        and all(type(value[key]) is int and 0 <= value[key] < 4096 for key in ("x", "y")))
+
+
+def pointer_activate(client, state):
+    """A real WebDriver mouse press/release at the actual visible button."""
+    require(button_ready(state))
+    try:
+        client.command("WebDriver:PerformActions", {"actions": [{
+            "type": "pointer", "id": "overmorrow-pointer", "parameters": {"pointerType": "mouse"},
+            "actions": [
+                {"type": "pointerMove", "duration": 0, "origin": "viewport", "x": state["x"], "y": state["y"]},
+                {"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}],
+        }]})
+    finally:
+        client.command("WebDriver:ReleaseActions", {})
+
+
+def request_counters(fixture_status, observed):
+    value = {"provider_weather": fixture_status.get("calls"),
+             "provider_air_quality": fixture_status.get("airQualityCalls"),
+             "browser_weather": observed.get("weatherRequests"),
+             "browser_air_quality": observed.get("airQualityRequests")}
+    require(all(type(number) is int and 0 <= number <= 32 for number in value.values()))
+    return value
+
+
+def detail_observation(client, observed, fixture_status):
+    """Closed diagnostic flags, never raw app text or request URLs."""
+    geometry = client.script(NODES_JS + """
+let weatherNodes=0,hiddenWeatherNodes=0,offscreenWeatherNodes=0;
+for(const n of nodes){
+  if(!/^flt-semantic-node-[0-9]+$/.test(n.id))continue;
+  if(!(n.getAttribute('aria-label')||n.textContent).includes('Native weather forecast'))continue;
+  weatherNodes++;
+  let hidden=false;
+  for(let p=n;p;p=p.parentElement||p.getRootNode()?.host){
+    const style=getComputedStyle(p);
+    if(p.hidden||p.getAttribute('aria-hidden')==='true'||style.display==='none'||style.visibility==='hidden')
+      hidden=true;
+  }
+  if(hidden)hiddenWeatherNodes++;
+  const r=n.getBoundingClientRect();
+  if(r.width<=0||r.height<=0||r.bottom<=0||r.right<=0||r.top>=innerHeight||r.left>=innerWidth)
+    offscreenWeatherNodes++;
+}
+return {weather_nodes:weatherNodes,hidden_weather_nodes:hiddenWeatherNodes,
+  offscreen_weather_nodes:offscreenWeatherNodes};
+""")
+    require(type(geometry) is dict and set(geometry) == {
+        "weather_nodes", "hidden_weather_nodes", "offscreen_weather_nodes"}
+        and all(type(count) is int and 0 <= count <= 3000 for count in geometry.values()))
+    return {**geometry, "air_quality_title": "Air quality" in observed["labels"],
+            "native_particulate": labels_contain(observed, "Native particulate forecast"),
+            "native_concentration": labels_contain(observed, "5.53071"),
+            "native_weather": labels_contain(observed, "Native weather forecast"),
+            "back_button": button_state(client, "Back"),
+            "counts": request_counters(fixture_status, observed)}
 
 
 def run_ui(client, fixture, ready, support, report):
+    active_refresh = None
+    report["refresh_diagnostics"] = []
     def status(mode="status"):
         return support.fixture_command(fixture, mode)
+    def counters():
+        value = request_counters(status(), snapshot(client))
+        if active_refresh is not None:
+            active_refresh["last"] = value
+        return value
+    def wait_ready():
+        observed = None
+        def check():
+            nonlocal observed
+            observed = button_state(client, "Refresh forecasts")
+            if active_refresh is not None:
+                active_refresh["button"] = observed
+            return button_ready(observed)
+        support.wait_for(check)
+        return observed
     def wait_labels(*labels, absent=(), timeout=20):
+        tracking = active_refresh is not None and active_refresh["subphase"] == "await_render"
+        if tracking:
+            active_refresh["subphase"] = "wait_render"
         observed = None
         def check():
             nonlocal observed
@@ -176,14 +285,37 @@ def run_ui(client, fixture, ready, support, report):
                     and all(not labels_contain(observed, item) for item in absent))
         support.wait_for(check, timeout=timeout)
         require(observed["localOnly"] and observed["canvas"])
+        if tracking:
+            counters()
+            active_refresh["subphase"] = "complete"
         return observed
     def refresh(mode):
-        before = status(mode)
-        require(click_label(client, "Refresh forecasts"))
-        support.wait_for(lambda: status()["calls"] == before["calls"] + 1
-                        and status()["airQualityCalls"] == before["airQualityCalls"] + 1)
-        support.wait_for(lambda: snapshot(client)["weatherRequests"] == before["calls"] + 1
-                        and snapshot(client)["airQualityRequests"] == before["airQualityCalls"] + 1)
+        nonlocal active_refresh
+        require(len(report["refresh_diagnostics"]) < 12)
+        active_refresh = {"ordinal": len(report["refresh_diagnostics"]) + 1, "mode": mode,
+                          "subphase": "wait_ready", "input_sent": False}
+        report["refresh_diagnostics"].append(active_refresh)
+        target = wait_ready()
+        active_refresh["subphase"] = "capture_before"
+        status(mode)
+        before = counters()
+        require(before["provider_weather"] == before["browser_weather"]
+                and before["provider_air_quality"] == before["browser_air_quality"])
+        active_refresh["before"] = before
+        active_refresh["subphase"] = "activate_pointer"
+        pointer_activate(client, target)
+        active_refresh["input_sent"] = True
+        def reached(keys):
+            observed = counters()
+            require(all(observed[key] <= before[key] + 1 for key in observed))
+            return all(observed[key] == before[key] + 1 for key in keys)
+        active_refresh["subphase"] = "wait_provider_requests"
+        support.wait_for(lambda: reached(("provider_weather", "provider_air_quality")))
+        active_refresh["subphase"] = "wait_response_completion"
+        support.wait_for(lambda: reached(("browser_weather", "browser_air_quality")))
+        active_refresh["subphase"] = "wait_idle"
+        wait_ready()
+        active_refresh["subphase"] = "await_render"
     def both():
         return wait_labels("Native weather forecast", "Native particulate forecast", "5.53071", "11.5959",
             "0.01", "Accumulation window (UTC)", "PM2.5 (µg/m³)", "PM10 (µg/m³)",
@@ -238,9 +370,23 @@ def run_ui(client, fixture, ready, support, report):
     refresh("aq-valid"); both()
     report["phase"] = "actual_air_quality_detail_route"
     before = status()
-    require(click_label(client, "Air quality details"))
-    wait_labels("Air quality", "Native particulate forecast", "5.53071", absent=("Native weather forecast",))
+    detail = {"subphase": "read_button", "input_sent": False}
+    report["detail_diagnostics"] = detail
+    detail["button"] = button_state(client, "Air quality details")
+    detail["before"] = detail_observation(client, snapshot(client), before)
+    detail["subphase"] = "activate_pointer"
+    pointer_activate(client, detail["button"])
+    detail["input_sent"] = True
+    detail["subphase"] = "wait_detail_render"
+    def detail_rendered():
+        observed = snapshot(client)
+        detail["last"] = detail_observation(client, observed, status())
+        return (labels_contain(observed, "Air quality", "Native particulate forecast", "5.53071")
+                and not labels_contain(observed, "Native weather forecast")
+                and observed["localOnly"] and observed["canvas"])
+    support.wait_for(detail_rendered, timeout=20)
     require(status() == before)
+    detail["subphase"] = "complete"
     report["checks"]["existing_aq_detail_without_new_request"] = True
     final = snapshot(client)
     require(final["localOnly"] and final["weatherRequests"] == before["calls"]

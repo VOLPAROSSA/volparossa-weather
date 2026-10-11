@@ -7,7 +7,7 @@
   "license": "GPL-3.0-or-later",
   "license_sha256": "3743f7a4ab5132f7dbeb88e68097657ab8374e74b46b6402efbe80ccfb1b6488",
   "pubspec_lock_sha256": "fdfb5275aac49a1a62f7424a665f88b7db6fe1314d1e7c9f037ad6d32d906ce3",
-  "upstream_patch_sha256": "7f6e0461a8e99a37aaafc3759e98242eb0226358ff631c991c5afbc252df3e93",
+  "upstream_patch_sha256": "be8cd2a36b3d18dd37ff90bf3282e610133520ce75a12074fa9047271583afa2",
   "upstream_agents_files": [],
   "original_integration_license": "GPL-3.0-only; retain upstream headers and LICENSE, with LICENSE.VOLPAROSSA identifying new files",
   "mode": "--dart-define=VOLPAROSSA_WEATHER=true",
@@ -17,6 +17,6 @@
   "transport": "Sequential same-origin GET /api/volparossa/forecast and /api/volparossa/air-quality; same public-community area, independent model runs and expiry; no acquisition or alternate network scheduler",
   "scope": "Actual standard provider, phone/tablet forecast views, hourly surface, air-quality card and detail route. Missing observations, daily products, alerts, radar, UV and AQI stay explicitly unavailable; native points are never interpolated into hours.",
   "privacy": "Loopback shared-provider origin only. No provider fallback, external imagery/fonts, location search or geolocation in the VOLPAROSSA profile. Network response size and time are bounded; no app weather persistence.",
-  "platform_status": "Pinned web release build and synthetic Flutter component tests pass; actual browser interaction and core delivery remain unverified. Native Android/iOS packaging, lifecycle and home-screen widgets are not verified. Background/widget entry points fail closed instead of using upstream providers.",
+  "platform_status": "Pinned web release build, sixteen synthetic Flutter tests and actual isolated Firefox interaction through the local HTTP bridge pass. Browser proof uses synthetic products and covers refresh, independent failures/expiry and the existing AQ detail route; core delivery remains unverified. Native Android/iOS packaging, lifecycle and home-screen widgets are not verified. Background/widget entry points fail closed instead of using upstream providers.",
   "verification": "No live weather acquisition, overlay delivery, accuracy or native platform proof claimed by this integration patch. Source schema and freshness validation do not attest upstream authenticity."
 }

@@ -309,12 +309,14 @@ precipitation windows and independent particulate forecasts. Unsupported current
 observations, daily products, AQI and radar remain visibly unavailable. This build
 profile disables upstream weather fallback, geolocation and external imagery/fonts.
 
-The actual release web build and fifteen focused Flutter tests pass, including
-phone/tablet layout, missing versus zero values, independent product failures and
-idle expiry. CanvasKit and licenses fit the existing bounded local static server;
-no renderer CDN is configured. These are build and synthetic component results,
-not a completed browser, peer-delivery or native Android/iOS proof. Packaging,
-background lifecycle and home-screen widgets remain required.
+The actual release web build and sixteen focused Flutter tests pass. An isolated
+Firefox trial also passes against the real CanvasKit UI and local HTTP bridge
+with synthetic products: nine pointer refreshes, independent weather/air-quality
+failures and expiry, and navigation to the existing air-quality detail page.
+The refresh control remains disabled while loading. CanvasKit and licenses fit
+the existing bounded local static server; no renderer CDN is configured.
+Core-to-Overmorrow delivery and native Android/iOS execution remain unverified.
+Packaging, background lifecycle and home-screen widgets remain required.
 
 ### Additional weather data
 

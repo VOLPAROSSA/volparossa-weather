@@ -147,7 +147,7 @@ index 7091e80..fc7f0e0 100644
      String dateFormat = context.select((SettingsProvider p) => p.getDateFormat);
  
 diff --git a/lib/main.dart b/lib/main.dart
-index 7ea9fe1..8d688ea 100644
+index 7ea9fe1..ce8b4be 100644
 --- a/lib/main.dart
 +++ b/lib/main.dart
 @@ -38,18 +38,20 @@ import 'decoders/weather_data.dart';
@@ -234,7 +234,16 @@ index 7ea9fe1..8d688ea 100644
  
      ImageProvider imageProvider = _imageService.image.image;
  
-@@ -445,4 +450,4 @@ class MyHomePageState extends State<MyHomePage> {
+@@ -438,11 +443,11 @@ class MyHomePageState extends State<MyHomePage> {
+     return Stack(
+       children: [
+         Container(color: Theme.of(context).colorScheme.surface,),
+-        if (weatherError != null) ErrorPage(weatherError: weatherError!, updateLocation: updateLocation),
+-        if (data != null && weatherError == null) NewMain(data: data!, updateLocation: updateLocation, imageService: imageService),
++        if (weatherError != null) ErrorPage(weatherError: weatherError!, updateLocation: updateLocation, isLoading: isLoading),
++        if (data != null && weatherError == null) NewMain(data: data!, updateLocation: updateLocation, imageService: imageService, isLoading: isLoading),
+         LoadingIndicator(isLoading: isLoading,)
+       ],
      );
  
    }
@@ -242,7 +251,7 @@ index 7ea9fe1..8d688ea 100644
 \ No newline at end of file
 +}
 diff --git a/lib/main_screens.dart b/lib/main_screens.dart
-index 9f03bf5..347845d 100644
+index 9f03bf5..e2e266b 100644
 --- a/lib/main_screens.dart
 +++ b/lib/main_screens.dart
 @@ -17,6 +17,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
@@ -253,7 +262,41 @@ index 9f03bf5..347845d 100644
  import 'dart:ui';
  
  import 'package:flutter/material.dart';
-@@ -146,7 +147,7 @@ class PhoneLayout extends StatelessWidget {
+@@ -40,8 +41,9 @@ class NewMain extends StatelessWidget {
+   final WeatherData data;
+   final updateLocation;
+   final ImageService? imageService;
++  final bool isLoading;
+ 
+-  NewMain({required this.data, required this.updateLocation, required this.imageService});
++  NewMain({required this.data, required this.updateLocation, required this.imageService, this.isLoading = false});
+ 
+   /*
+   @override
+@@ -122,9 +124,9 @@ class NewMain extends StatelessWidget {
+     return LayoutBuilder(
+       builder: (context, constraints) {
+         if (constraints.maxWidth < 680) {
+-          return PhoneLayout(data: data, updateLocation: updateLocation, imageService: imageService,);
++          return PhoneLayout(data: data, updateLocation: updateLocation, imageService: imageService, isLoading: isLoading);
+         }
+-        return TabletLayout(data: data, updateLocation: updateLocation, imageService: imageService);
++        return TabletLayout(data: data, updateLocation: updateLocation, imageService: imageService, isLoading: isLoading);
+       }
+     );
+   }
+@@ -135,8 +137,9 @@ class PhoneLayout extends StatelessWidget {
+   final WeatherData data;
+   final Function updateLocation;
+   final ImageService? imageService;
++  final bool isLoading;
+ 
+-  const PhoneLayout({super.key, required this.data, required this.updateLocation, required this.imageService});
++  const PhoneLayout({super.key, required this.data, required this.updateLocation, required this.imageService, this.isLoading = false});
+ 
+   @override
+   Widget build(BuildContext context) {
+@@ -146,7 +149,7 @@ class PhoneLayout extends StatelessWidget {
      final Map<String, Widget> widgetsMap = {
        'sunstatus': NewSunriseSunset(data: data, width: size.width,),
        'rain indicator': Rain15MinuteChart(data: data),
@@ -262,7 +305,27 @@ index 9f03bf5..347845d 100644
        'alerts' : AlertWidget(data: data),
        'radar': RadarSmall(data: data, radarHapticsOn: context.select((SettingsProvider p) => p.getRadarHapticsOn),),
        'daily': BuildDays(data: data),
-@@ -292,17 +293,17 @@ class TabletLayout extends StatelessWidget {
+@@ -207,7 +210,7 @@ class PhoneLayout extends StatelessWidget {
+             }).toList(),
+           ),
+ 
+-          ProviderSelector(updateLocation: updateLocation, loc: data.place, latLon: "${data.lat}, ${data.lng}",),
++          ProviderSelector(updateLocation: updateLocation, loc: data.place, latLon: "${data.lat}, ${data.lng}", isLoading: isLoading),
+         ],
+       ),
+     );
+@@ -219,8 +222,9 @@ class TabletLayout extends StatelessWidget {
+   final WeatherData data;
+   final Function updateLocation;
+   final ImageService? imageService;
++  final bool isLoading;
+ 
+-  const TabletLayout({super.key, required this.data, required this.updateLocation, required this.imageService});
++  const TabletLayout({super.key, required this.data, required this.updateLocation, required this.imageService, this.isLoading = false});
+ 
+   @override
+   Widget build(BuildContext context) {
+@@ -292,17 +296,17 @@ class TabletLayout extends StatelessWidget {
                                child: Row(
                                  crossAxisAlignment: CrossAxisAlignment.start,
                                  children: [
@@ -284,7 +347,7 @@ index 9f03bf5..347845d 100644
                                            style: TextStyle(
                                                color: Theme.of(context).colorScheme.onSurface,
                                                fontSize: 30, height: 1.05
-@@ -310,8 +311,7 @@ class TabletLayout extends StatelessWidget {
+@@ -310,8 +314,7 @@ class TabletLayout extends StatelessWidget {
                                          )
                                        ],
                                      ),
@@ -294,7 +357,7 @@ index 9f03bf5..347845d 100644
                                    SizedBox(
                                        width: 397,
                                        child: Circles(data : data)
-@@ -321,7 +321,7 @@ class TabletLayout extends StatelessWidget {
+@@ -321,7 +324,7 @@ class TabletLayout extends StatelessWidget {
                              ),
  
                              NewSunriseSunset(data: data, width: constraints.maxWidth,),
@@ -303,8 +366,17 @@ index 9f03bf5..347845d 100644
                              Row(
                                crossAxisAlignment: CrossAxisAlignment.start,
                                children: [
+@@ -330,7 +333,7 @@ class TabletLayout extends StatelessWidget {
+                                     children: [
+                                       RadarSmall(data: data, radarHapticsOn: context.select((SettingsProvider p) => p.getRadarHapticsOn),),
+                                       AqiWidget(data: data),
+-                                      ProviderSelector(updateLocation: updateLocation, loc: data.place, latLon: "${data.lat}, ${data.lng}",),
++                                      ProviderSelector(updateLocation: updateLocation, loc: data.place, latLon: "${data.lat}, ${data.lng}", isLoading: isLoading),
+                                     ],
+                                   ),
+                                 ),
 diff --git a/lib/main_ui.dart b/lib/main_ui.dart
-index e3ceaf3..e37263c 100644
+index e3ceaf3..7008b5d 100644
 --- a/lib/main_ui.dart
 +++ b/lib/main_ui.dart
 @@ -17,6 +17,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
@@ -382,7 +454,14 @@ index e3ceaf3..e37263c 100644
                ),
              ]
          )
-@@ -558,6 +562,12 @@ class ProviderSelector extends StatelessWidget {
+@@ -553,11 +557,19 @@ class ProviderSelector extends StatelessWidget {
+   final Function updateLocation;
+   final String latLon;
+   final String loc;
++  final bool isLoading;
+ 
+-  const ProviderSelector({super.key, required this.loc, required this.latLon, required this.updateLocation});
++  const ProviderSelector({super.key, required this.loc, required this.latLon, required this.updateLocation, this.isLoading = false});
  
    @override
    Widget build(BuildContext context) {
@@ -390,11 +469,32 @@ index e3ceaf3..e37263c 100644
 +      child: Column(children: [
 +        const Text('Provider: VOLPAROSSA shared core. No upstream fallback.'),
 +        const Text('Mobile background updates and home-screen widgets: not yet connected.'),
-+        FilledButton(onPressed: () => updateLocation(latLon, loc), child: const Text('Refresh forecasts')),
++        if (isLoading) const Text('Refreshing forecasts'),
++        FilledButton(onPressed: isLoading ? null : () => updateLocation(latLon, loc), child: const Text('Refresh forecasts')),
 +      ]));
      return Padding(
        padding: const EdgeInsets.only(left: 24, right: 24, bottom: 110, top: 35),
        child: Column(
+@@ -641,8 +653,9 @@ class ProviderSelector extends StatelessWidget {
+ class ErrorPage extends StatelessWidget {
+   final WeatherError weatherError;
+   final Function updateLocation;
++  final bool isLoading;
+ 
+-  ErrorPage({super.key, required this.weatherError, required this.updateLocation});
++  ErrorPage({super.key, required this.weatherError, required this.updateLocation, this.isLoading = false});
+ 
+   @override
+   Widget build(BuildContext context) {
+@@ -693,7 +706,7 @@ class ErrorPage extends StatelessWidget {
+           children: [
+             Padding(
+               padding: const EdgeInsets.only(top: 0),
+-              child: ProviderSelector(updateLocation: updateLocation, loc: weatherError.location, latLon: weatherError.latLon,)
++              child: ProviderSelector(updateLocation: updateLocation, loc: weatherError.location, latLon: weatherError.latLon, isLoading: isLoading)
+             ),
+           ],
+         ),
 diff --git a/lib/new_displays.dart b/lib/new_displays.dart
 index 2478929..c8d691e 100644
 --- a/lib/new_displays.dart

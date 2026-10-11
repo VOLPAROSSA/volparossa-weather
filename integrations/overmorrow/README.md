@@ -9,26 +9,31 @@ shared core/provider layer.
 ## Verified scope
 
 The release web build succeeds with Flutter 3.38.5 and the unchanged upstream
-dependency lock. Fifteen Flutter tests pass with synthetic products: native times
+dependency lock. Sixteen Flutter tests pass with synthetic products: native times
 and accumulation windows, missing versus zero values, independent weather/AQ
 failures, expiry while idle, phone/tablet layouts and the existing detail route.
 The local HTTP profile passes thirty-one focused bridge tests; thirteen build
 driver and twelve deployment tests cover its workspace boundaries.
 
-The [build record](build-verification.json) identifies the pinned inputs and
-produced assets. Actual browser interaction, core-to-Overmorrow delivery and
-Android/iOS packaging remain unverified. The web build is not mobile execution
-evidence; background lifecycle and native home-screen widgets remain open.
+A bounded, isolated Firefox trial now passes against the actual CanvasKit UI and
+local HTTP bridge, using synthetic weather and particulate products. It verifies
+native timelines and values, missing current observations/AQI, the configured area
+and source attribution. Nine real pointer refreshes each request one weather and
+one air-quality product. Independent failures and stale responses preserve the
+other valid product; idle expiry hides old values without a new request. The
+existing air-quality detail page opens without another fetch.
 
-The first bounded Firefox trial to reach the actual CanvasKit UI verifies initial
-rendering through the local bridge: independent native timelines, values, missing
-current observations/AQI, the configured area and attribution. The trial then
-times out during refresh and remains failed. It does not yet distinguish click
-dispatch, request handling or UI completion as the cause. Browser and fixture
-processes exit, the private profile is removed and the host network namespace is
-unchanged. Five harness checks and four synthetic-fixture checks pass separately;
-they do not establish successful refresh, failure handling or idle expiry in the
-browser.
+The refresh control is disabled while the app is loading, so it no longer offers
+a refresh that the busy app would ignore. Twelve browser-harness tests and four
+fixture tests pass separately. The browser loads only same-origin resources;
+browser and fixture processes exit, the private profile is removed and the host
+network namespace is unchanged.
+
+The [build record](build-verification.json) identifies the pinned inputs, assets
+and browser evidence. Core-to-Overmorrow delivery and Android/iOS packaging remain
+unverified. This synthetic browser proof establishes neither forecast accuracy
+nor mobile execution; background lifecycle and native home-screen widgets remain
+open.
 
 ## Data and privacy
 
@@ -78,7 +83,11 @@ python3 integrations/overmorrow/deploy.py \
   --destination "$PWD/build/overmorrow-web-01" --execute
 ```
 
-Only locked dependency acquisition has Internet access. Build/test execution uses
+For a stage using an already populated workspace dependency cache, replace
+`--action dependencies` with `--action dependencies-offline` to resolve the same
+lockfile without network access.
+
+Only the explicit `dependencies` action has Internet access. Build/test execution uses
 an isolated network namespace, private workspace caches, two available CPUs and
 suppressed analytics. The developer's real home/configuration is not mounted.
 Stages and deployment destinations must be new, dedicated build directories;

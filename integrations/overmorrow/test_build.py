@@ -63,6 +63,7 @@ class BuildContracts(unittest.TestCase):
         expected = {
             "version": ["--version", "--machine"],
             "dependencies": ["pub", "get", "--enforce-lockfile"],
+            "dependencies-offline": ["pub", "get", "--offline", "--enforce-lockfile"],
             "build": ["build", "web", "--release", "--no-pub", "--no-wasm-dry-run",
                       "--dart-define=VOLPAROSSA_WEATHER=true"],
             "test": ["test", "--no-pub", "--reporter=expanded", "--concurrency=2",

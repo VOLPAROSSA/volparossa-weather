@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:overmorrow/decoders/weather_data.dart';
 import 'package:overmorrow/hourly.dart';
 import 'package:overmorrow/new_displays.dart';
@@ -13,6 +16,7 @@ import 'package:overmorrow/l10n/app_localizations.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:overmorrow/volparossa/products.dart';
+import 'package:overmorrow/volparossa/provider.dart';
 import 'package:overmorrow/volparossa/views.dart';
 
 void main() {
@@ -23,30 +27,30 @@ void main() {
   });
   for (final width in [390.0, 900.0]) {
     testWidgets(
-      'existing responsive main layout at width $width keeps native provider surfaces',
+      'existing responsive main layout at width $width exposes refresh readiness',
       (tester) async {
         tester.view.physicalSize = Size(width, 1000);
         tester.view.devicePixelRatio = 1;
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
         final d = data();
-        await tester.pumpWidget(
-          MultiProvider(
-            providers: [
-              ChangeNotifierProvider(create: (_) => SettingsProvider()),
-              ChangeNotifierProvider(create: (_) => ThemeProvider()),
-            ],
-            child: MaterialApp(
-              localizationsDelegates: AppLocalizations.localizationsDelegates,
-              supportedLocales: AppLocalizations.supportedLocales,
-              home: NewMain(
-                data: d,
-                updateLocation: (String _, String __) async {},
-                imageService: null,
-              ),
+        Widget app(bool isLoading) => MultiProvider(
+          providers: [
+            ChangeNotifierProvider(create: (_) => SettingsProvider()),
+            ChangeNotifierProvider(create: (_) => ThemeProvider()),
+          ],
+          child: MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: NewMain(
+              data: d,
+              updateLocation: (String _, String __) async {},
+              imageService: null,
+              isLoading: isLoading,
             ),
           ),
         );
+        await tester.pumpWidget(app(true));
         await tester.pump();
         expect(find.byType(NewHourly), findsOneWidget);
         expect(find.byType(AqiWidget), findsOneWidget);
@@ -54,11 +58,139 @@ void main() {
           find.text('Current observations: not available'),
           findsOneWidget,
         );
+        final refresh = find.widgetWithText(FilledButton, 'Refresh forecasts');
+        if (width < 680) {
+          // The existing phone layout lazily builds its footer. Exercise the
+          // real vertical list rather than replacing the responsive layout.
+          final verticalList = find.descendant(
+            of: find.byType(PhoneLayout),
+            matching: find.byWidgetPredicate(
+              (widget) => widget is Scrollable &&
+                  widget.axisDirection == AxisDirection.down,
+            ),
+          ).first;
+          await tester.scrollUntilVisible(
+            refresh,
+            350,
+            scrollable: verticalList,
+            maxScrolls: 15,
+          );
+        }
+        expect(refresh, findsOneWidget);
+        expect(
+          tester.widget<ProviderSelector>(find.byType(ProviderSelector)).isLoading,
+          true,
+        );
+        expect(tester.widget<FilledButton>(refresh).onPressed, null);
+        await tester.pumpWidget(app(false));
+        await tester.pump();
+        expect(
+          tester.widget<ProviderSelector>(find.byType(ProviderSelector)).isLoading,
+          false,
+        );
+        expect(tester.widget<FilledButton>(refresh).onPressed, isNotNull);
         expect(tester.takeException(), null);
         await tester.pumpWidget(const SizedBox());
       },
     );
   }
+  testWidgets(
+    'actual provider selector disables repeat input during a delayed native product pair',
+    (tester) async {
+      final fixture = jsonDecode(
+        File('test/volparossa/fixtures/products.json').readAsStringSync(),
+      );
+      final weatherReply = Completer<http.Response>();
+      final qualityReply = Completer<http.Response>();
+      final requests = <String>[];
+      final results = <NativeProducts>[];
+      var loading = false;
+      var callbacks = 0;
+      http.Response product(bool quality) => http.Response(
+        jsonEncode(fixture[quality ? 'air_quality' : 'weather']),
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+      final native = NativeProviderClient(
+        Uri.parse('http://127.0.0.1:43210'),
+        clock: () => DateTime.parse(fixture['now']),
+        createClient: () => MockClient((request) {
+          expect(request.url.origin, 'http://127.0.0.1:43210');
+          expect(request.url.hasQuery, false);
+          expect(request.followRedirects, false);
+          requests.add(request.url.path);
+          if (requests.length == 1) return weatherReply.future;
+          if (requests.length == 2) return qualityReply.future;
+          return Future.value(
+            product(request.url.path.endsWith('air-quality')),
+          );
+        }),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) => ProviderSelector(
+                loc: 'Configured public area',
+                latLon: '52.52, 13.41',
+                isLoading: loading,
+                updateLocation: (String _, String __) async {
+                  callbacks++;
+                  setState(() => loading = true);
+                  try {
+                    results.add(await native.load());
+                  } finally {
+                    setState(() => loading = false);
+                  }
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+      final refresh = find.widgetWithText(FilledButton, 'Refresh forecasts');
+      await tester.tap(refresh);
+      await tester.pump();
+      expect(callbacks, 1);
+      expect(requests, ['/api/volparossa/forecast']);
+      expect(tester.widget<FilledButton>(refresh).onPressed, null);
+      await tester.tap(refresh);
+      await tester.pump();
+      expect(callbacks, 1);
+      expect(requests, ['/api/volparossa/forecast']);
+
+      weatherReply.complete(product(false));
+      await tester.pump();
+      expect(requests, [
+        '/api/volparossa/forecast',
+        '/api/volparossa/air-quality',
+      ]);
+      expect(tester.widget<FilledButton>(refresh).onPressed, null);
+      await tester.tap(refresh);
+      await tester.pump();
+      expect(callbacks, 1);
+      qualityReply.complete(product(true));
+      await tester.pump();
+      expect(results, hasLength(1));
+      expect(results.single.weather, isNotNull);
+      expect(results.single.airQuality, isNotNull);
+      expect(tester.widget<FilledButton>(refresh).onPressed, isNotNull);
+
+      await tester.tap(refresh);
+      await tester.pump();
+      expect(callbacks, 2);
+      expect(requests, [
+        '/api/volparossa/forecast',
+        '/api/volparossa/air-quality',
+        '/api/volparossa/forecast',
+        '/api/volparossa/air-quality',
+      ]);
+      expect(results, hasLength(2));
+      expect(tester.widget<FilledButton>(refresh).onPressed, isNotNull);
+      expect(tester.takeException(), null);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
   testWidgets(
     'an idle visible product expires and hides values without a network request',
     (tester) async {
