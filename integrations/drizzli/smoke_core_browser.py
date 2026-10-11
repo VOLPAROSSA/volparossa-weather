@@ -86,6 +86,53 @@ def file_hash(path, maximum, mode=None):
     return digest.hexdigest(), read
 
 
+def readonly_core_hash(path, expected_sha256, outer_userns):
+    """Recheck one authorized core executable across a user-namespace boundary.
+
+    Host-root ownership has no useful numeric representation in this single-UID
+    namespace. Authority here is the independently supplied exact digest plus a
+    read-only descriptor, not acceptance of an overflow UID. Generic input
+    ownership checks intentionally remain unchanged.
+    """
+    require(hex64(expected_sha256) and type(outer_userns) is str
+            and re.fullmatch(r"user:\[\d+\]", outer_userns)
+            and os.readlink("/proc/self/ns/user") != outer_userns)
+    mappings = [[int(value) for value in line.split()]
+                for line in Path("/proc/self/uid_map").read_text().splitlines()]
+    # bwrap may use an intermediate namespace where the outer unprivileged UID
+    # is mapped to zero. Neither accepted single-ID map exposes host root here.
+    require(mappings in ([[os.getuid(), os.getuid(), 1]], [[os.getuid(), 0, 1]]))
+    require(path.is_absolute() and path.resolve(strict=True) == path)
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as source:
+        info = os.fstat(source.fileno())
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 0 < info.st_size <= 512 * 1024**2
+                and not info.st_mode & 0o022 and os.access(path, os.X_OK)
+                and os.fstatvfs(source.fileno()).f_flag & os.ST_RDONLY)
+        identity = lambda value: (value.st_dev, value.st_ino, value.st_uid, value.st_gid,
+                                 value.st_mode, value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+        digest, size = hashlib.sha256(), 0
+        while data := source.read(1024 * 1024):
+            size += len(data)
+            require(size <= info.st_size)
+            digest.update(data)
+        require(size == info.st_size and identity(os.fstat(source.fileno())) == identity(info)
+                and identity(path.stat(follow_symlinks=False)) == identity(info)
+                and digest.hexdigest() == expected_sha256)
+    return digest.hexdigest(), size
+
+
+def verify_core_binary(path, expected_sha256, args):
+    if args.inside:
+        # The namespace-specific exception is available only after the complete
+        # guest/UID/group/inner-network boundary has passed again.
+        boundary(args, True)
+        return readonly_core_hash(path, expected_sha256, args.outer_userns)
+    require(args.outer_userns is None)
+    result = file_hash(path, 512 * 1024**2)
+    require(result[0] == expected_sha256 and os.access(path, os.X_OK))
+    return result
+
+
 def read_json(path, maximum, mode=None):
     return json.loads(raw_file(path, maximum, mode), object_pairs_hook=pairs)
 
@@ -429,6 +476,7 @@ def main():
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--control-gid", type=int, required=True)
     parser.add_argument("--inside", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--outer-userns", help=argparse.SUPPRESS)
     args = parser.parse_args()
     for name in ("bundle_root", "config", "expected", "output"):
         value = getattr(args, name)
@@ -441,7 +489,7 @@ def main():
     expected = validate_expected(read_json(args.expected, 192 * 1024, 0o400), config)
     require(config["core"]["scratchParent"] == str(args.output / "scratch"))
     binary = Path(config["core"]["executable"])
-    require(file_hash(binary, 512 * 1024**2)[0] == expected["core_sha256"] and os.access(binary, os.X_OK))
+    verify_core_binary(binary, expected["core_sha256"], args)
     control = Path(config["core"]["controlSocket"])
     require(control.resolve(strict=True) == control and stat.S_ISSOCK(control.stat().st_mode))
     if args.inside:
@@ -456,8 +504,9 @@ def main():
         mounts = shared.isolated_browser_home(args.output)
         command = ["/usr/bin/bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--unshare-net",
             "--unshare-pid", "--ro-bind", "/", "/", *mounts, "--bind", str(args.output), str(args.output),
+            "--ro-bind", str(binary), str(binary),
             "--tmpfs", "/tmp", "--proc", "/proc", "--dev", "/dev", "--", sys.executable, "-B",
-            str(Path(__file__).resolve()), *sys.argv[1:], "--inside"]
+            str(Path(__file__).resolve()), *sys.argv[1:], "--inside", "--outer-userns", os.readlink("/proc/self/ns/user")]
         wrapper = subprocess.Popen(command, env=shared.clean_environment(), start_new_session=True)
         while time.monotonic() < deadline:
             try:
