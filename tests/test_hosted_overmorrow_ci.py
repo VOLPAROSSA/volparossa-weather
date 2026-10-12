@@ -319,7 +319,10 @@ class HostedOvermorrow(unittest.TestCase):
             repository = Path(temporary) / "sdk"
             env = dict(H.BASE_ENV, HOME=temporary, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null")
             def git(*args):
-                return subprocess.run(["/usr/bin/git", *args], env=env, stdin=subprocess.DEVNULL,
+                # The fixture owns the whole .git snapshot. Git 2.55 may detach
+                # automatic maintenance after commit and remove a transient
+                # lock during the mtime walk; keep this fixture single-writer.
+                return subprocess.run(["/usr/bin/git", "-c", "maintenance.auto=false", *args], env=env, stdin=subprocess.DEVNULL,
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, check=True)
             git("init", "--quiet", "--template=", "--initial-branch=main", str(repository))
             source = repository / "source.txt"
