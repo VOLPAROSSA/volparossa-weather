@@ -72,10 +72,19 @@ def fixture():
                      0o755 if name == "firefox-esr" else 0o644)
                     for name in pin["artifacts"]["firefox"]["expected_files"]] + [
                         ("./usr/lib/firefox-esr/firefox-bin", "firefox-esr", "symlink", 0o777),
-                        ("./usr/lib/firefox-esr/browser/defaults/syspref", "/etc/firefox-esr", "symlink", 0o777),
+                        ("./usr/lib/firefox-esr/browser/chrome", "../../../share/firefox-esr/browser/chrome", "symlink", 0o777),
+                        ("./usr/lib/firefox-esr/browser/defaults", "../../../share/firefox-esr/browser/defaults", "symlink", 0o777),
+                        ("./usr/share/firefox-esr/browser/defaults/syspref", "/etc/firefox-esr", "symlink", 0o777),
+                        ("./usr/share/firefox-esr/browser/defaults/preferences/firefox.js", b"package defaults\n", "file", 0o644),
                         ("./usr/lib/firefox-esr/distribution/policies.json", b"host settings", "file", 0o644),
                         ("./usr/share/doc/firefox-esr/copyright", b"Original Debian/Mozilla copyright\n", "file", 0o644)],
     }
+    for size in (16, 32, 48, 64, 128):
+        members["firefox"] += [
+            (f"./usr/share/firefox-esr/browser/chrome/icons/default/default{size}.png",
+             f"../../../../../icons/hicolor/{size}x{size}/apps/firefox-esr.png", "symlink", 0o777),
+            (f"./usr/share/icons/hicolor/{size}x{size}/apps/firefox-esr.png", f"icon{size}".encode(), "file", 0o644),
+        ]
     for kind in ("node", "firefox"):
         by_name = {name.removeprefix("./"): value for name, value, typ, _ in members[kind] if typ == "file"}
         for name in pin["artifacts"][kind]["expected_files"]:
@@ -132,6 +141,10 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual((self.output / "node/LICENSE").read_bytes(), b"Original Node license\n")
         self.assertFalse((self.output / "firefox/browser/defaults/syspref").exists())
         self.assertFalse((self.output / "firefox/distribution").exists())
+        self.assertEqual((self.output / "firefox/browser/defaults/preferences/firefox.js").read_bytes(), b"package defaults\n")
+        for size in (16, 32, 48, 64, 128):
+            self.assertEqual((self.output / f"firefox/browser/chrome/icons/default/default{size}.png").read_bytes(),
+                             f"icon{size}".encode())
         for path in self.output.rglob("*"):
             self.assertFalse(path.is_symlink())
             self.assertFalse(path.stat().st_mode & 0o077)
@@ -244,6 +257,49 @@ class RuntimeTests(unittest.TestCase):
                            else (entry[0], target, "symlink", 0o777) for entry in self.members["firefox"]]
                 with self.assertRaises(ValueError):
                     R.extract(io.BytesIO(lzma.compress(tar_bytes(members))), root, "firefox", self.pin["artifacts"]["firefox"])
+
+    def test_exact_debian_alias_targets_cannot_be_changed(self):
+        for number, (name, target) in enumerate(R.FIREFOX_ALIASES.items()):
+            with self.subTest(name=name):
+                root = self.output / str(number)
+                root.mkdir(mode=0o700)
+                members = [entry if entry[0].removeprefix("./") != name else
+                           (entry[0], "../../../share/firefox-esr/unapproved", "symlink", 0o777)
+                           for entry in self.members["firefox"]]
+                with self.assertRaisesRegex(ValueError, "alias changed"):
+                    R.extract(io.BytesIO(lzma.compress(tar_bytes(members))), root, "firefox", self.pin["artifacts"]["firefox"])
+
+    def test_debian_alias_and_target_omissions_rejected(self):
+        omitted = ("usr/lib/firefox-esr/browser/defaults", next(iter(R.FIREFOX_ICONS.values())))
+        for number, name in enumerate(omitted):
+            with self.subTest(name=name):
+                root = self.output / str(number)
+                root.mkdir(mode=0o700)
+                members = [entry for entry in self.members["firefox"] if entry[0].removeprefix("./") != name]
+                with self.assertRaisesRegex(ValueError, "missing"):
+                    R.extract(io.BytesIO(lzma.compress(tar_bytes(members))), root, "firefox", self.pin["artifacts"]["firefox"])
+
+    def test_other_gre_links_cannot_use_the_packaged_share_exception(self):
+        self.members["firefox"].append(("./usr/lib/firefox-esr/escape",
+                                       "../../share/firefox-esr/browser/defaults/preferences/firefox.js", "symlink", 0o777))
+        with self.assertRaisesRegex(ValueError, "escapes runtime"):
+            self.run_prepare()
+
+    def test_shared_relocation_cannot_overwrite_a_selected_gre_path(self):
+        self.members["firefox"].append(("./usr/lib/firefox-esr/browser/defaults/preferences/firefox.js",
+                                       b"conflicting defaults", "file", 0o644))
+        with self.assertRaises(FileExistsError):
+            self.run_prepare()
+        self.assertFalse((self.output / "provenance.json").exists())
+
+    def test_debian_syspref_contents_and_distribution_remain_excluded(self):
+        self.members["firefox"].append(("./usr/share/firefox-esr/browser/defaults/syspref/private.js",
+                                       b"must not import host config", "file", 0o644))
+        self.members["firefox"].append(("./usr/share/firefox-esr/distribution/policies.json",
+                                       b"must not import policy", "file", 0o644))
+        self.run_prepare()
+        self.assertFalse((self.output / "firefox/browser/defaults/syspref").exists())
+        self.assertFalse((self.output / "firefox/distribution").exists())
 
     def test_missing_original_license_rejected(self):
         for kind in ("node", "firefox"):

@@ -34,6 +34,19 @@ MAX_PIN = 32768
 CHUNK = 65536
 DOWNLOAD_SECONDS = 180
 EXTRACT_SECONDS = 120
+# Exact layout of the checksum-pinned Debian package. These are relocations
+# within the SAME archive, never permission to dereference a host filesystem
+# symlink. In particular, browser/defaults/syspref remains excluded.
+FIREFOX_DIRECTORIES = {
+    "usr/lib/firefox-esr/browser/chrome": "usr/share/firefox-esr/browser/chrome",
+    "usr/lib/firefox-esr/browser/defaults": "usr/share/firefox-esr/browser/defaults",
+}
+FIREFOX_ICONS = {
+    f"usr/share/firefox-esr/browser/chrome/icons/default/default{size}.png":
+        f"usr/share/icons/hicolor/{size}x{size}/apps/firefox-esr.png"
+    for size in (16, 32, 48, 64, 128)
+}
+FIREFOX_ALIASES = {**FIREFOX_DIRECTORIES, **FIREFOX_ICONS}
 
 
 def require(condition, message):
@@ -268,14 +281,32 @@ def selected_path(name, kind, item):
     prefix = item["prefix"] + "/"
     if kind == "firefox" and name == item["license_file"]:
         return "licenses/firefox-copyright"
-    if not name.startswith(prefix):
-        return None
-    relative = name[len(prefix):]
     if kind == "node":
+        if not name.startswith(prefix):
+            return None
+        relative = name[len(prefix):]
         return "node/" + relative if relative in ("bin/node", item["license_file"]) else None
+    relative = name[len(prefix):] if name.startswith(prefix) else None
+    for source, target in FIREFOX_DIRECTORIES.items():
+        if name.startswith(target + "/"):
+            relative = source[len(prefix):] + name[len(target):]
+    for source, target in FIREFOX_ICONS.items():
+        if name == target:
+            relative = "browser/chrome/" + source.removeprefix("usr/share/firefox-esr/browser/chrome/")
+    if relative is None:
+        return None
     if "distribution" in PurePosixPath(relative).parts or relative == "browser/defaults/syspref" or relative.startswith("browser/defaults/syspref/"):
         return None
     return "firefox/" + relative
+
+
+def link_target(member, name):
+    target = member.linkname
+    require(isinstance(target, str) and 0 < len(target) <= 512 and not target.startswith("/")
+            and "\\" not in target and not any(ord(c) < 32 or ord(c) == 127 for c in target),
+            "Unsafe selected archive link")
+    return safe_name(posixpath.normpath(posixpath.join(posixpath.dirname(name), target)
+                     if member.issym() else target))
 
 
 def private_parents(path, output):
@@ -293,7 +324,7 @@ def private_parents(path, output):
 
 def extract(stream, output, kind, item):
     reader = BoundedXZ(stream)
-    seen, records, links = set(), {}, {}
+    seen, records, links, aliases = set(), {}, {}, set()
     payload = 0
     with tarfile.open(fileobj=reader, mode="r|") as archive:
         for member in archive:
@@ -306,6 +337,11 @@ def extract(stream, output, kind, item):
             require(0 <= member.size <= MAX_FILE and not member.mode & 0o7000, "Unsafe archive size or mode")
             payload += member.size
             require(payload <= MAX_EXPANDED, "Archive payload exceeds bound")
+            if kind == "firefox" and name in FIREFOX_ALIASES:
+                require(member.issym() and link_target(member, name) == FIREFOX_ALIASES[name],
+                        "Pinned Debian runtime alias changed")
+                aliases.add(name)
+                continue
             relative = selected_path(name, kind, item)
             if relative is None or member.isdir():
                 continue
@@ -313,13 +349,12 @@ def extract(stream, output, kind, item):
             path = output / relative
             private_parents(path, output)
             if member.issym() or member.islnk():
-                target = member.linkname
-                require(isinstance(target, str) and 0 < len(target) <= 512 and not target.startswith("/")
-                        and "\\" not in target and not any(ord(c) < 32 or ord(c) == 127 for c in target),
-                        "Unsafe selected archive link")
-                normalized = safe_name(posixpath.normpath(posixpath.join(posixpath.dirname(name), target)
-                                       if member.issym() else target))
-                require(selected_path(normalized, kind, item) is not None, "Selected archive link escapes runtime")
+                normalized = link_target(member, name)
+                # Only the exact aliases above may leave the GRE. Adding
+                # relocation inputs must not broaden ordinary link authority.
+                require(normalized.startswith(item["prefix"] + "/")
+                        and selected_path(normalized, kind, item) is not None,
+                        "Selected archive link escapes runtime")
                 links[name] = (relative, normalized)
                 continue
             checksum, total = hashlib.sha256(), 0
@@ -335,6 +370,10 @@ def extract(stream, output, kind, item):
                              "mode": 0o700 if member.mode & 0o111 else 0o600}
     while reader.read(CHUNK):
         pass
+    if kind == "firefox":
+        require(aliases == set(FIREFOX_ALIASES)
+                and all(target in records for target in FIREFOX_ICONS.values()),
+                "Pinned Debian runtime aliases or icon targets missing")
     for name, (relative, target) in links.items():
         visited = {name}
         while target in links:
