@@ -19,6 +19,8 @@ class Workflow(unittest.TestCase):
         self.assertIn("    paths:\n", trigger)
         self.assertIn("tests/fixtures/hosted-android-repositories/*", trigger)
         self.assertIn("tests/fixtures/hosted-android-repositories/compiler-property/*.gradle", trigger)
+        self.assertIn("      - third_party/android-emulator-local-package.xml\n", trigger)
+        self.assertTrue((ROOT / "third_party/android-emulator-local-package.xml").is_file())
         self.assertNotIn("main", trigger)
         self.assertNotIn("**", trigger)
         self.assertNotIn("README", trigger)

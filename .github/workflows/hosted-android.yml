@@ -9,6 +9,7 @@ on:
       - .github/workflows/hosted-android.yml
       - scripts/prepare_hosted_android*.py
       - scripts/hosted-android-repositories.gradle
+      - third_party/android-emulator-local-package.xml
       - integrations/overmorrow/prepare_native_android.py
       - integrations/overmorrow/native-android*
       - integrations/overmorrow/test_native_android.py

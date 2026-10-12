@@ -13,6 +13,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+import xml.etree.ElementTree as ET
 import zipfile
 
 M = runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts/prepare_hosted_android.py"))
@@ -30,6 +31,33 @@ def archive(items):
     return out
 
 
+@contextmanager
+def emulator_input(extra=(), *, revision="37.2.12", destination="sdk/emulator", digest=None):
+    """Real bounded materializer using inert archive/HTTP bytes; no SDK process."""
+    data = archive([
+        ("emulator/source.properties", ("Pkg.Revision=" + revision + "\n").encode(), 0o100644),
+        ("emulator/emulator", b"inert emulator", 0o100755),
+        ("emulator/NOTICE.csv", b"original archive notice", 0o100644), *extra]).getvalue()
+    pin = dict(M["pins"]()["emulator"], bytes=len(data), destination=destination,
+        digest=digest or hashlib.sha1(data).hexdigest())
+    class Response(io.BytesIO):
+        status = 200
+        headers = {"Content-Length": str(len(data))}
+    class Opener:
+        def open(self, url, timeout):
+            return Response(data)
+    with tempfile.TemporaryDirectory() as parent:
+        output = Path(parent) / "output"
+        output.mkdir(mode=0o700)
+        old_umask = os.umask(0o077)
+        try:
+            with patch.dict(M["materialize"].__globals__, pins=lambda: {"emulator": pin}), \
+                    patch.object(M["urllib"].request, "build_opener", return_value=Opener()):
+                yield output
+        finally:
+            os.umask(old_umask)
+
+
 class AndroidInputs(unittest.TestCase):
     def extract(self, items):
         with tempfile.TemporaryDirectory() as root:
@@ -43,6 +71,146 @@ class AndroidInputs(unittest.TestCase):
         self.assertTrue(all(v["algorithm"] == "sha1" and v["url"].startswith(M["GOOGLE"])
             for k, v in p.items() if k != "gradle"))
         self.assertEqual(p["ndk"]["revision"], "28.2.13676358")
+
+    def test_emulator_local_metadata_is_exact_official_package_and_original_license(self):
+        raw = M["emulator_descriptor"]()
+        self.assertEqual(len(raw), 18927)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), "31e0a2fe463fc7c59d650ef3c7cbfc35321dc4e4c718930a5d5b62fa54b22e74")
+        root = ET.fromstring(raw)
+        self.assertEqual(root.tag, "{http://schemas.android.com/repository/android/generic/02}repository")
+        self.assertEqual([e.tag for e in root], ["license", "localPackage"])
+        license, package = root
+        self.assertEqual(license.attrib, {"id": "android-sdk-license", "type": "text"})
+        self.assertEqual(hashlib.sha256(license.text.encode()).hexdigest(),
+            "1f8729233617b193fd619213792ae16a41b95d2bbbf525dfe66998252ba68b16")
+        self.assertEqual(package.attrib, {"path": "emulator", "obsolete": "false"})
+        self.assertEqual([e.tag for e in package], ["type-details", "revision", "display-name", "uses-license"])
+        self.assertEqual(package[0].attrib, {"{http://www.w3.org/2001/XMLSchema-instance}type": "generic:genericDetailsType"})
+        self.assertEqual([(e.tag, e.text) for e in package[1]], [("major", "37"), ("minor", "2"), ("micro", "12")])
+        self.assertEqual(package[2].text, "Android Emulator")
+        self.assertEqual(package[3].attrib, {"ref": "android-sdk-license"})
+        self.assertEqual(M["generated_metadata"](), {"sdk/emulator/package.xml": M["EMULATOR_METADATA"]})
+
+    def test_emulator_real_materialization_records_and_rechecks_one_descriptor(self):
+        with emulator_input() as output:
+            report = M["materialize"](output)
+            self.assertEqual(report["schema"], 2)
+            self.assertEqual(report["files"], 4)
+            self.assertFalse(report["runtime_executed"])
+            target = output / M["EMULATOR_PACKAGE_XML"]
+            self.assertEqual(target.read_bytes(), M["emulator_descriptor"]())
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+            self.assertEqual((target.parent / "NOTICE.csv").read_bytes(), b"original archive notice")
+            self.assertEqual([p.relative_to(output).as_posix() for p in output.rglob("package.xml")], [M["EMULATOR_PACKAGE_XML"]])
+            self.assertFalse((output / "sdk/licenses").exists())
+            value = json.loads((output / "provenance.json").read_bytes())
+            self.assertEqual(value["generated_metadata"], M["generated_metadata"]())
+            self.assertIs(value["generated_metadata"][M["EMULATOR_PACKAGE_XML"]]["license_accepted"], False)
+            self.assertIs(value["generated_metadata"][M["EMULATOR_PACKAGE_XML"]]["dependencies_installed"], False)
+            inventory = json.loads((output / "inventory.json").read_bytes())
+            self.assertEqual(inventory[M["EMULATOR_PACKAGE_XML"]], M["emulator_metadata_record"]())
+            target.write_bytes(target.read_bytes().replace(b"<micro>12</micro>", b"<micro>13</micro>"))
+            with self.assertRaisesRegex(ValueError, "TREE_BYTES"):
+                M["verify"](output)
+            # A self-consistent rewritten inventory cannot authorize altered metadata.
+            inventory[M["EMULATOR_PACKAGE_XML"]]["sha256"] = hashlib.sha256(target.read_bytes()).hexdigest()
+            encoded = M["canonical"](inventory)
+            (output / "inventory.json").write_bytes(encoded)
+            value["inventory_sha256"] = hashlib.sha256(encoded).hexdigest()
+            (output / "provenance.json").write_bytes(M["canonical"](value))
+            with self.assertRaisesRegex(ValueError, "EMULATOR_METADATA_INVENTORY"):
+                M["verify"](output)
+
+    def test_emulator_metadata_cannot_replace_archive_bytes_or_precede_admission(self):
+        for kwargs, error in (({"digest": "0" * 40}, "ARCHIVE_DIGEST"),
+                ({"revision": "37.2.13"}, "PACKAGE_REVISION"),
+                ({"destination": "sdk/other"}, "EMULATOR_METADATA_DESTINATION"),
+                ({"extra": [("emulator/package.xml", b"existing archive metadata", 0o100644)]}, "EMULATOR_METADATA_DESTINATION"),
+                ({"extra": [("emulator/package.xml", b"source.properties", 0o120777)]}, "EMULATOR_METADATA_DESTINATION")):
+            with self.subTest(kwargs=kwargs), emulator_input(**kwargs) as output:
+                with self.assertRaisesRegex(ValueError, error):
+                    M["materialize"](output)
+                self.assertFalse((output / "provenance.json").exists())
+                target = output / M["EMULATOR_PACKAGE_XML"]
+                if "extra" not in kwargs:
+                    self.assertFalse(target.exists())
+                elif target.is_symlink():
+                    self.assertEqual(os.readlink(target), "source.properties")
+                else:
+                    self.assertEqual(target.read_bytes(), b"existing archive metadata")
+
+    def test_metadata_source_tamper_specialfiles_and_replacement_fail_before_download(self):
+        original = M["emulator_descriptor"]()
+        for variant in ("tamper", "oversize", "broad_catalogue", "symlink", "hardlink", "fifo", "replacement"):
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                path = root / M["EMULATOR_DESCRIPTOR"]
+                path.parent.mkdir()
+                path.write_bytes(original)
+                path.chmod(0o600)
+                if variant == "tamper":
+                    path.write_bytes(original.replace(b'path="emulator"', b'path="emulatoX"'))
+                elif variant == "oversize":
+                    path.write_bytes(original + b"x")
+                elif variant == "broad_catalogue":
+                    path.write_bytes(original.replace(b"</generic:repository>", b'<localPackage path="other"/></generic:repository>'))
+                elif variant in ("symlink", "hardlink", "fifo"):
+                    path.unlink()
+                    if variant == "fifo":
+                        os.mkfifo(path, 0o600)
+                    else:
+                        other = root / "other"
+                        other.write_bytes(original)
+                        other.chmod(0o600)
+                        if variant == "symlink":
+                            path.symlink_to(other)
+                        else:
+                            os.link(other, path)
+                real_regular = M["regular"]
+                @contextmanager
+                def replacing(candidate):
+                    with real_regular(candidate) as stream:
+                        class Stream:
+                            def fileno(self):
+                                return stream.fileno()
+                            def read(self, limit):
+                                raw = stream.read(limit)
+                                other = root / "replacement"
+                                other.write_bytes(original)
+                                other.chmod(0o600)
+                                os.replace(other, path)
+                                return raw
+                        yield Stream()
+                with patch.dict(M["materialize"].__globals__, ROOT=root,
+                        regular=replacing if variant == "replacement" else real_regular,
+                        download=unittest.mock.Mock()) as scope:
+                    with self.assertRaises((ValueError, OSError)):
+                        M["materialize"](root)
+                    scope["download"].assert_not_called()
+
+    def test_generated_metadata_current_schema_is_closed_and_rechecked(self):
+        with emulator_input() as output:
+            M["materialize"](output)
+            path = output / "provenance.json"
+            original = path.read_bytes()
+            for mutation in ("old", "extra", "license", "input"):
+                value = json.loads(original)
+                if mutation == "old":
+                    value["schema"] = 1
+                    del value["generated_metadata"]
+                elif mutation == "extra":
+                    value["generated_metadata"]["sdk/platform-tools/package.xml"] = M["EMULATOR_METADATA"]
+                elif mutation == "license":
+                    value["generated_metadata"][M["EMULATOR_PACKAGE_XML"]]["license_accepted"] = True
+                else:
+                    value["inputs"]["emulator"]["digest"] = "0" * 40
+                path.write_bytes(M["canonical"](value))
+                with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                    M["verify"](output)
+            path.write_bytes(original)
+            with patch.dict(M["verify"].__globals__, emulator_descriptor=unittest.mock.Mock(side_effect=ValueError("SOURCE_METADATA_CHANGED"))):
+                with self.assertRaisesRegex(ValueError, "SOURCE_METADATA_CHANGED"):
+                    M["verify"](output)
 
     def test_cmake_is_one_exact_official_rootless_input(self):
         pins = M["pins"]()
@@ -297,7 +465,7 @@ class AndroidInputs(unittest.TestCase):
             record = dict(kind="file", bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(), mode=0o600)
             inv = M["canonical"]({"tool": record})
             (root / "inventory.json").write_bytes(inv)
-            value = dict(schema=1, kind="hosted-android-materialization", inputs={}, files=1,
+            value = dict(schema=2, kind="hosted-android-materialization", inputs={}, generated_metadata={}, files=1,
                 inventory_sha256=hashlib.sha256(inv).hexdigest(), runtime_executed=False, independent_sha256_authority=False)
             (root / "provenance.json").write_bytes(M["canonical"](value))
             for path in root.iterdir():

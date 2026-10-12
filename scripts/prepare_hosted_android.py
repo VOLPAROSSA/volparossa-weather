@@ -53,6 +53,18 @@ MAX_MEMBERS = 150000
 MAX_FILE = 4 * 1024**3
 MAX_EXPANDED = 12 * 1024**3
 CHUNK = 1024**2
+# InstallerUtil.writePackageXml in the exact command-line tools 19.0 copies a
+# RemotePackage into a local descriptor. Its legacy source.properties fallback
+# has no standalone emulator package type. Project only this official record;
+# do not synthesize a catalogue or accept licenses/install dependencies.
+EMULATOR_DESCRIPTOR = "third_party/android-emulator-local-package.xml"
+EMULATOR_METADATA = dict(
+    bytes=18927, sha256="31e0a2fe463fc7c59d650ef3c7cbfc35321dc4e4c718930a5d5b62fa54b22e74",
+    source=REPOSITORY, source_sha256="13dd16e8984cc6f3202a72c8eb269bd7ad03be4247b41b4412b315c5b8bf6d4b",
+    package="emulator", revision="37.2.12", derivation="command-line-tools-19.0-local-package",
+    license_text_sha256="1f8729233617b193fd619213792ae16a41b95d2bbbf525dfe66998252ba68b16",
+    license_accepted=False, dependencies_installed=False)
+EMULATOR_PACKAGE_XML = "sdk/emulator/package.xml"
 
 
 def pins():
@@ -65,6 +77,31 @@ def pins():
 
 def canonical(value):
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def emulator_descriptor():
+    """Admit the one reviewed public projection before using any of its bytes."""
+    path = ROOT / EMULATOR_DESCRIPTOR
+    def identity(info):
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    with regular(path) as stream:
+        before = os.fstat(stream.fileno())
+        require(before.st_size == EMULATOR_METADATA["bytes"], "EMULATOR_METADATA_BYTES")
+        raw = stream.read(EMULATOR_METADATA["bytes"] + 1)
+        require(identity(before) == identity(os.fstat(stream.fileno())) == identity(path.lstat())
+            and len(raw) == EMULATOR_METADATA["bytes"]
+            and hashlib.sha256(raw).hexdigest() == EMULATOR_METADATA["sha256"], "EMULATOR_METADATA_BYTES")
+    return raw
+
+
+def generated_metadata():
+    # Production pins always include emulator. Small inert archive tests may
+    # deliberately exercise other packages alone; none gets a fake descriptor.
+    return {EMULATOR_PACKAGE_XML: EMULATOR_METADATA} if "emulator" in pins() else {}
+
+
+def emulator_metadata_record():
+    return dict(kind="file", bytes=EMULATOR_METADATA["bytes"], sha256=EMULATOR_METADATA["sha256"], mode=0o600)
 
 
 def safe(name):
@@ -231,19 +268,24 @@ def verify(output):
         raw = stream.read(65537)
     require(len(raw) <= 65536, "PROVENANCE_BOUND")
     value = json.loads(raw, object_pairs_hook=R["unique_pairs"])
-    require(set(value) == {"schema", "kind", "inputs", "inventory_sha256", "files", "runtime_executed", "independent_sha256_authority"}
-        and type(value["schema"]) is int and value["schema"] == 1
+    require(set(value) == {"schema", "kind", "inputs", "generated_metadata", "inventory_sha256", "files", "runtime_executed", "independent_sha256_authority"}
+        and type(value["schema"]) is int and value["schema"] == 2
         and value["kind"] == "hosted-android-materialization" and value["runtime_executed"] is False
         and value["independent_sha256_authority"] is False and set(value["inputs"]) == set(pins()), "PROVENANCE_SCHEMA")
     for name, pin in pins().items():
         item = value["inputs"][name]
         require(set(item) == set(pin) | {"observed_sha256"} and all(item[k] == v for k, v in pin.items())
             and R["hex64"](item["observed_sha256"]), "INPUT_PIN")
+    require(canonical(value["generated_metadata"]) == canonical(generated_metadata()), "GENERATED_METADATA")
+    if generated_metadata():
+        emulator_descriptor()
     with regular(output / "inventory.json") as stream:
         inventory = stream.read(48 * 1024**2 + 1)
     require(len(inventory) <= 48 * 1024**2 and hashlib.sha256(inventory).hexdigest() == value["inventory_sha256"], "INVENTORY_HASH")
     expected = json.loads(inventory, object_pairs_hook=R["unique_pairs"])
     require(type(expected) is dict and len(expected) == value["files"] and len(expected) <= MAX_MEMBERS, "INVENTORY_BOUND")
+    if generated_metadata():
+        require(expected.get(EMULATOR_PACKAGE_XML) == emulator_metadata_record(), "EMULATOR_METADATA_INVENTORY")
     actual, pending, count = set(), [output], 0
     while pending:
         with os.scandir(pending.pop()) as children:
@@ -271,7 +313,7 @@ def verify(output):
                 info = os.fstat(stream.fileno())
                 require(info.st_size == item["bytes"] and stat.S_IMODE(info.st_mode) == item["mode"]
                     and hashlib.file_digest(stream, "sha256").hexdigest() == item["sha256"], "TREE_BYTES")
-    return dict(schema=1, provenance_sha256=hashlib.sha256(raw).hexdigest(),
+    return dict(schema=2, provenance_sha256=hashlib.sha256(raw).hexdigest(),
         inventory_sha256=value["inventory_sha256"], files=len(expected), runtime_executed=False)
 
 
@@ -281,6 +323,7 @@ def materialize(output):
     # The shared alarm helper deliberately rejects nesting and stays unchanged.
     end = time.monotonic() + 2400
     inputs, records = {}, {}
+    metadata = emulator_descriptor() if generated_metadata() else None
     for name, pin in pins().items():
         archive = output / ("gradle-8.13-all.zip" if name == "gradle" else "." + name + ".zip")
         try:
@@ -304,6 +347,16 @@ def materialize(output):
             with regular(source) as stream:
                 properties = stream.read(65537).decode("utf-8")
             require(len(properties) <= 65536 and re.search(r"(?m)^Pkg.Revision\s*=\s*" + re.escape(pin["revision"]) + r"\s*$", properties), "PACKAGE_REVISION")
+            if name == "emulator":
+                require(pin["destination"] == "sdk/emulator" and pin["revision"] == EMULATOR_METADATA["revision"]
+                    and "package.xml" not in entries, "EMULATOR_METADATA_DESTINATION")
+                # Only after the original archive digest and revision pass.
+                # Exclusive creation forbids replacing any archive-provided entry.
+                fd = os.open(output / EMULATOR_PACKAGE_XML,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(metadata)
+                entries["package.xml"] = emulator_metadata_record()
             records.update({pin["destination"] + "/" + k: v for k, v in entries.items()})
             require(len(records) <= MAX_MEMBERS, "TOTAL_FILE_BOUND")
             require(sum(v.get("bytes", 0) for v in records.values()) <= MAX_EXPANDED, "TOTAL_EXPANSION_BOUND")
@@ -311,8 +364,8 @@ def materialize(output):
     with deadline(phase_budget(end, 2400)):
         inventory = canonical(records)
         (output / "inventory.json").write_bytes(inventory)
-        (output / "provenance.json").write_bytes(canonical(dict(schema=1, kind="hosted-android-materialization",
-            inputs=inputs, inventory_sha256=hashlib.sha256(inventory).hexdigest(), files=len(records),
+        (output / "provenance.json").write_bytes(canonical(dict(schema=2, kind="hosted-android-materialization",
+            inputs=inputs, generated_metadata=generated_metadata(), inventory_sha256=hashlib.sha256(inventory).hexdigest(), files=len(records),
             runtime_executed=False, independent_sha256_authority=False)))
         return verify(output)
 
