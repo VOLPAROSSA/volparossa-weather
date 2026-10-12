@@ -105,11 +105,75 @@ class HostedOvermorrow(unittest.TestCase):
         argv = W["sandbox"](["/usr/bin/true"], mode="compile")
         writes = [argv[i+1:i+3] for i, arg in enumerate(argv) if arg == "--bind"]
         self.assertEqual(writes, [[str(W["PRIVATE"]), "/state"], [str(W["STAGE"]), str(W["STAGE"])],
-            [str(W["SDK"] / "bin/cache"), str(W["SDK"] / "bin/cache")]])
+            [str(W["SDK"] / "bin/cache"), str(W["SDK"] / "bin/cache")],
+            [str(W["SDK_TOOL_STATE"]), str(W["SDK_TOOL_MOUNT"])]])
         self.assertNotIn(["--remount-ro", "/home/runner"], [argv[i:i+2] for i in range(len(argv))])
         self.assertIn(["--remount-ro", "/"], [argv[i:i+2] for i in range(len(argv))])
         self.assertLess(argv.index("/home/runner"), argv.index(str(ROOT)))
         self.assertIn("--cpu=900", argv)
+
+    def test_tool_state_uses_private_persistent_mount_not_writable_sdk_sources(self):
+        for mode in ("acquire", "compile"):
+            argv = W["sandbox"](["/usr/bin/true"], mode=mode)
+            writes = [argv[i+1:i+3] for i, arg in enumerate(argv) if arg == "--bind"]
+            self.assertIn([str(W["SDK_TOOL_STATE"]), str(W["SDK_TOOL_MOUNT"])], writes)
+            self.assertNotIn([str(W["SDK"]), str(W["SDK"])], writes)
+            self.assertFalse(any("pubspec.lock" in item for item in argv))
+        self.assertIn("os.statvfs(tool_state.parent/'pubspec.lock').f_flag & os.ST_RDONLY", W["PROBE"])
+        self.assertIn("os.stat(tool_state).st_ino==os.stat('/state/flutter-tool-state').st_ino", W["PROBE"])
+
+    def tool_fixture(self, temporary):
+        root = Path(temporary)
+        parent, state = root / "sdk/packages/flutter_tools", root / "private/flutter-tool-state"
+        parent.mkdir(parents=True, mode=0o700)
+        state.parent.mkdir(mode=0o700)
+        return parent / ".dart_tool", state
+
+    def test_tool_state_is_fresh_and_receipt_contains_only_hashes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            mount, state = self.tool_fixture(temporary)
+            with patch.dict(G, SDK_TOOL_MOUNT=mount, SDK_TOOL_STATE=state):
+                W["prepare_tool_state"]()
+                metadata = b'{"rootUri":"private-cache-path"}'
+                H.write(state / "package_config.json", metadata)
+                receipt = W["tool_state_binding"]()
+                self.assertEqual(receipt["files"], {"package_config.json": dict(bytes=len(metadata),
+                    sha256=hashlib.sha256(metadata).hexdigest())})
+                self.assertNotIn("private-cache-path", str(receipt))
+                self.assertTrue(receipt["stored_outside_sdk"])
+                self.assertEqual(list(mount.iterdir()), [])
+                with self.assertRaises(FileExistsError):
+                    W["prepare_tool_state"]()
+
+    def test_tool_state_rejects_links_executables_and_nonempty_original_mount(self):
+        for change in ("link", "executable", "original", "hardlink"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as temporary:
+                mount, state = self.tool_fixture(temporary)
+                with patch.dict(G, SDK_TOOL_MOUNT=mount, SDK_TOOL_STATE=state):
+                    W["prepare_tool_state"]()
+                    item = state / "package_config.json"
+                    if change == "link":
+                        item.symlink_to(mount)
+                    else:
+                        H.write(item, b"{}")
+                        if change == "executable":
+                            item.chmod(0o700)
+                        elif change == "hardlink":
+                            os.link(item, state / "other.json")
+                        else:
+                            H.write(mount / "unexpected", b"{}")
+                    with self.assertRaisesRegex(ValueError, "SDK_TOOL_(STATE_TYPE|MOUNT_NOT_EMPTY)"):
+                        W["tool_state_binding"]()
+
+    def test_tool_state_bounds_empty_directories_as_well_as_file_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            mount, state = self.tool_fixture(temporary)
+            with patch.dict(G, SDK_TOOL_MOUNT=mount, SDK_TOOL_STATE=state):
+                W["prepare_tool_state"]()
+                for index in range(65):
+                    (state / f"dir-{index}").mkdir(mode=0o700)
+                with self.assertRaisesRegex(ValueError, "SDK_TOOL_STATE_BOUND"):
+                    W["tool_state_binding"]()
 
     def test_browser_sources_read_only_and_fresh_scratch_each_time(self):
         for proof in (W["PROOF"], W["TABLE_PROOF"]):
@@ -307,7 +371,7 @@ class HostedOvermorrow(unittest.TestCase):
         saved = {}
         with patch.dict(os.environ, GITHUB_SHA="a" * 40), \
                 patch.object(H, "runtime_inventory", return_value={}), \
-                patch.dict(G, sdk_inventory=lambda: {}), \
+                patch.dict(G, sdk_inventory=lambda: {}, prepare_tool_state=lambda: None), \
                 patch.object(H, "private_directory"), patch.object(H, "write"), \
                 patch.object(H, "save", side_effect=lambda name, data: saved.update({name: data})), \
                 patch.object(H, "run", side_effect=ValueError("CHILD_MEMORY_BOUND")), \

@@ -24,6 +24,8 @@ HERE = ROOT / "integrations/overmorrow"
 OUTPUT = BUILD / "hosted-overmorrow-ci"
 PRIVATE = OUTPUT / "private"
 SDK = BUILD / "hosted-flutter-sdk"
+SDK_TOOL_STATE = PRIVATE / "flutter-tool-state"
+SDK_TOOL_MOUNT = SDK / "packages/flutter_tools/.dart_tool"
 STAGE = BUILD / "overmorrow-hosted-ci"
 DEPLOY = BUILD / "overmorrow-hosted-web-ci"
 PROOF = BUILD / "overmorrow-hosted-browser-ci"
@@ -88,12 +90,15 @@ def sandbox(command, *, mode, proof=None):
                 str(proof / "appdata") if item == str(PROOF / "appdata") else item for item in argv]
     require(proof is None, "UNEXPECTED_BROWSER_OUTPUT")
     argv = H.sandbox(command, mode=mode, writable=STAGE)
-    # Only Flutter's cache needs SDK writes; its source and .git stay read-only.
+    # Flutter also initializes its own PubDependencies before app commands.
+    # Persist that generated .dart_tool state outside the verified SDK; the
+    # SDK mountpoint stays empty on disk and source/.git/locks remain read-only.
     # HOME is an empty tmpfs made BEFORE the read-only checkout mount. Flutter
     # may write its own ephemeral metadata there, never the runner's real home.
     index = argv.index("--remount-ro")
     require(argv[index:index+2] == ["--remount-ro", "/home/runner"], "SANDBOX_TEMPLATE_CHANGED")
-    argv[index:index+2] = ["--bind", str(SDK / "bin/cache"), str(SDK / "bin/cache")]
+    argv[index:index+2] = ["--bind", str(SDK / "bin/cache"), str(SDK / "bin/cache"),
+                           "--bind", str(SDK_TOOL_STATE), str(SDK_TOOL_MOUNT)]
     # Ubuntu's /usr/bin/which is an alternatives link through the deliberately
     # absent /etc/alternatives. Expose only the recorded canonical implementation
     # through an alias in the new root, not the runner's alternatives directory.
@@ -118,7 +123,8 @@ assert not any('TOKEN' in key or 'PROXY' in key or 'AUTH' in key for key in os.e
 assert list(Path('/home').iterdir())==[Path('/home/runner')]
 assert Path.home()==Path('/home/runner')
 assert all(os.statvfs(p).f_flag & os.ST_RDONLY for p in ['/', '/usr',sys.argv[3],sys.argv[6]])
-allowed={sys.argv[4],'/home/runner/.mozilla'} if browser else {sys.argv[4],'/state',sys.argv[6]+'/bin/cache'}
+tool_state=Path(sys.argv[6])/'packages/flutter_tools/.dart_tool'
+allowed={sys.argv[4],'/home/runner/.mozilla'} if browser else {sys.argv[4],'/state',sys.argv[6]+'/bin/cache',str(tool_state)}
 assert not os.statvfs(sys.argv[4]).f_flag & os.ST_RDONLY
 if browser:
  assert os.stat('/home/runner/.mozilla').st_ino==os.stat(Path(sys.argv[4])/'appdata').st_ino
@@ -127,7 +133,10 @@ else:
  assert Path('/tools/which').is_symlink() and os.readlink('/tools/which')=='/usr/bin/which.debianutils'
  assert Path('/tools/which').resolve(strict=True)==Path('/usr/bin/which.debianutils')
  assert os.access('/tools/which',os.X_OK) and os.statvfs('/tools').f_flag & os.ST_RDONLY
- for p in ['/state',sys.argv[6]+'/bin/cache','/home/runner']:
+ assert os.stat(tool_state).st_ino==os.stat('/state/flutter-tool-state').st_ino
+ assert os.statvfs(tool_state.parent).f_flag & os.ST_RDONLY
+ assert os.statvfs(tool_state.parent/'pubspec.lock').f_flag & os.ST_RDONLY
+ for p in ['/state',sys.argv[6]+'/bin/cache','/home/runner',str(tool_state)]:
   assert not os.statvfs(p).f_flag & os.ST_RDONLY
 for line in Path('/proc/self/mountinfo').read_text().splitlines():
  f=line.split(); fs=f[f.index('-')+1]; p=f[4]
@@ -204,6 +213,51 @@ def sdk_inventory(allow_build_state=False):
     # code. This full original inventory precedes any authorized cache writes.
     preparer = runpy.run_path(str(ROOT / "scripts/prepare_hosted_flutter.py"))
     return preparer["verify_materialized"](SDK, allow_build_state=allow_build_state)
+
+
+def prepare_tool_state():
+    # Called only after authenticating the full original SDK inventory. Never
+    # replace an existing file, link or generated directory from another run.
+    parent = SDK_TOOL_MOUNT.parent
+    info = parent.lstat()
+    require(parent.resolve(strict=True) == parent and stat.S_ISDIR(info.st_mode)
+            and info.st_uid == os.getuid() and not info.st_mode & 0o022, "SDK_TOOL_PARENT")
+    H.private_directory(SDK_TOOL_STATE)
+    H.private_directory(SDK_TOOL_MOUNT)
+
+
+def tool_state_binding():
+    # Generated package maps are build state, not a new SDK executable or
+    # public artifact. Record only bounded relative names, sizes and hashes.
+    records, pending, entries, total = {}, [SDK_TOOL_STATE], 0, 0
+    for root in (SDK_TOOL_STATE, SDK_TOOL_MOUNT):
+        info = root.lstat()
+        require(root.resolve(strict=True) == root and stat.S_ISDIR(info.st_mode)
+                and info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700, "SDK_TOOL_STATE_ROOT")
+    require(not any(SDK_TOOL_MOUNT.iterdir()), "SDK_TOOL_MOUNT_NOT_EMPTY")
+    while pending:
+        with os.scandir(pending.pop()) as directory:
+            for entry in directory:
+                entries += 1
+                require(entries <= 64, "SDK_TOOL_STATE_BOUND")
+                path = Path(entry.path)
+                relative = path.relative_to(SDK_TOOL_STATE).as_posix()
+                require(len(relative) <= 256 and len(path.relative_to(SDK_TOOL_STATE).parts) <= 4
+                        and re.fullmatch(r"[A-Za-z0-9._/-]+", relative), "SDK_TOOL_STATE_PATH")
+                info = entry.stat(follow_symlinks=False)
+                require(stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode), "SDK_TOOL_STATE_TYPE")
+                require(info.st_uid == os.getuid() and not info.st_mode & 0o022, "SDK_TOOL_STATE_OWNER")
+                if stat.S_ISDIR(info.st_mode):
+                    pending.append(path)
+                else:
+                    require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+                            and not info.st_mode & 0o111, "SDK_TOOL_STATE_TYPE")
+                    raw = H.read(path, 2 * 1024**2)
+                    total += len(raw)
+                    require(total <= 16 * 1024**2, "SDK_TOOL_STATE_BOUND")
+                    records[relative] = dict(bytes=len(raw), sha256=H.sha(raw))
+    return dict(schema=1, kind="hosted-flutter-tool-state", files=records, bytes=total,
+                stored_outside_sdk=True, original_mountpoint_empty=True)
 
 
 def system_tools():
@@ -284,6 +338,7 @@ def execute(helper, platform):
         H.private_directory(PRIVATE)
         for name in ("config", "cache", "pub-cache"):
             H.private_directory(PRIVATE / name)
+        prepare_tool_state()
         H.write(OUTPUT / "passwd", f"runner:x:{os.getuid()}:{os.getgid()}:CI:/home/runner:/bin/false\n".encode())
         H.write(OUTPUT / "group", f"runner:x:{os.getgid()}:\n".encode())
         phase = "policy-install"
@@ -302,6 +357,7 @@ def execute(helper, platform):
         preflight("acquire")
         H.run("pub-acquisition", sandbox(flutter_command("dependencies"), mode="acquire"), 600,
               env=environment(), memory=FLUTTER_MEMORY)
+        H.save("tool-state-acquired.json", tool_state_binding())
         phase = "offline-compilation"
         verify_phase_inputs(helper, pin)
         preflight("compile")
@@ -352,11 +408,14 @@ def execute(helper, platform):
         require(H.runtime_inventory() == runtime, "RUNTIME_CHANGED_DURING_BUILD")
         H.verify_firefox_copy(files)
         sdk_after = verify_phase_inputs(helper, pin)
+        tool_state = tool_state_binding()
+        H.save("tool-state-final.json", tool_state)
         require(system_tools() == tools, "SYSTEM_TOOLS_CHANGED")
         H.save("build.json", dict(schema=1, kind="hosted-overmorrow-build", weather_commit=os.environ["GITHUB_SHA"],
             browser_commit=H.BROWSER_COMMIT, upstream_commit=pin["commit"], lock_sha256=pin["pubspec_lock_sha256"],
             flutter_commit=pin["flutter_commit"], sdk_materialization=sdk, sdk_final_binding=sdk_after,
             system_tools=tools,
+            tool_state=tool_state,
             sdk_executed_in_disposable_sandbox=True, runtime=runtime, reports=reports,
             deployment_sha256=H.sha(H.read(OUTPUT / "deployment.json")), flutter_tests=23,
             compiled_networkless=True, locked_dependencies=True, actual_synthetic_ui=True,
