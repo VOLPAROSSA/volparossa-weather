@@ -324,6 +324,24 @@ class FlutterTests(unittest.TestCase):
                 with self.assertRaises((ValueError, OSError)):
                     F.verify_materialized(output, allow_build_state=True)
 
+    def test_changed_file_diagnostic_is_bounded_relative_path_and_kind_only(self):
+        for kind in ("size", "mode", "sha256"):
+            with self.subTest(kind=kind):
+                output, _ = self.prepared()
+                path = output / ".git/HEAD"
+                original = path.read_bytes()
+                if kind == "size":
+                    path.write_bytes(original + b"x")
+                elif kind == "mode":
+                    path.chmod(0o400)
+                else:
+                    path.write_bytes(b"x" * len(original))
+                with self.assertRaises(ValueError) as raised:
+                    F.verify_materialized(output, allow_build_state=True)
+                self.assertEqual(str(raised.exception), f"SDK file changed: .git/HEAD ({kind})")
+                self.assertNotIn(str(output), str(raised.exception))
+                self.assertNotIn(original.decode().strip(), str(raised.exception))
+
     def test_cli_requires_explicit_fetch_without_touching_output(self):
         with patch("sys.argv", ["prepare", "--output", "build/sdk"]), patch.object(F, "prepare") as prepare:
             with self.assertRaises(SystemExit) as result:

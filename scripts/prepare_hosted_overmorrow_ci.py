@@ -169,12 +169,18 @@ def flutter_command(action):
         str(SDK / "bin/flutter"), "--no-version-check", "--suppress-analytics", *contract["ACTIONS"][action]]
 
 
+def sdk_diff_command():
+    # Git's porcelain diff may refresh .git/index even with optional locks off.
+    # This is inspection of immutable archive bytes, not index maintenance.
+    return ["/usr/bin/git", "--no-optional-locks", "-c", "core.hooksPath=/dev/null",
+            "-c", "diff.autoRefreshIndex=false", "-C", str(SDK), "diff", "--quiet", "HEAD", "--"]
+
+
 def verify_phase_inputs(helper, pin):
     require(H.sha(H.read(STAGE / "pubspec.lock")) == pin["pubspec_lock_sha256"], "DEPENDENCY_LOCK_CHANGED")
     _, head = helper.process(["/usr/bin/git", "--no-optional-locks", "-C", str(SDK), "rev-parse", "HEAD"], 10)
     require(head.decode().strip() == pin["flutter_commit"], "FLUTTER_COMMIT_CHANGED")
-    helper.process(["/usr/bin/git", "--no-optional-locks", "-c", "core.hooksPath=/dev/null", "-C", str(SDK),
-                    "diff", "--quiet", "HEAD", "--"], 20)
+    helper.process(sdk_diff_command(), 20)
     _, extra = helper.process(["/usr/bin/git", "--no-optional-locks", "-C", str(SDK), "ls-files", "--others", "bin/internal"], 10)
     require(not extra.strip(), "UNREVIEWED_FLUTTER_BOOTSTRAP")
     for relative, expected in build_contract()["SDK_FILES"].items():

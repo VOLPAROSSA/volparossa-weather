@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Inert contract checks; never execute Flutter, Node, bwrap or Firefox."""
 import copy
+import hashlib
 import os
 from pathlib import Path
 import runpy
+import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -210,6 +213,43 @@ class HostedOvermorrow(unittest.TestCase):
         verify.assert_called_once_with(allow_build_state=True)
         for call in helper.process.call_args_list:
             self.assertIn("--no-optional-locks", call.args[0])
+        self.assertIn("diff.autoRefreshIndex=false", helper.process.call_args_list[1].args[0])
+
+    def test_real_git_inspection_preserves_archive_index_and_rejects_source_edits(self):
+        # Tiny text-only Git fixture, not an SDK/build/browser execution. Archive
+        # extraction gives files old mtimes/new inodes: porcelain diff must not
+        # rewrite the preserved index while checking otherwise clean contents.
+        with tempfile.TemporaryDirectory(prefix="overmorrow-git-inspection-") as temporary:
+            repository = Path(temporary) / "sdk"
+            env = dict(H.BASE_ENV, HOME=temporary, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null")
+            def git(*args):
+                return subprocess.run(["/usr/bin/git", *args], env=env, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, check=True)
+            git("init", "--quiet", "--template=", "--initial-branch=main", str(repository))
+            source = repository / "source.txt"
+            source.write_text("original source\n")
+            git("-C", str(repository), "add", "source.txt")
+            git("-C", str(repository), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                "-c", "core.hooksPath=/dev/null", "commit", "--quiet", "-m", "fixture")
+            for path in repository.rglob("*"):
+                if path.is_file():
+                    path.chmod(0o600)
+                    os.utime(path, (1700000000, 1700000000))
+            def snapshot():
+                return {str(path.relative_to(repository)): (hashlib.sha256(path.read_bytes()).hexdigest(),
+                    stat.S_IMODE(path.stat().st_mode)) for path in (repository / ".git").rglob("*") if path.is_file()}
+            before = snapshot()
+            with patch.dict(G, SDK=repository):
+                command = W["sdk_diff_command"]()
+            result = subprocess.run(command, env=env, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertEqual(snapshot(), before)
+            source.write_text("changed source\n")
+            result = subprocess.run(command, env=env, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, check=False)
+            self.assertEqual(result.returncode, 1, result.stderr.decode())
+            self.assertEqual(snapshot(), before)
 
     def test_changed_critical_sdk_file_stops_before_next_phase(self):
         helper = Mock()

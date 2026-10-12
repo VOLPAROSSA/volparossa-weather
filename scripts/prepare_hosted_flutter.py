@@ -264,8 +264,12 @@ def verify_materialized(output, *, allow_build_state=False):
             continue
         with regular_input(output / name) as stream:
             info = os.fstat(stream.fileno())
-            require(info.st_size == item["bytes"] and stat.S_IMODE(info.st_mode) == item["mode"]
-                    and hashlib.file_digest(stream, "sha256").hexdigest() == item["sha256"], "SDK file changed")
+            # name is an already validated, bounded public archive-relative
+            # path; never include host paths, file contents or actual hashes.
+            require(info.st_size == item["bytes"], f"SDK file changed: {name} (size)")
+            require(stat.S_IMODE(info.st_mode) == item["mode"], f"SDK file changed: {name} (mode)")
+            require(hashlib.file_digest(stream, "sha256").hexdigest() == item["sha256"],
+                    f"SDK file changed: {name} (sha256)")
     require(all(expected.get(name, {}).get("sha256") == digest for name, digest in SDK_FILES.items()), "SDK pins changed")
     return dict(schema=1, provenance_sha256=hashlib.sha256(raw).hexdigest(),
                 inventory_sha256=value["inventory_sha256"], files=value["files"], bytes=value["bytes"],
