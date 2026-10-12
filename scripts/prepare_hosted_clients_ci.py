@@ -161,11 +161,13 @@ def run(name, argv, seconds, *, env=None, cwd=None, memory=2 * GIB, reserve=True
     child = None
     returned = False
     peak = 0
+    host_reserve = 2 * GIB if reserve else 0
+    launch_minimum = max(3 * GIB, memory + host_reserve) if reserve else 0
     started = time.monotonic()
     deadline = started + seconds
     try:
         if reserve:
-            require(available_memory() >= 3 * GIB, "HOST_MEMORY_RESERVE")
+            require(available_memory() >= launch_minimum, "HOST_MEMORY_RESERVE")
         # Defer asynchronous cancellation only until the returned PID belongs to
         # this finally block. Do not block signals in children through sigmask.
         pending = []
@@ -247,6 +249,8 @@ def run(name, argv, seconds, *, env=None, cwd=None, memory=2 * GIB, reserve=True
             LOGS.append(dict(name=name, bytes=len(raw), sha256=sha(raw),
                 exit_status=child.returncode if child else None, returned=returned,
                 peak_descendant_rss=peak, elapsed_ms=int((time.monotonic()-started)*1000),
+                memory_monitor_enabled=reserve, memory_limit_bytes=memory,
+                host_reserve_bytes=host_reserve, launch_min_available_bytes=launch_minimum,
                 process_drain_confirmed=DRAIN_CONFIRMED))
     return bytes(raw)
 
@@ -474,6 +478,15 @@ def compile_commands():
     )
 
 
+def compilation_memory(name):
+    require(name in {step[0] for step in compile_commands()}, "UNKNOWN_COMPILE_PHASE")
+    # Vite's sequential SSR/client build retains a parent graph while its
+    # SvelteKit prerender worker starts. The hosted run measured 1,696,092,160
+    # bytes of aggregate descendant RSS, not a Node heap-limit violation.
+    # Give ONLY this phase 2 GiB; retain per-Node 768 MiB and host headroom.
+    return 2 * GIB if name == "production-build" else 1536 * 1024**2
+
+
 def installed_cli(name):
     entries = {"paraglide-js": "@inlang/paraglide-js/bin/run.js", "svelte-kit": "@sveltejs/kit/svelte-kit.js",
                "svelte-check": "svelte-check/bin/svelte-check", "vite": "vite/bin/vite.js"}
@@ -563,7 +576,7 @@ def execute(helper, platform):
             executable = installed_cli(cli)
             cli_bindings[cli] = dict(path=str(executable.relative_to(STAGE)), **digest(executable))
             run(name, sandbox([str(NODE), str(executable), *args], mode="compile", writable=STAGE),
-                seconds, env=environment(), memory=1536 * 1024**2)
+                seconds, env=environment(), memory=compilation_memory(name))
         run("client-render-tests", sandbox([str(NODE), "--test", str(ROOT / "integrations/drizzli/test-client.mjs"),
             str(ROOT / "integrations/drizzli/test-render.mjs")], mode="compile", writable=STAGE),
             120, env=dict(environment(), DRIZZLI_STAGE=str(STAGE)), memory=1536 * 1024**2)

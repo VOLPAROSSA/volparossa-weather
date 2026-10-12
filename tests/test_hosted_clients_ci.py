@@ -122,6 +122,16 @@ class HostedClients(unittest.TestCase):
         self.assertNotIn("prebuild", repr(commands))
         self.assertNotIn("npx", repr(commands))
 
+    def test_only_production_build_receives_larger_aggregate_budget(self):
+        for name, _cli, _arguments, seconds in H["compile_commands"]():
+            self.assertEqual(H["compilation_memory"](name),
+                2 * H["GIB"] if name == "production-build" else 1536 * 1024**2)
+            if name == "production-build":
+                self.assertEqual(seconds, 180)
+        with self.assertRaisesRegex(ValueError, "UNKNOWN_COMPILE_PHASE"):
+            H["compilation_memory"]("npm-acquisition")
+        self.assertEqual(H["environment"]()["NODE_OPTIONS"], "--max-old-space-size=768")
+
     def test_only_exact_upstream_engine_strict_config_is_admitted_unchanged(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(G, STAGE=Path(directory)):
             path = Path(directory) / ".npmrc"
@@ -274,6 +284,29 @@ class HostedClients(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "HOST_MEMORY_RESERVE"):
                 H["run"]("reserve", ["not-executed"], 5)
             command.assert_not_called()
+
+    def test_prelaunch_requires_actual_budget_plus_unchanged_host_reserve(self):
+        for budget in (1536 * 1024**2, 2 * H["GIB"]):
+            needed = budget + 2 * H["GIB"]
+            with self.subTest(budget=budget), tempfile.TemporaryDirectory() as directory, \
+                    patch.dict(G, OUTPUT=Path(directory), LOGS=[], available_memory=lambda: needed - 1), \
+                    patch.object(subprocess, "Popen") as command:
+                with self.assertRaisesRegex(ValueError, "HOST_MEMORY_RESERVE"):
+                    H["run"]("headroom", ["not-executed"], 5, memory=budget)
+                command.assert_not_called()
+                record = G["LOGS"][0]
+                self.assertTrue(record["memory_monitor_enabled"])
+                self.assertEqual(record["memory_limit_bytes"], budget)
+                self.assertEqual(record["host_reserve_bytes"], 2 * H["GIB"])
+                self.assertEqual(record["launch_min_available_bytes"], needed)
+
+    def test_prelaunch_retains_three_gib_minimum_for_small_probe_budget(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(G, OUTPUT=Path(directory), LOGS=[],
+                available_memory=lambda: 3 * H["GIB"] - 1), patch.object(subprocess, "Popen") as command:
+            with self.assertRaisesRegex(ValueError, "HOST_MEMORY_RESERVE"):
+                H["run"]("small-probe", ["not-executed"], 5, memory=H["GIB"] // 2)
+            command.assert_not_called()
+            self.assertEqual(G["LOGS"][0]["launch_min_available_bytes"], 3 * H["GIB"])
 
     def test_signal_cancellation_drains_and_restores_handler(self):
         previous = signal.getsignal(signal.SIGTERM)
