@@ -445,6 +445,31 @@ class RepositoryFixture(unittest.TestCase):
 
 
 class GradleDescriptorProfile(unittest.TestCase):
+    def test_diagnostic_cancellation_is_not_swallowed_to_launch_a_build(self):
+        with patch.object(M.D, "Capture", side_effect=M.H.Interrupted("cancelled")), patch.object(M.H, "run") as run:
+            with self.assertRaises(M.H.Interrupted): M.run_app_gradle(True)
+        run.assert_not_called()
+
+    def test_diagnostics_finish_after_run_drains_and_never_replace_primary_failure(self):
+        for failure in ("constructor", "collector", "write", None):
+            observer = Mock()
+            observer.finish.return_value = {"closed": True}
+            if failure == "collector": observer.finish.side_effect = OSError("private details")
+            def run(*args, **kwargs):
+                M.H.DRAIN_CONFIRMED = False
+                M.H.LOGS.append(dict(name="android-acquisition-build", java_cpu={"closed_cpu": True}))
+                raise ValueError("ORIGINAL_BUILD_FAILURE")
+            with patch.object(M.D, "Capture", side_effect=OSError("inert") if failure == "constructor" else None,
+                    return_value=observer), patch.object(M.H, "LOGS", []), patch.object(M.H, "DRAIN_CONFIRMED", True), \
+                    patch.object(M.H, "run", side_effect=run), patch.object(M.H, "save",
+                        side_effect=OSError("inert") if failure == "write" else None) as save:
+                with self.assertRaisesRegex(ValueError, "^ORIGINAL_BUILD_FAILURE$"):
+                    M.run_app_gradle(True)
+                if failure != "constructor":
+                    observer.finish.assert_called_once_with(drained=False, java_cpu={"closed_cpu": True})
+                if failure is None:
+                    save.assert_called_once_with("android-acquisition-build-diagnostics.json", {"closed": True})
+
     def test_only_exact_three_gradle_commands_get_4096_and_other_profiles_stay_1024(self):
         for command, mode in ((M.gradle(True), "acquire"), (M.gradle(False), "compile"),
                               (M.repository_fixture_command(), "compile")):
@@ -507,11 +532,12 @@ finally:
         self.assertEqual(M.MEMORY, 3*M.GIB)
         for acquire, name, mode in ((True, "android-acquisition-build", "acquire"),
                 (False, "android-offline-build", "compile")):
-            with patch.object(M.H, "run", return_value=b"inert") as run:
+            with patch.object(M.H, "run", return_value=b"inert") as run, patch.object(M.D, "Capture"):
                 self.assertEqual(M.run_app_gradle(acquire), b"inert")
             args, kwargs = run.call_args
             self.assertEqual(args, (name, M.gradle_sandbox(M.gradle(acquire), mode), 900))
-            self.assertEqual(kwargs, dict(env=M.environment(), cwd=M.STAGE/"android", memory=4*M.GIB, memory_categories=True))
+            self.assertEqual(kwargs, dict(env=M.environment(), cwd=M.STAGE/"android", memory=4*M.GIB,
+                memory_categories=True, java_cpu=True))
         for value in (None, "acquire", 1, [], ["unadmitted"]):
             with patch.object(M.H, "run") as run, self.assertRaisesRegex(ValueError, "NATIVE_APP_BUILD_SCOPE"):
                 M.run_app_gradle(value)

@@ -153,7 +153,7 @@ restoration and unchanged host network namespace are confirmed. All nine
 retained step-log hashes match. No APK, offline rebuild or installed-app result
 is produced.
 
-The next candidate skips only that exact engine-version/native-JAR cache path
+Commit `f40711e` skips only that exact engine-version/native-JAR cache path
 in Jetifier, with strict absolute-path anchors and Java-properties escaping.
 Flutter's pinned [Android target](https://github.com/flutter/flutter/blob/f6ff1529fd6d8af5f706051d9251ac9231c83407/engine/src/flutter/shell/platform/android/BUILD.gn#L501)
 and [JAR writer](https://github.com/flutter/flutter/blob/f6ff1529fd6d8af5f706051d9251ac9231c83407/engine/src/build/android/gyp/create_flutter_jar.py#L51)
@@ -166,6 +166,23 @@ plugins. The one-worker/1,024 MiB heap, 4 GiB RSS cap, 2 GiB host reserve and
 deadlines are unchanged. Inert tests check the exact match, escaping and
 rejection of other coordinates, versions, ABIs and paths; they do not establish
 that a real build or installed-app trial succeeds.
+
+The [ninth attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38259586563)
+passes Kotlin/Java compilation, then loses its Gradle daemon during
+`:app:mergeExtDexDebug`. The build exits 1 after 487.238 seconds; observed peak
+RSS is 4,060,364,800 bytes, below the 4 GiB cap, with no recorded resource-monitor
+stop. All nine original step-log hashes match. Process drain, policy/staging
+removal, KVM access restoration and host network-namespace preservation pass.
+There is still no APK, offline rebuild or installed-app result. Only the final
+twenty daemon-log lines were retained, so the underlying cause remains unknown.
+The next probe collects bounded JVM/daemon error markers, changes in the shared
+runner's memory-event counters and the maximum sampled CPU time of one Java
+process with its actual soft/hard limits. Only the two app-build steps opt in;
+resource limits and other clients' receipts stay unchanged. No raw daemon logs,
+process IDs, cgroup paths or dumps are exported. Missing, changed or truncated
+sources remain explicitly unknown. Sampled counters are indicators, not proof
+of a particular kill signal or a successful build. All 119 targeted inert tests
+pass; the new diagnostic path still needs actual hosted execution.
 
 The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only

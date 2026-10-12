@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Pure/inert tests only: no package installation, browser, bwrap or build."""
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -278,6 +279,7 @@ class HostedClients(unittest.TestCase):
             self.assertTrue(G["DRAIN_CONFIRMED"])
             self.assertNotIn("peak_memory_categories", G["LOGS"][0])
             self.assertNotIn("memory_category_method", G["LOGS"][0])
+            self.assertNotIn("java_cpu", G["LOGS"][0])
 
     def test_failed_process_is_not_a_success_or_empty_evidence(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(G, OUTPUT=Path(directory), LOGS=[], DRAIN_CONFIRMED=True):
@@ -462,6 +464,94 @@ class HostedClients(unittest.TestCase):
                     with self.assertRaises(H["Interrupted"]):
                         H["run"]("uncertain", ["not-executed"], 5, reserve=False)
                     self.assertFalse(G["DRAIN_CONFIRMED"])
+
+
+class JavaCpuObservations(unittest.TestCase):
+    @staticmethod
+    def stat(utime=120, stime=30, start=7):
+        fields = ["S"] + ["0"] * 49
+        for index, value in ((11, utime), (12, stime), (13, 999999), (14, 999999), (19, start)):
+            fields[index] = str(value)
+        return ("123 (java (inert)) " + " ".join(fields) + "\n").encode()
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.base = self.root / "101"
+        self.base.mkdir()
+        (self.root / "java").write_bytes(b"inert executable-identity fixture; never executed")
+        (self.base / "exe").symlink_to(self.root / "java")
+        (self.base / "stat").write_bytes(self.stat())
+        (self.base / "limits").write_text("Limit                     Soft Limit           Hard Limit           Units\n"
+            "Max cpu time              900                  900                  seconds\n")
+        self.value = H["java_cpu_state"]()
+
+    def test_own_ticks_only_and_matching_limits_at_maximum_not_process_sum(self):
+        with patch.object(os, "sysconf", return_value=250):
+            H["observe_java_cpu"](self.base, self.value)
+        self.assertEqual(self.value, dict(status="observed", samples_observed=1, samples_unavailable=0,
+            max_process_cpu_ms=600, soft_limit_seconds=900, hard_limit_seconds=900, sampled_lower_bound=True))
+        (self.base / "stat").write_bytes(self.stat(utime=10, stime=10))
+        (self.base / "limits").write_text("Max cpu time 100 100 seconds\n")
+        with patch.object(os, "sysconf", return_value=250):
+            H["observe_java_cpu"](self.base, self.value)
+        self.assertEqual(self.value["samples_observed"], 2)
+        self.assertEqual(self.value["max_process_cpu_ms"], 600)
+        self.assertEqual(self.value["hard_limit_seconds"], 900)
+        self.assertNotIn(str(self.root), json.dumps(self.value))
+
+    def test_reuse_exec_change_vanished_malformed_and_missing_limits_stay_unknown(self):
+        original = Path.open
+        for issue in ("reuse", "exec", "missing", "malformed", "limit", "oversized"):
+            with self.subTest(issue=issue):
+                value = H["java_cpu_state"]()
+                calls = []
+                def opened(path, *args, **kwargs):
+                    if path == self.base / "stat":
+                        calls.append(1)
+                        if issue == "missing": raise FileNotFoundError
+                        if issue == "malformed": return io.BytesIO(b"bad")
+                        if issue == "oversized": return io.BytesIO(b"x"*65537)
+                        return io.BytesIO(self.stat(start=8 if issue == "reuse" and len(calls)>1 else 7))
+                    if path == self.base / "limits" and issue == "limit": return io.BytesIO(b"Max cpu time nope\n")
+                    return original(path, *args, **kwargs)
+                links = [str(self.root/"java"), str(self.root/("different" if issue == "exec" else "java"))]
+                with patch.object(Path, "open", opened), patch.object(os, "readlink", side_effect=links):
+                    H["observe_java_cpu"](self.base, value)
+                self.assertEqual(value["status"], "unknown")
+                self.assertEqual(value["samples_unavailable"], 1)
+                self.assertIsNone(value["max_process_cpu_ms"])
+
+    def test_unavailable_cpu_never_discards_rss_and_disabled_never_reads_stat(self):
+        (self.base / "task/101").mkdir(parents=True)
+        (self.base / "task/101/children").write_text("")
+        (self.base / "status").write_text("VmRSS: 2048 kB\n")
+        (self.base / "stat").unlink()
+        categories = {k: dict(processes=0, rss_bytes=0) for k in ("java", "dart", "other")}
+        with patch.dict(G, Path=lambda value: self.root if value == "/proc" else Path(value)):
+            total = H["owned_rss"](101, categories=categories, java_cpu=self.value)
+            self.assertEqual(self.value["samples_unavailable"], 1)
+            self.assertEqual(total, 2048*1024)
+            self.assertEqual(categories["java"]["rss_bytes"], total)
+            with patch.dict(G, observe_java_cpu=Mock(side_effect=AssertionError("disabled"))):
+                self.assertEqual(H["owned_rss"](101), total)
+
+    def test_real_inert_child_opt_in_retains_unknown_not_zero_and_same_reserve(self):
+        with patch.dict(G, OUTPUT=self.root, LOGS=[], DRAIN_CONFIRMED=True, available_memory=lambda: 6*H["GIB"]):
+            H["run"]("cpu-inert", [sys.executable, "-I", "-c", "print('inert Python, not Java')"],
+                5, memory=4*H["GIB"], memory_categories=True, java_cpu=True)
+            record = G["LOGS"][0]
+        self.assertEqual(record["java_cpu"], H["java_cpu_state"]())
+        self.assertEqual(record["launch_min_available_bytes"], 6*H["GIB"])
+        self.assertEqual(record["host_reserve_bytes"], 2*H["GIB"])
+        self.assertTrue(record["process_drain_confirmed"])
+
+    def test_cpu_opt_in_requires_categories_and_does_not_allow_truthy_nonbool(self):
+        for cpu, categories in ((True, False), (1, True), ("yes", True)):
+            with patch.object(subprocess, "Popen") as spawn, self.assertRaisesRegex(ValueError, "JAVA_CPU_DIAGNOSTIC_SCOPE"):
+                H["run"]("invalid", ["not-executed"], 5, java_cpu=cpu, memory_categories=categories)
+            spawn.assert_not_called()
 
 
 if __name__ == "__main__":

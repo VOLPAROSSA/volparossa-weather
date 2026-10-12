@@ -29,6 +29,9 @@ spec = importlib.util.spec_from_file_location("_native_hosted", ROOT / "scripts/
 W = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(W)
 H, require = W.H, W.require
+spec = importlib.util.spec_from_file_location("_native_diagnostics", ROOT / "scripts/prepare_hosted_android_diagnostics.py")
+D = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(D)
 OUTPUT = ROOT / "build/hosted-android-ci"
 PRIVATE = OUTPUT / "private"
 STAGE = ROOT / "build/overmorrow-hosted-android-ci"
@@ -176,8 +179,30 @@ def run_app_gradle(acquire):
     """The larger finite RSS profile applies only to these two fixed steps."""
     require(type(acquire) is bool, "NATIVE_APP_BUILD_SCOPE")
     name, mode = ("android-acquisition-build", "acquire") if acquire else ("android-offline-build", "compile")
-    return H.run(name, gradle_sandbox(gradle(acquire), mode), 900,
-        env=environment(), cwd=STAGE / "android", memory=APP_MEMORY, memory_categories=True)
+    observation = None
+    try:
+        observation = D.Capture(PRIVATE, STAGE, OUTPUT, name)
+    except H.Interrupted:
+        raise
+    except Exception:
+        # Optional diagnosis cannot replace resource admission or build errors.
+        pass
+    first_log = len(H.LOGS)
+    try:
+        return H.run(name, gradle_sandbox(gradle(acquire), mode), 900,
+            env=environment(), cwd=STAGE / "android", memory=APP_MEMORY, memory_categories=True, java_cpu=True)
+    finally:
+        if observation is not None:
+            try:
+                records = [record for record in H.LOGS[first_log:] if record["name"] == name]
+                cpu = records[0].get("java_cpu") if len(records) == 1 else None
+                H.save(name + "-diagnostics.json", observation.finish(drained=H.DRAIN_CONFIRMED, java_cpu=cpu))
+            except H.Interrupted:
+                raise
+            except Exception:
+                # Missing receipt remains unknown. Preserve the original build
+                # failure and the shared helper's conservative cleanup result.
+                pass
 
 
 def gradle_sandbox(command, mode):

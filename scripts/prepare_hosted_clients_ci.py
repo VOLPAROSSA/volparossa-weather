@@ -126,7 +126,53 @@ def rss_category(base):
     return "dart" if name in ("dart", "dartvm", "dartaotruntime") else "other"
 
 
-def owned_rss(pid, *, categories=None):
+def java_cpu_state():
+    return dict(status="unknown", samples_observed=0, samples_unavailable=0,
+        max_process_cpu_ms=None, soft_limit_seconds=None, hard_limit_seconds=None, sampled_lower_bound=True)
+
+
+def observe_java_cpu(base, result):
+    """Own utime+stime only; no child CPU, PIDs, paths or command lines retained."""
+    def bounded(path):
+        with path.open("rb") as source:
+            raw = source.read(65537)
+        require(len(raw) <= 65536, "JAVA_CPU_SOURCE_BOUND")
+        return raw.decode("ascii")
+    def process_stat():
+        # comm may contain spaces/parentheses. Fields after its final ')' begin
+        # at field 3; utime, stime and starttime are fields 14, 15 and 22.
+        fields = bounded(base / "stat").rsplit(")", 1)[1].split()
+        values = tuple(int(fields[i]) for i in (11, 12, 19))
+        require(all(0 <= value < 2**64 for value in values), "JAVA_CPU_STAT")
+        return values
+    def executable():
+        require(Path(os.readlink(base / "exe")).name == "java", "JAVA_CPU_EXECUTABLE")
+        info = (base / "exe").stat()
+        return info.st_dev, info.st_ino
+    try:
+        first, exe = process_stat(), executable()
+        limits = re.findall(r"^Max cpu time\s+(unlimited|[0-9]+)\s+(unlimited|[0-9]+)\s+seconds\s*$",
+            bounded(base / "limits"), re.MULTILINE)
+        require(len(limits) == 1, "JAVA_CPU_LIMIT")
+        second = process_stat()
+        require(first[2] == second[2] and first[0] <= second[0] and first[1] <= second[1]
+            and exe == executable(), "JAVA_CPU_IDENTITY_CHANGED")
+        ticks = os.sysconf("SC_CLK_TCK")
+        require(type(ticks) is int and ticks > 0, "JAVA_CPU_CLOCK")
+        milliseconds = (second[0] + second[1]) * 1000 // ticks
+        soft, hard = (value if value == "unlimited" else int(value) for value in limits[0])
+        require(all(value == "unlimited" or value < 2**64 for value in (soft, hard)), "JAVA_CPU_LIMIT")
+        result["samples_observed"] = min(2**32-1, result["samples_observed"] + 1)
+        if result["max_process_cpu_ms"] is None or milliseconds > result["max_process_cpu_ms"]:
+            result.update(status="observed", max_process_cpu_ms=milliseconds,
+                soft_limit_seconds=soft, hard_limit_seconds=hard)
+    except (OSError, ValueError, IndexError, UnicodeError):
+        # An unavailable CPU sample must never discard already measured RSS or
+        # stop traversal/admission/cancellation. Unknown is not zero CPU use.
+        result["samples_unavailable"] = min(2**32-1, result["samples_unavailable"] + 1)
+
+
+def owned_rss(pid, *, categories=None, java_cpu=None):
     """Bound the whole descendant tree, including subprocesses with new sessions.
 
     RSS counts shared pages more than once: conservative pressure cancellation,
@@ -145,10 +191,13 @@ def owned_rss(pid, *, categories=None):
             require(len(status) <= 65536, "CHILD_STATUS_BOUND")
             rss = sum(int(line.split()[1]) * 1024 for line in status.splitlines() if line.startswith("VmRSS:"))
             total += rss
+            category = rss_category(base) if categories is not None or java_cpu is not None else None
             if categories is not None:
-                value = categories[rss_category(base)]
+                value = categories[category]
                 value["processes"] += 1
                 value["rss_bytes"] += rss
+            if java_cpu is not None and category == "java":
+                observe_java_cpu(base, java_cpu)
             for task in (base / "task").iterdir():
                 children = (task / "children").read_text()
                 require(len(children) <= 65536, "CHILD_PROCESS_BOUND")
@@ -171,22 +220,25 @@ def group_drained(pid, seconds=2):
         time.sleep(0.02)
 
 
-def run(name, argv, seconds, *, env=None, cwd=None, memory=2 * GIB, reserve=True, memory_categories=False):
+def run(name, argv, seconds, *, env=None, cwd=None, memory=2 * GIB, reserve=True, memory_categories=False, java_cpu=False):
     """Retain bounded original logs; never remove policy before owned children drain."""
     global DRAIN_CONFIRMED
     require(re.fullmatch(r"[a-z0-9-]+", name), "STEP_NAME")
     require(type(memory_categories) is bool and (not memory_categories or reserve), "MEMORY_DIAGNOSTIC_SCOPE")
+    require(type(java_cpu) is bool and (not java_cpu or memory_categories), "JAVA_CPU_DIAGNOSTIC_SCOPE")
     raw = bytearray()
     child = None
     returned = False
     peak = 0
     peak_categories = None
+    cpu = java_cpu_state() if java_cpu else None
     def observe_memory(pid):
         nonlocal peak, peak_categories
         categories = {name: dict(processes=0, rss_bytes=0) for name in ("java", "dart", "other")} if memory_categories else None
         # Exactly one traversal supplies both admission/cancellation accounting
         # and optional peak attribution; never combine independent samples.
-        rss = owned_rss(pid, categories=categories) if memory_categories else owned_rss(pid)
+        rss = owned_rss(pid, categories=categories, java_cpu=cpu) if java_cpu else (
+            owned_rss(pid, categories=categories) if memory_categories else owned_rss(pid))
         if rss > peak or (memory_categories and peak_categories is None):
             peak, peak_categories = rss, categories
         require(peak <= memory, "CHILD_MEMORY_BOUND")
@@ -280,7 +332,8 @@ def run(name, argv, seconds, *, env=None, cwd=None, memory=2 * GIB, reserve=True
                 host_reserve_bytes=host_reserve, launch_min_available_bytes=launch_minimum,
                 process_drain_confirmed=DRAIN_CONFIRMED,
                 **(dict(peak_memory_categories=peak_categories,
-                    memory_category_method="executable-name-allowlist-unknown-as-other") if memory_categories else {})))
+                    memory_category_method="executable-name-allowlist-unknown-as-other") if memory_categories else {}),
+                **(dict(java_cpu=cpu) if java_cpu else {})))
     return bytes(raw)
 
 
