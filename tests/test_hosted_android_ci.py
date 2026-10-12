@@ -68,17 +68,17 @@ class NativeCI(unittest.TestCase):
         self.assertEqual([base64.b64decode(x).decode() for x in defines.split(",")],
             ["VOLPAROSSA_WEATHER=true", "VOLPAROSSA_CORE_ORIGIN=http://127.0.0.1:43210"])
 
-    def test_only_app_builds_override_staged_heap_and_workers(self):
-        expected = "-Dorg.gradle.jvmargs=-Xmx1024m -XX:MaxMetaspaceSize=512m -XX:ReservedCodeCacheSize=128m -Dfile.encoding=UTF-8"
+    def test_only_app_builds_receive_exact_heap_and_workers(self):
+        expected = "-Dorg.gradle.jvmargs=-Xmx1536m -XX:MaxMetaspaceSize=512m -XX:ReservedCodeCacheSize=128m -Dfile.encoding=UTF-8"
         for acquire in (True, False):
             argv = M.gradle(acquire)
             self.assertEqual([x for x in argv if x.startswith("-Dorg.gradle.jvmargs=")], [expected])
             self.assertEqual([x for x in argv if x.startswith("--max-workers=")], ["--max-workers=1"])
             self.assertIn("--no-daemon", argv)
-            # The exact-command sandbox still rejects restoring the old heap
+            # The exact-command sandbox still rejects restoring the failed heap
             # or worker count, additional overrides and task changes.
             mode = "acquire" if acquire else "compile"
-            for changed in ([x.replace("-Xmx1024m", "-Xmx1536m") for x in argv],
+            for changed in ([x.replace("-Xmx1536m", "-Xmx1024m") for x in argv],
                     ["--max-workers=2" if x == "--max-workers=1" else x for x in argv],
                     argv + ["-Dorg.gradle.jvmargs=-Xmx2048m"]):
                 with self.assertRaisesRegex(ValueError, "NATIVE_GRADLE_RESOURCE_SCOPE"):
@@ -94,7 +94,7 @@ class NativeCI(unittest.TestCase):
         self.assertEqual(value, dict(schema=2, kind="hosted-android-gradle-configured-limits",
             scope="acquisition-and-offline-app-build", max_workers=1, d8_thread_pool_size=1,
             cpu_soft_seconds=1800, cpu_hard_seconds=1800,
-            jvm_args=["-Xmx1024m", "-XX:MaxMetaspaceSize=512m", "-XX:ReservedCodeCacheSize=128m", "-Dfile.encoding=UTF-8"],
+            jvm_args=["-Xmx1536m", "-XX:MaxMetaspaceSize=512m", "-XX:ReservedCodeCacheSize=128m", "-Dfile.encoding=UTF-8"],
             child_rss_limit_bytes=4294967296, host_reserve_bytes=2147483648, launch_min_available_bytes=6442450944,
             step_timeout_seconds=900, runtime_measurement=False))
         self.assertEqual("-Dorg.gradle.jvmargs=" + " ".join(value["jvm_args"]),
@@ -103,7 +103,7 @@ class NativeCI(unittest.TestCase):
         self.assertLess(source.index('H.save("gradle-resources.json", app_gradle_resources())'),
             source.index('run_app_gradle(True)'))
         self.assertIn('gradle_configured_limits=app_gradle_resources()', source)
-        # Neither a smaller configuration nor a forced negative child exit may
+        # Neither an adjusted heap nor a forced negative child exit may
         # turn an unconfirmed drain into cleanup success.
         self.assertIn('helper.DRAIN_CONFIRMED = helper.DRAIN_CONFIRMED and H.DRAIN_CONFIRMED', source)
         self.assertIn('require(cleanup["complete"], "CLEANUP_UNCONFIRMED")', source)

@@ -239,7 +239,7 @@ namespace and restored KVM access do not establish full cleanup. No APK,
 offline rebuild or installed-app evidence was produced. The deadline is proved;
 an internal D8 or garbage-collection cause is not.
 
-The next candidate makes the existing Kotlin in-process setting apply to both
+Commit `809cc44e` makes the existing Kotlin in-process setting apply to both
 the app and Flutter's included Gradle build. The app's `gradle.properties` alone
 does not configure that separate build; Gradle's
 [property loader](https://github.com/gradle/gradle/blob/v8.13.0/subprojects/core/src/main/java/org/gradle/initialization/DefaultGradlePropertiesLoader.java)
@@ -256,6 +256,24 @@ The previous three-Java-process observation does not identify which process was
 a Kotlin daemon; a successful actual build remains required.
 All 138 targeted Python/Node checks, workflow parsing and independent review
 pass; none executes Gradle, the Android toolchain or an emulator locally.
+
+The [thirteenth attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38288008577)
+on that source verifies the Kotlin property in both real Gradle builds through
+the schema-3 repository fixture, then fails during dex merging with explicit
+`OutOfMemoryError: Java heap space` messages. The build exits 1 after 663.058
+seconds. Peak aggregate RSS is 3,299,090,432 bytes, with two sampled Java
+processes; maximum sampled individual Java CPU is 1,257.580 seconds under the
+1,800-second limit. All nine original step-log hashes match. Process drain,
+policy/staging cleanup, original KVM access restoration and unchanged host
+network namespace pass. No APK, offline rebuild or installed-app evidence exists.
+
+The next candidate gives only the acquisition and offline app-build JVM a
+1,536 MiB heap instead of 1,024 MiB. This addresses observed heap exhaustion;
+successful build fit remains unproved. The 4 GiB aggregate cap, 2 GiB host
+reserve, 6 GiB launch requirement, 900-second wall deadline, 1,800-second CPU
+limit, one Gradle worker and one-thread D8 setting are unchanged. The independent
+repository fixture retains its 256 MiB heap and Kotlin remains in-process for
+both app and included builds.
 
 The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only

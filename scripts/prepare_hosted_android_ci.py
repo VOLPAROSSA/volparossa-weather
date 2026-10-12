@@ -52,10 +52,14 @@ MEMORY = 3 * GIB
 APP_MEMORY = 4 * GIB
 APP_CPU_SECONDS = 1800
 # The app Gradle JVM remains resident while Flutter starts its own compiler.
-# Lower only the two app-build commands, not the shared aggregate RSS guard.
+# Bound only the two app-build commands, not the shared aggregate RSS guard.
 # Gradle 8.13 gives these CLI properties precedence over staged properties.
 APP_GRADLE_WORKERS = 1
-APP_GRADLE_JVM_ARGS = ("-Xmx1024m", "-XX:MaxMetaspaceSize=512m",
+# Run 38288008577 at 809cc44e exhausted the 1024 MiB Java heap during
+# mergeExtDexDebug, below the unchanged 4 GiB aggregate guard (3299090432 B).
+# The included-build Kotlin scope fix remains required; 1536 MiB is a bounded
+# fit candidate, not a guarantee that the complete APK build will fit.
+APP_GRADLE_JVM_ARGS = ("-Xmx1536m", "-XX:MaxMetaspaceSize=512m",
     "-XX:ReservedCodeCacheSize=128m", "-Dfile.encoding=UTF-8")
 # Exact AGP 8.11.1 sources: IntegerOption.R8_THREAD_POOL_SIZE feeds
 # R8D8ThreadPoolBuildService; DexMergingTask uses it for mergeExtDex's single
