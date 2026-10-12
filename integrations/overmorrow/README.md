@@ -48,7 +48,8 @@ requested exactly twice; the browser uses only loopback resources and cleanup
 passes. This additional trial uses synthetic products and does not replace the
 full browser trial.
 
-The separate joined core delivery trial below now passes. Android/iOS packaging,
+The separate joined core delivery trial below now passes. An Android debug APK
+build and strict offline rebuild also pass; installed-app behavior, iOS packaging,
 mobile background lifecycle and native home-screen widgets remain unverified.
 The synthetic browser proof establishes neither forecast accuracy nor mobile
 execution.
@@ -79,8 +80,9 @@ source requests and do not prove core delivery or native Android/iOS operation.
 
 ## Android trial candidate
 
-The [Android hosted workflow](../../.github/workflows/hosted-android.yml) prepares
-a debug APK build and installed-app emulator trial; neither has yet passed. The
+The [Android hosted workflow](../../.github/workflows/hosted-android.yml) now passes
+the debug APK build and strict offline rebuild; the installed-app emulator trial
+has not yet passed. The
 [first attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38242345261)
 stopped during input preparation because two nested process alarms conflicted.
 The correction keeps the total and per-step deadlines without nesting alarms.
@@ -308,6 +310,23 @@ excessive expansion and changed bytes. There is no SDK auto-installation,
 blanket license acceptance or ABI filtering. All 82 inert Android tests and
 independent review pass; actual full-archive verification and native execution
 remain required. Resource limits and the upstream dependency lock are unchanged.
+
+The [sixteenth attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38295005766)
+on `bf6004f9` verifies that CMake input and successfully builds the debug APK.
+The following networkless build uses Gradle `clean`, strict captured dependency
+checksums and the same source inputs. It succeeds too, with the same APK size
+(74,366,059 bytes) and SHA256
+`501c0b2a2d658df7388b75f11d61407c5dbf774c8c0d94655491af55d2ea3184`.
+This is a successful pair of builds in one runner, not a general reproducibility
+or release-signing claim. Their durations are 551.094 and 93.814 seconds, with
+peak aggregate RSS of 3,831,435,264 and 2,733,920,256 bytes, both below 4 GiB.
+
+The installed emulator trial then exits 1 after 333 milliseconds with a generic
+child failure. Its internal failed operation is not recorded. All 13 original
+step-log hashes match; process drain, policy/staging removal, private emulator
+state removal, KVM restoration and unchanged host network namespace pass.
+Installation, UI operation and mobile lifecycle behavior remain unproved.
+Bounded emulator substep diagnostics are needed before another attempt.
 
 The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only
