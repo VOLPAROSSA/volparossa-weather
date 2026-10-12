@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -78,6 +79,8 @@ class HostedDecoder(unittest.TestCase):
             self.assertIn(flag, command)
         self.assertIn(["--bind", "/private/output", "/build"], [command[i:i+3] for i in range(len(command))])
         self.assertEqual(command.count("--bind"), 1)
+        readonly = [command[i+1:i+3] for i, word in enumerate(command) if word == "--ro-bind"]
+        self.assertEqual(readonly, [["/usr", "/usr"], ["/etc/ld.so.cache", "/etc/ld.so.cache"]])
         self.assertNotIn(["--ro-bind", "/", "/"], [command[i:i+3] for i in range(len(command))])
         self.assertEqual(command[-3:], ["--", "cmake", "--version"])
 
@@ -90,6 +93,8 @@ class HostedDecoder(unittest.TestCase):
         for option in ("-DFETCHCONTENT_FULLY_DISCONNECTED=ON", "-DENABLE_MEMFS=ON", "-DENABLE_AEC=ON"):
             self.assertIn(option, steps["configure-eccodes"])
         self.assertEqual(steps["compile-eccodes"][-2:], ["--parallel", "2"])
+        self.assertEqual(steps["test-libaec"], ["/usr/bin/ctest", "--test-dir", "/build/libaec-build",
+                                             "--output-on-failure", "--timeout", "60"])
         self.assertIn("grib_filter", steps["compile-eccodes"])
         self.assertEqual(steps["encode-ccsds"][-1], "/build/eccodes-source/samples/ccsds_grib2.tmpl")
         self.assertIn("60,0,1", steps["decode-ccsds-first"])
@@ -173,13 +178,16 @@ class HostedDecoder(unittest.TestCase):
     def test_capture_has_fixed_tool_selection_and_no_decoder_authority(self):
         with tempfile.TemporaryDirectory() as directory:
             calls = []
+            versions = []
             def fake_record(path):
                 return dict(path=str(path), bytes=4, sha256=H["sha"](b"tool"), version_sha256=None)
             def fake_program(output, tools, name, driver, program, deadline):
                 calls.append((name, driver, program))
                 return Path("/usr/bin")/name, {}
             def fake_run(output, tools, name, command, deadline, maximum):
-                self.assertEqual(command[-1], "--version")
+                key = name.removeprefix("version-")
+                self.assertEqual(command, [tools[key]["path"], *H["VERSION_ARGS"][key]])
+                versions.append(command)
                 return dict(log_sha256=H["sha"](b"version\n"))
             def read_manifest(path, expected):
                 self.assertEqual(H["sha"](path.read_bytes()), expected)
@@ -193,9 +201,72 @@ class HostedDecoder(unittest.TestCase):
             self.assertEqual(calls, list(H["COMPILER_PROGRAMS"]))
             manifest = json.loads(Path(value["toolchain_manifest"]).read_bytes())
             self.assertEqual(set(manifest["tools"]), H["TOOLS"])
+            self.assertIn(["/usr/bin/mawk", "-W", "version"], versions)
+            self.assertEqual(manifest["tools"]["mawk"], dict(path="/usr/bin/mawk", bytes=4,
+                sha256=H["sha"](b"tool"), version_sha256=H["sha"](b"version\n")))
             self.assertTrue(manifest["provenance_only"])
             self.assertFalse(value["compiled"])
             self.assertFalse(value["decoder_authorized"])
+
+    def test_mawk_manifest_requires_canonical_binary_bytes_and_version(self):
+        manifest_path = Path("/private/toolchain.json")
+        value = toolchain()
+        def load(value):
+            raw = json.dumps(value).encode()
+            def read(path, *_args):
+                return raw if path == manifest_path else b"tool"
+            with patch.dict(H["load_toolchain"].__globals__, read_file=read, platform=lambda: value["platform"]), \
+                    patch.object(Path, "resolve", lambda path: path), \
+                    patch.object(Path, "stat", return_value=SimpleNamespace(st_mode=0o100755)):
+                return H["load_toolchain"](manifest_path, H["sha"](raw))
+        self.assertEqual(load(value), value)
+        for field, bad, code in (("path", "/usr/bin/awk", "MAWK_PATH_CHANGED"),
+                ("sha256", "0"*64, "TOOLCHAIN_BINARY_MISMATCH"),
+                ("bytes", 5, "TOOLCHAIN_BINARY_MISMATCH"),
+                ("version_sha256", None, "TOOLCHAIN_VERSION_PIN")):
+            changed = json.loads(json.dumps(value))
+            changed["tools"]["mawk"][field] = bad
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, code): load(changed)
+        del value["tools"]["mawk"]
+        with self.assertRaisesRegex(ValueError, "TOOLCHAIN_SCHEMA"): load(value)
+
+    def test_private_awk_alias_is_exclusive_fixed_and_checked_after_build(self):
+        tools = toolchain()["tools"]
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)/"build/hosted-decoder-test"
+            H["create_output"](output)
+            H["create_awk_alias"](output, tools)
+            alias = output/"bin/awk"
+            self.assertEqual(os.readlink(alias), "/usr/bin/mawk")
+            self.assertEqual(H["verify_awk_alias"](output, tools), {"/build/bin/awk": "/usr/bin/mawk"})
+            self.assertEqual(H["ENV"]["PATH"].split(":")[0], "/build/bin")
+            with self.assertRaises(FileExistsError): H["create_awk_alias"](output, tools)
+            alias.unlink()
+            alias.symlink_to("/usr/bin/awk")
+            with self.assertRaisesRegex(ValueError, "AWK_ALIAS_CHANGED"): H["verify_awk_alias"](output, tools)
+            alias.unlink()
+            alias.write_text("replacement")
+            with self.assertRaisesRegex(ValueError, "AWK_ALIAS_CHANGED"): H["verify_awk_alias"](output, tools)
+            alias.unlink()
+            tools["mawk"]["path"] = "/etc/alternatives/awk"
+            with self.assertRaisesRegex(ValueError, "MAWK_PATH_CHANGED"): H["create_awk_alias"](output, tools)
+            self.assertFalse(alias.exists())
+
+    def test_build_rechecks_mawk_version_with_its_actual_flag(self):
+        calls = []
+        def step(output, tools, name, command, deadline, maximum):
+            calls.append(command)
+            self.assertEqual((deadline, maximum), (123, 16384))
+            return dict(step=name, log_sha256=H["sha"](b"version\n"))
+        tools = toolchain()["tools"]
+        with patch.dict(H["verify_tool_versions"].__globals__, run_step=step, read_file=lambda *_args: b"version\n"):
+            steps, versions = H["verify_tool_versions"](Path("/private/output"), tools, 123)
+            self.assertEqual(len(steps), len(H["VERSION_ARGS"]))
+            self.assertEqual(versions["mawk"], "version\n")
+            self.assertIn(["/usr/bin/mawk", "-W", "version"], calls)
+            tools["mawk"]["version_sha256"] = "0"*64
+            with self.assertRaisesRegex(ValueError, "TOOLCHAIN_VERSION_MISMATCH"):
+                H["verify_tool_versions"](Path("/private/output"), tools, 123)
 
     def run_inert(self, directory, code, *, maximum=1024, seconds=2):
         def command(_output, _tools, argv):

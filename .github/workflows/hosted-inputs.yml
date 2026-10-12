@@ -44,10 +44,10 @@ jobs:
           test "$(id -u)" != 0
           sudo -n apt-get update
           sudo -n apt-get install --yes --no-install-recommends \
-            apparmor bubblewrap build-essential cmake git python3
+            apparmor bubblewrap build-essential cmake git mawk python3
           umask 077
           mkdir -m 0700 build
-          dpkg-query -W apparmor bubblewrap gcc g++ binutils cmake make python3 git \
+          dpkg-query -W apparmor bubblewrap gcc g++ binutils cmake make mawk python3 git \
             > build/hosted-tool-packages.txt
       - name: Fetch and verify the three existing source pins without building
         run: |

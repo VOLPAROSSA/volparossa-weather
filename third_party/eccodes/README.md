@@ -59,6 +59,11 @@ source hashes, tool versions, output hashes and original licenses. Toolchain
 capture describes the runner; it is not independent decoder authorization or a
 fully hermetic, bit-reproducible build claim.
 
+The hosted toolchain includes a canonical `mawk` executable and its version/hash
+record. A private `/build/bin/awk` alias lets upstream tests use it without
+exposing the host's `/etc/alternatives` configuration. All upstream libaec tests
+remain required.
+
 On the disposable Ubuntu GitHub runner, the workflow uses a separate
 [`CI wrapper`](../../scripts/prepare_hosted_decoder_ci.py) for the runner's
 user-namespace restrictions. It records bounded diagnostics, refuses conflicting

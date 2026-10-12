@@ -31,8 +31,10 @@ TEMPLATE_SHA = "36a0cabd0a826d462ea21b309da695fe34ad4ef9a5e95c824ae8000e0351eab8
 EPOCH = 1756684800
 JOBS, DEADLINE_SECONDS, MAX_LOG = 2, 1800, 16 * 1024**2
 TOOLS = {"cc", "cxx", "cc1", "cc1plus", "collect2", "lto_wrapper", "as", "ld", "ar",
-         "ranlib", "cmake", "ctest", "make", "python", "bwrap", "sh", "git"}
+         "ranlib", "cmake", "ctest", "make", "python", "bwrap", "sh", "git", "mawk"}
 VERSION_ARGS = {key: ["--version"] for key in TOOLS - {"cc1", "cc1plus", "collect2", "lto_wrapper", "sh"}}
+VERSION_ARGS["mawk"] = ["-W", "version"]
+MAWK_PATH = "/usr/bin/mawk"
 DATE_SHIM = b'''#!/bin/sh
 set -eu
 [ "$#" -eq 1 ] || exit 64
@@ -127,6 +129,7 @@ def load_toolchain(path, expected):
         require(path.is_absolute() and path.resolve() == path and str(path).startswith("/usr/")
                 and type(item["bytes"]) is int and 0 < item["bytes"] <= 128 * 1024**2
                 and type(item["sha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", item["sha256"]), "TOOLCHAIN_TOOL")
+        require(name != "mawk" or str(path) == MAWK_PATH, "MAWK_PATH_CHANGED")
         version = item["version_sha256"]
         require((name not in VERSION_ARGS and version is None) or
                 (name in VERSION_ARGS and type(version) is str and re.fullmatch(r"[0-9a-f]{64}", version)),
@@ -161,6 +164,20 @@ def create_output(output):
     for name in ("bin", "home"):
         (output/name).mkdir(mode=0o700)
     write_new(output/"bin/date", DATE_SHIM, 0o700)
+
+
+def create_awk_alias(output, tools):
+    # libaec's unchanged sampledata.sh calls awk. The system alternatives link
+    # points through /etc, which deliberately is not exposed in this sandbox.
+    require(tools["mawk"]["path"] == MAWK_PATH, "MAWK_PATH_CHANGED")
+    (output/"bin/awk").symlink_to(MAWK_PATH)
+
+
+def verify_awk_alias(output, tools):
+    path = output/"bin/awk"
+    require(tools["mawk"]["path"] == MAWK_PATH and path.is_symlink()
+            and os.readlink(path) == MAWK_PATH, "AWK_ALIAS_CHANGED")
+    return {"/build/bin/awk": MAWK_PATH}
 
 
 def sandbox(output, tools, command):
@@ -245,12 +262,13 @@ def capture_toolchain(output):
     new_output(output, "hosted-toolchain-")
     actual_platform = platform()
     aliases = dict(cc="gcc", cxx="g++", python="python3", bwrap="bwrap", sh="sh",
-                   ar="ar", ranlib="ranlib", cmake="cmake", ctest="ctest", make="make", git="git")
+                   ar="ar", ranlib="ranlib", cmake="cmake", ctest="ctest", make="make", git="git", mawk="mawk")
     tools = {}
     for name, executable in aliases.items():
         path = shutil.which(executable, path="/usr/bin:/bin")
         require(path is not None, "TOOL_MISSING")
         tools[name] = tool_record(path)
+    require(tools["mawk"]["path"] == MAWK_PATH, "MAWK_PATH_CHANGED")
     create_output(output)
     deadline = time.monotonic() + 60
     for name, driver, program in COMPILER_PROGRAMS:
@@ -315,6 +333,16 @@ def verify_compiler_programs(output, tools, deadline):
     return steps
 
 
+def verify_tool_versions(output, tools, deadline):
+    steps, versions = [], {}
+    for name, args in sorted(VERSION_ARGS.items()):
+        step = run_step(output, tools, "version-" + name, [tools[name]["path"], *args], deadline, 16384)
+        require(step["log_sha256"] == tools[name]["version_sha256"], "TOOLCHAIN_VERSION_MISMATCH")
+        steps.append(step)
+        versions[name] = read_file(output/("version-"+name+".log"), 16384).decode()
+    return steps, versions
+
+
 def validate_decode(raw, latitude, longitude, expected_value):
     value = json.loads(raw, object_pairs_hook=unique)
     require(type(value) is list and len(value) == 1, "CCSDS_DECODE_COUNT")
@@ -346,6 +374,7 @@ def build(archives, output, manifest_path, manifest_sha):
         require(len(raw) == source["bytes"] and sha(raw) == source["sha256"], "SOURCE_ARCHIVE_MISMATCH")
         inputs.append((source, raw))
     create_output(output)
+    create_awk_alias(output, toolchain["tools"])
     (output/"downloads").mkdir(mode=0o700)
     write_new(output/"probe.filter", ("set bitsPerValue=16; set values={" +
               ",".join(map(str, range(496))) + "}; write;\n").encode())
@@ -358,14 +387,8 @@ def build(archives, output, manifest_path, manifest_sha):
         sources[source["name"]] = helper["source_tree"](source, archive)
     require(sha(read_file(sources["eccodes"]/"samples/ccsds_grib2.tmpl")) == TEMPLATE_SHA, "CCSDS_TEMPLATE_PIN")
     deadline = time.monotonic() + DEADLINE_SECONDS
-    steps = []
-    versions = {}
     tools = toolchain["tools"]
-    for name, args in sorted(VERSION_ARGS.items()):
-        step = run_step(output, tools, "version-" + name, [tools[name]["path"], *args], deadline, 16384)
-        require(step["log_sha256"] == tools[name]["version_sha256"], "TOOLCHAIN_VERSION_MISMATCH")
-        steps.append(step)
-        versions[name] = read_file(output/("version-"+name+".log"), 16384).decode()
+    steps, versions = verify_tool_versions(output, tools, deadline)
     steps.extend(verify_compiler_programs(output, tools, deadline))
     for name, command in commands(tools):
         steps.append(run_step(output, tools, name, command, deadline))
@@ -378,6 +401,7 @@ def build(archives, output, manifest_path, manifest_sha):
         helper["verify_source"](sources[source["name"]], output/"downloads"/source["archive"])
     # Do not attest mutable system tool binaries merely because they matched once.
     require(load_toolchain(manifest_path, manifest_sha) == toolchain, "TOOLCHAIN_CHANGED")
+    aliases = verify_awk_alias(output, tools)
     artifacts = []
     for name in ("eccodes-build/bin/grib_ls", "eccodes-build/bin/grib_filter", "eccodes-build/bin/codes_info",
                  "prefix/lib/libaec.a", "probe.grib2"):
@@ -402,7 +426,7 @@ def build(archives, output, manifest_path, manifest_sha):
     report = dict(schema=1, kind="volparossa-hosted-decoder-build", compiled=True, tests_passed=True,
         source_pin_sha256=PIN_SHA, recipe_sha256=sha(read_file(Path(__file__))),
         source_helper_sha256=LEGACY_SHA, toolchain_manifest_sha256=manifest_sha, toolchain=toolchain,
-        observed_tool_versions=versions,
+        observed_tool_versions=versions, private_tool_aliases=aliases,
         sources=pin["sources"], scope=dict(SCOPE), source_date_epoch=EPOCH, namespace_build_path="/build",
         jobs=JOBS, deadline_seconds=DEADLINE_SECONDS, environment=ENV, date_shim_sha256=sha(DATE_SHIM),
         effective_flags=flags, steps=steps, artifacts=artifacts, licenses=licenses,
