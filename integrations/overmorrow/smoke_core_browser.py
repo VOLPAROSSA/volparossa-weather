@@ -5,6 +5,8 @@
 The parent trial proves acquisition and a prior cold peer transfer. This driver
 proves subsequent API/UI use of those same publications, not browser-triggered
 first-cold delivery, origin authenticity, accuracy or native/mobile packaging.
+Tables are typed by their exact static headers; product metadata is grouped by
+actual titles. This does not claim separate DOM-container ownership per product.
 """
 import argparse
 import copy
@@ -130,9 +132,13 @@ def validate_expected(value, config):
     return value
 
 
-# Preserve actual semantic row order and cell ownership. Never collect all body
-# text or deduplicate rows: repeated zeros/missing values are meaningful data.
+# Preserve actual semantic row order and cell ownership. Flutter can merge both
+# products' metadata into a common label before the two table children, so a
+# preceding title cannot establish table ownership. Type tables only by actual
+# ordered static headers, independently of expected values/row counts. Never
+# collect all body text or deduplicate rows: repeated/missing cells are data.
 TABLES_JS = r"""
+const typedHeaders=__NATIVE_TABLE_HEADERS__, typedTables=new Map();
 const semanticNodes=nodes.filter(n=>/^flt-semantic-node-[0-9]+$/.test(n.id));
 const semanticSet=new Set(semanticNodes);
 const parent=n=>n.parentElement||n.getRootNode?.()?.host||null;
@@ -151,7 +157,6 @@ const sections=[];let active=null,total=0;
 for(const n of semanticNodes){
   if(!visible(n)||closest(n,['table']))continue;
   if(n.getAttribute('role')==='table'){
-    if(!active)throw Error('unscoped_native_table');
     const rows=semanticNodes.filter(r=>r.getAttribute('role')==='row'&&closest(r,['table'])===n&&visible(r));
     if(rows.length<2||rows.length>17)throw Error('row_bound');
     const data=rows.map(r=>{
@@ -163,7 +168,10 @@ for(const n of semanticNodes){
         const texts=[...new Set(owners.flatMap(ownLabels))];
         if(texts.length!==1||texts[0].length>256)throw Error('ambiguous_cell');
         total+=texts[0].length;return texts[0];});});
-    active.tables.push({headers:data[0],rows:data.slice(1)});
+    const kind=Object.keys(typedHeaders).find(k=>JSON.stringify(data[0])===JSON.stringify(typedHeaders[k]));
+    if(!kind)throw Error('unknown_native_table_headers');
+    if(typedTables.has(kind))throw Error('duplicate_native_table_type');
+    typedTables.set(kind,{headers:data[0],rows:data.slice(1)});
   }else{
     for(const line of ownLabels(n).flatMap(s=>s.split('\n')).map(s=>s.trim()).filter(Boolean)){
       if(line==='Native weather forecast'||line==='Native particulate forecast'){
@@ -175,6 +183,9 @@ for(const n of semanticNodes){
     }
   }
 }
+// Missing titles/tables remain empty and are rejected by observed_products;
+// this permits its existing bounded wait to observe incomplete UI hydration.
+for(const section of sections)if(typedTables.has(section.product))section.tables.push(typedTables.get(section.product));
 if(total>32768)throw Error('text_bound');
 const resources=performance.getEntriesByType('resource');
 if(resources.length>256)throw Error('resource_bound');
@@ -183,7 +194,7 @@ return {sections,localOnly:resources.every(e=>e.name.startsWith(location.origin+
   airQualityRequests:resources.filter(e=>e.name===location.origin+'/api/volparossa/air-quality'&&e.responseEnd>0).length,
   wasmLoaded:resources.some(e=>e.name===location.origin+'/canvaskit/canvaskit.wasm'&&e.responseEnd>0),
   canvas:nodes.some(n=>n.tagName.toLowerCase()==='canvas'),location:location.pathname};
-"""
+""".replace("__NATIVE_TABLE_HEADERS__", json.dumps(HEADERS, ensure_ascii=False))
 
 
 def snapshot(client):
@@ -225,8 +236,9 @@ def observed_products(observed, expected, requests):
                 require(cell == target if target == "Not available" or name == "weather" and index == 4
                         else number_equal(cell, target))
             normalized.append(list(wanted))
-        # Every copied metadata/value below was compared with its actual section
-        # and ordered row. Only harmless numeric spellings (e.g. 0.0) normalize.
+        # Metadata matched its actual title group; values matched the exact
+        # header-typed table and ordered row, not an asserted DOM container.
+        # Only harmless numeric spellings (e.g. 0.0) normalize.
         result[name] = {**display, "native": [row[0] for row in table["rows"]], "values": normalized}
         require(digest(result[name]) == expected["products"][name]["display_sha256"])
     require(digest(result) == expected["display_sha256"])

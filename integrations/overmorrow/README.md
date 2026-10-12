@@ -34,7 +34,16 @@ browser and fixture processes exit, the private profile is removed and the host
 network namespace is unchanged.
 
 The [build record](build-verification.json) identifies the pinned inputs, assets
-and browser evidence. Core-to-Overmorrow delivery and Android/iOS packaging remain
+and original browser evidence. A separate [table record](table-verification.json)
+now proves exact ordered table extraction in the actual browser: four weather
+rows and five particulate rows match their captured HTTP responses, both on
+initial display and after a real pointer refresh. Missing values, calm zero wind,
+native timestamps and precipitation windows remain distinct. Each product is
+requested exactly twice; the browser uses only loopback resources and cleanup
+passes. This additional trial uses synthetic products and preserves the earlier
+build/browser record.
+
+Core-to-Overmorrow delivery and Android/iOS packaging remain
 unverified. This synthetic browser proof establishes neither forecast accuracy
 nor mobile execution; background lifecycle and native home-screen widgets remain
 open.
@@ -51,14 +60,22 @@ The [preparer](prepare_core_browser.mjs) binds the raw products and cold-transfe
 receipts to expected native values. The [browser driver](smoke_core_browser.py)
 checks ordered Flutter table rows and cells, source metadata and a real pointer
 refresh. It distinguishes missing values from zero, preserves precipitation
-windows and keeps weather and particulate timelines separate. Three Node tests
-and ten Python tests pass; CI includes their pinned Browser helper sources.
+windows and keeps weather and particulate timelines separate. Tables are
+identified by their exact static ordered headers, independently of expected
+values. Metadata is checked under the actual product titles. This matters
+because Flutter can merge both metadata labels before the table children;
+the last preceding title does not establish table ownership. Missing, duplicate
+or unknown tables and changed cells still fail. Five pure DOM regressions cover
+this correction; CI includes the pinned Browser helper sources.
 
-The joined Overmorrow trial has not yet run. These component checks do not prove
-live table extraction or core-to-client delivery. Even a successful joined trial
+The separate synthetic browser trial proves this exact table verifier, not
+separate DOM containers for each product. The joined Overmorrow trial has not yet
+run and core-to-client delivery remains unproved. Even a successful joined trial
 would prove a prior cold core transfer followed by UI use of those publications,
 not that opening the browser initiated the first cold fetch. The retained
 synthetic browser result and historical origin results keep their original scope.
+The earlier frozen core bundle is unchanged and contains the prior verifier;
+a future joined trial must use a newly captured bundle with this correction.
 
 ## Data and privacy
 

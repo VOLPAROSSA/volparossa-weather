@@ -35,7 +35,7 @@ jobs:
         run: node --test integrations/drizzli/test-client.mjs
       - name: Check Overmorrow integration without downloading upstream dependencies
         run: |
-          node --test integrations/overmorrow/test-browser-fixture.mjs integrations/overmorrow/test_prepare_core_browser.mjs
+          node --test integrations/overmorrow/test-browser-fixture.mjs integrations/overmorrow/test_prepare_core_browser.mjs integrations/overmorrow/test_table_fixture.mjs
           test -f "$GITHUB_WORKSPACE/build/test-browser-support/scripts/smoke_privacy.py"
           VOLPAROSSA_TEST_NODE="$(command -v node)" \
             VOLPAROSSA_TEST_BROWSER_ROOT="$GITHUB_WORKSPACE/build/test-browser-support" python3 -B -m unittest discover \
