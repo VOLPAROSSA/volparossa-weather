@@ -79,7 +79,13 @@ class HostedClients(unittest.TestCase):
             self.assertEqual(command[command.index("--tmpfs") + 1], "/")
             self.assertNotIn(["--ro-bind", "/", "/"], [command[i:i+3] for i in range(len(command))])
             self.assertNotIn("/root", command)
-            self.assertNotIn(str(Path.home()), command)
+            # GitHub's real home has the same spelling as the empty synthetic
+            # home. A --dir/--remount-ro destination is not a host bind source.
+            host_sources = [command[i+1] for i, arg in enumerate(command)
+                            if arg in ("--bind", "--ro-bind")]
+            for host_home in (str(Path.home()), "/home/runner"):
+                self.assertNotIn(host_home, host_sources)
+            self.assertIn(["--dir", "/home/runner"], [command[i:i+2] for i in range(len(command))])
             self.assertIn(["--remount-ro", "/"], [command[i:i+2] for i in range(len(command))])
 
     def test_browser_only_writable_host_mount_is_private_proof(self):
