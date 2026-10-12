@@ -34,14 +34,19 @@ browser and fixture processes exit, the private profile is removed and the host
 network namespace is unchanged.
 
 The [build record](build-verification.json) identifies the pinned inputs, assets
-and original browser evidence. A separate [table record](table-verification.json)
+and current full browser evidence. The shared harness has been rechecked after
+adding the table trial: all nine pointer refreshes, independent failures, idle
+expiry and cleanup pass on the current source. The earlier reports remain
+unchanged.
+
+A separate [table record](table-verification.json)
 now proves exact ordered table extraction in the actual browser: four weather
 rows and five particulate rows match their captured HTTP responses, both on
 initial display and after a real pointer refresh. Missing values, calm zero wind,
 native timestamps and precipitation windows remain distinct. Each product is
 requested exactly twice; the browser uses only loopback resources and cleanup
-passes. This additional trial uses synthetic products and preserves the earlier
-build/browser record.
+passes. This additional trial uses synthetic products and does not replace the
+full browser trial.
 
 Core-to-Overmorrow delivery and Android/iOS packaging remain
 unverified. This synthetic browser proof establishes neither forecast accuracy
