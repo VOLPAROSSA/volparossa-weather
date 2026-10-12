@@ -194,7 +194,7 @@ zero, without child-level attribution. All nine original step-log hashes match;
 process drain, policy/staging removal and KVM-access restoration pass. No APK,
 offline rebuild or installed-app result exists.
 
-The next candidate sets `-Pandroid.r8.threadPoolSize=1` only on the two fixed
+Commit `c9392fb` sets `-Pandroid.r8.threadPoolSize=1` only on the two fixed
 app-build commands. The same pinned AGP 8.11.1 source shows that external dex
 merging uses an internal D8 work-stealing pool, independent of Gradle's worker
 limit. Its `IntegerOption` is supplied through a Gradle project property. This
@@ -203,6 +203,29 @@ CPU/wall deadlines or host reserve. The configuration receipt is not a runtime
 measurement. All 120 targeted inert checks and independent review pass, including
 exact acquisition/offline argument parity. Actual build fit and app execution
 still require the next hosted trial.
+
+The [eleventh attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38279184264)
+on that source still loses the Gradle daemon during `:app:mergeExtDexDebug`,
+exiting 1 after 614.585 seconds. No heap-exhaustion markers were observed in
+the complete bounded new daemon log or step log. One sampled Java process
+reaches 902.940 CPU seconds against its actual 900-second soft/hard limits;
+that is an indication, not proof of the daemon's kill cause. Aggregate RSS
+peaks at 3,970,863,104 bytes, below 4 GiB. All nine original log hashes match;
+process drain, policy/staging removal, network-namespace preservation and
+KVM-access restoration pass. There is still no APK, offline rebuild or
+installed-app proof.
+
+The next controlled trial gives only the two fixed app-build commands a
+1,800-second per-process CPU budget. Their 900-second wall-time deadline,
+4 GiB aggregate RSS cap, 2 GiB host reserve, one Gradle worker, 1,024 MiB heap
+and D8 pool of one remain unchanged. CPU time across a process's threads can
+exceed elapsed wall time. The single outer `prlimit` sets both CPU limits
+before starting the build sandbox; an insufficient inherited hard limit is
+rejected before launch, without changing the parent or attempting a privileged
+raise. The schema-2 configuration receipt distinguishes CPU limits from the
+wall-time deadline. All 126 targeted inert Python/Node checks and independent
+review pass, including tiny real child processes checking the limits and
+unchanged parent. Build fit still requires actual hosted evidence.
 
 The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only

@@ -91,8 +91,9 @@ class NativeCI(unittest.TestCase):
 
     def test_configured_limits_receipt_is_not_runtime_or_cleanup_evidence(self):
         value = M.app_gradle_resources()
-        self.assertEqual(value, dict(schema=1, kind="hosted-android-gradle-configured-limits",
+        self.assertEqual(value, dict(schema=2, kind="hosted-android-gradle-configured-limits",
             scope="acquisition-and-offline-app-build", max_workers=1, d8_thread_pool_size=1,
+            cpu_soft_seconds=1800, cpu_hard_seconds=1800,
             jvm_args=["-Xmx1024m", "-XX:MaxMetaspaceSize=512m", "-XX:ReservedCodeCacheSize=128m", "-Dfile.encoding=UTF-8"],
             child_rss_limit_bytes=4294967296, host_reserve_bytes=2147483648, launch_min_available_bytes=6442450944,
             step_timeout_seconds=900, runtime_measurement=False))
@@ -115,7 +116,7 @@ class NativeCI(unittest.TestCase):
             self.assertNotIn("threadPoolSize", next(arg for arg in command if arg.startswith("-Dorg.gradle.jvmargs=")))
             sandbox = M.gradle_sandbox(command, mode)
             self.assertEqual(sandbox[-len(command):], command)
-            self.assertEqual(sandbox[:5], ["/usr/bin/prlimit", "--core=0", "--cpu=900", "--nofile=4096:4096", "--"])
+            self.assertEqual(sandbox[:5], ["/usr/bin/prlimit", "--core=0", "--cpu=1800:1800", "--nofile=4096:4096", "--"])
             self.assertEqual(M.app_gradle_resources()["d8_thread_pool_size"], int(option.rsplit("=", 1)[1]))
             for replacement in ("-Pandroid.r8.threadPoolSize=2", "-Pandroid.r8.threadPoolSize=0",
                     "-Dandroid.r8.threadPoolSize=1", "-Pandroid.r8.maxWorkers=1"):
@@ -467,6 +468,48 @@ class RepositoryFixture(unittest.TestCase):
 
 
 class GradleDescriptorProfile(unittest.TestCase):
+    def test_app_cpu_hard_limit_admission_is_read_only_and_before_child(self):
+        for hard in (resource.RLIM_INFINITY, 1800, 3600, 1799, 900):
+            with patch.object(M.resource, "getrlimit", return_value=(900, hard)) as read, \
+                    patch.object(M.resource, "setrlimit") as write, patch.object(M.D, "Capture"), \
+                    patch.object(M.H, "run", return_value=b"inert") as run:
+                if hard == resource.RLIM_INFINITY or hard >= 1800:
+                    self.assertEqual(M.run_app_gradle(True), b"inert")
+                    run.assert_called_once()
+                else:
+                    with self.assertRaisesRegex(ValueError, "NATIVE_APP_CPU_PARENT_LIMIT"):
+                        M.run_app_gradle(True)
+                    run.assert_not_called()
+                read.assert_called_once_with(resource.RLIMIT_CPU)
+                write.assert_not_called()
+
+    def test_real_inert_cpu_limits_are_single_boundary_and_parent_unchanged(self):
+        before = resource.getrlimit(resource.RLIMIT_CPU)
+        child = "import json,resource;print(json.dumps(resource.getrlimit(resource.RLIMIT_CPU)))"
+        for command, mode, expected in ((M.gradle(True), "acquire", [1800, 1800]),
+                (M.gradle(False), "compile", [1800, 1800]),
+                (M.repository_fixture_command(), "compile", [900, 900])):
+            argv = M.gradle_sandbox(command, mode)
+            self.assertEqual(argv.count("/usr/bin/prlimit"), 1)
+            self.assertEqual([arg for arg in argv if arg.startswith("--cpu=")],
+                ["--cpu=900"] if expected[0] == 900 else ["--cpu=1800:1800"])
+            # Execute only the real resource prefix and a tiny Python child,
+            # never bwrap/Java/Gradle or a CPU-consuming workload.
+            result = subprocess.run([*argv[:argv.index("--")+1], sys.executable, "-I", "-c", child],
+                check=True, capture_output=True, timeout=10)
+            self.assertEqual(result.stderr, b"")
+            self.assertEqual(json.loads(result.stdout), expected)
+        self.assertEqual(resource.getrlimit(resource.RLIMIT_CPU), before)
+        # A hard 900 ancestor really cannot raise itself to 1800 without
+        # privilege. Only this disposable Python child lowers its own limit.
+        restricted = "import resource;resource.setrlimit(resource.RLIMIT_CPU,(900,900));" \
+            "\ntry: resource.setrlimit(resource.RLIMIT_CPU,(1800,1800))" \
+            "\nexcept (ValueError,PermissionError): print('raise-refused')"
+        result = subprocess.run([sys.executable, "-I", "-c", restricted],
+            check=True, capture_output=True, timeout=10)
+        self.assertEqual(result.stdout, b"raise-refused\n")
+        self.assertEqual(resource.getrlimit(resource.RLIMIT_CPU), before)
+
     def test_diagnostic_cancellation_is_not_swallowed_to_launch_a_build(self):
         with patch.object(M.D, "Capture", side_effect=M.H.Interrupted("cancelled")), patch.object(M.H, "run") as run:
             with self.assertRaises(M.H.Interrupted): M.run_app_gradle(True)
@@ -499,12 +542,17 @@ class GradleDescriptorProfile(unittest.TestCase):
             current = M.gradle_sandbox(command, mode)
             self.assertEqual(previous[3], "--nofile=1024")
             self.assertEqual(current[3], "--nofile=4096:4096")
-            self.assertEqual(previous[:3] + previous[4:], current[:3] + current[4:])
+            self.assertEqual(previous[:2] + previous[4:], current[:2] + current[4:])
+            self.assertEqual(previous[2], "--cpu=900")
+            self.assertEqual(current[2], "--cpu=900" if command == M.repository_fixture_command() else "--cpu=1800:1800")
         for mode in ("acquire", "compile", "emulator"):
             self.assertEqual(M.sandbox(["inert"], mode)[3], "--nofile=1024")
+            self.assertEqual(M.sandbox(["inert"], mode)[2], "--cpu=900")
         for mode in ("acquire", "compile", "browser"):
             self.assertEqual(M.H.sandbox(["inert"], mode=mode,
                 writable=M.H.PROOF if mode == "browser" else None)[3], "--nofile=1024")
+            self.assertEqual(M.H.sandbox(["inert"], mode=mode,
+                writable=M.H.PROOF if mode == "browser" else None)[2], "--cpu=300")
 
     def test_arbitrary_commands_changed_arguments_and_wrong_modes_are_rejected(self):
         for command, mode in ((["inert"], "compile"), (M.gradle(True), "compile"),

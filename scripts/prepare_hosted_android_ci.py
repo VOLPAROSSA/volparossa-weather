@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import resource
 import runpy
 import selectors
 import shutil
@@ -49,6 +50,7 @@ GRADLE_STATE = (".gradle", "build", ".kotlin")
 GIB = 1024**3
 MEMORY = 3 * GIB
 APP_MEMORY = 4 * GIB
+APP_CPU_SECONDS = 1800
 # The app Gradle JVM remains resident while Flutter starts its own compiler.
 # Lower only the two app-build commands, not the shared aggregate RSS guard.
 # Gradle 8.13 gives these CLI properties precedence over staged properties.
@@ -154,9 +156,10 @@ def flutter(*args):
 
 def app_gradle_resources():
     """Configured command limits, not observations of JVM or build success."""
-    return dict(schema=1, kind="hosted-android-gradle-configured-limits",
+    return dict(schema=2, kind="hosted-android-gradle-configured-limits",
         scope="acquisition-and-offline-app-build", max_workers=APP_GRADLE_WORKERS,
         d8_thread_pool_size=APP_D8_THREADS,
+        cpu_soft_seconds=APP_CPU_SECONDS, cpu_hard_seconds=APP_CPU_SECONDS,
         jvm_args=list(APP_GRADLE_JVM_ARGS), child_rss_limit_bytes=APP_MEMORY,
         host_reserve_bytes=2 * GIB, launch_min_available_bytes=APP_MEMORY + 2 * GIB,
         step_timeout_seconds=900, runtime_measurement=False)
@@ -186,6 +189,12 @@ def repository_fixture_command():
 def run_app_gradle(acquire):
     """The larger finite RSS profile applies only to these two fixed steps."""
     require(type(acquire) is bool, "NATIVE_APP_BUILD_SCOPE")
+    # The single outer prlimit lowers the new app process and its descendants,
+    # not this wrapper. Never attempt a late raise inside an already limited
+    # namespace, require privilege, or retry an inherited hard-limit failure.
+    inherited_hard = resource.getrlimit(resource.RLIMIT_CPU)[1]
+    require(inherited_hard == resource.RLIM_INFINITY or inherited_hard >= APP_CPU_SECONDS,
+        "NATIVE_APP_CPU_PARENT_LIMIT")
     name, mode = ("android-acquisition-build", "acquire") if acquire else ("android-offline-build", "compile")
     observation = None
     try:
@@ -224,6 +233,11 @@ def gradle_sandbox(command, mode):
     # This changes the new child only, never the caller/runner limits or the
     # shared Flutter/web/emulator/preflight sandbox's 1024-descriptor profile.
     argv[3] = "--nofile=4096:4096"
+    if command in (gradle(True), gradle(False)):
+        # Per-process CPU time can exceed wall time with multiple JVM threads.
+        # Only these two bounded app builds receive this controlled experiment;
+        # the observed ~903 s samples did not themselves prove a kill cause.
+        argv[2] = f"--cpu={APP_CPU_SECONDS}:{APP_CPU_SECONDS}"
     return argv
 
 
