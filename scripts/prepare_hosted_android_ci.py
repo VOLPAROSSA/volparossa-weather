@@ -542,6 +542,49 @@ class EmulatorDiagnostic:
         "sdk_avd": rb'(?:^|\n)Error: AVD not created\.',
         "sdk_license": rb'\bcom\.android\.builder\.sdk\.LicenceNotAcceptedException\b',
     }
+    # Exact standard throwable names only, grouped into closed indications.
+    # Never export a class/message/path extracted from the SDK. Multiple
+    # families (for example an initializer and its IO cause) remain ambiguous.
+    JAVA_FAMILIES = {
+        "version": ("java.lang.UnsupportedClassVersionError",),
+        "classpath": ("java.lang.ClassNotFoundException", "java.lang.NoClassDefFoundError"),
+        "initialization": ("java.lang.ExceptionInInitializerError",),
+        "linkage": ("java.lang.UnsatisfiedLinkError", "java.lang.NoSuchMethodError",
+            "java.lang.NoSuchFieldError", "java.lang.IncompatibleClassChangeError", "java.lang.LinkageError"),
+        "invalid_operation": ("java.lang.IllegalArgumentException", "java.lang.NumberFormatException",
+            "java.lang.UnsupportedOperationException"),
+        "state": ("java.lang.IllegalStateException",),
+        "null_reference": ("java.lang.NullPointerException",),
+        "security": ("java.lang.SecurityException", "java.security.AccessControlException",
+            "java.security.NoSuchAlgorithmException", "java.security.ProviderException",
+            "java.security.InvalidKeyException", "java.security.cert.CertificateException"),
+        "memory": ("java.lang.OutOfMemoryError", "java.lang.StackOverflowError"),
+        "io": ("java.io.IOException", "java.io.FileNotFoundException", "java.nio.file.FileSystemException",
+            "java.nio.file.NoSuchFileException", "java.nio.file.AccessDeniedException",
+            "java.nio.file.ReadOnlyFileSystemException", "java.nio.file.FileAlreadyExistsException"),
+        "network": ("java.net.UnknownHostException", "java.net.ConnectException", "java.net.SocketException"),
+        "service_configuration": ("java.util.ServiceConfigurationError",),
+        "internal": ("java.lang.InternalError", "java.lang.AssertionError"),
+    }
+    THROWABLE_PREFIX = rb'(?:^|\n)[ \t]*(?:(?:Exception in thread "[A-Za-z0-9_-]{1,32}"|Caused by:|Suppressed:) )?'
+    FILESYSTEM_MARKERS = {
+        "read_only": rb'\bRead-only file system\b|\bjava\.nio\.file\.ReadOnlyFileSystemException\b',
+        # FileNotFoundException alone also covers permission errors; it is not
+        # evidence of a missing file without this more specific observation.
+        "missing": rb'\bNo such file or directory\b|\bjava\.nio\.file\.NoSuchFileException\b',
+        "access_denied": rb'\bPermission denied\b|\bAccess is denied\b|\bOperation not permitted\b|\bjava\.nio\.file\.AccessDeniedException\b',
+    }
+
+    @staticmethod
+    def classify(matches):
+        return matches[0] if len(matches) == 1 else "ambiguous" if matches else "unknown"
+
+    def startup_markers(self, raw):
+        families = [family for family, names in self.JAVA_FAMILIES.items()
+            if any(re.search(self.THROWABLE_PREFIX + re.escape(name.encode()) + rb'(?=[:\r\n]|$)', raw)
+                for name in names)]
+        return self.classify(families), {name: re.search(pattern, raw) is not None
+            for name, pattern in self.FILESYSTEM_MARKERS.items()}
 
     def __init__(self):
         self.phase = "unknown"
@@ -564,7 +607,8 @@ class EmulatorDiagnostic:
         current = error is self.error
         raw = self.raw if current else b""
         markers = [name for name, pattern in self.MARKERS.items() if re.search(pattern, raw)]
-        classification = markers[0] if len(markers) == 1 else "ambiguous" if markers else "unknown"
+        classification = self.classify(markers)
+        java_family, filesystem = self.startup_markers(raw)
         check = str(error) if isinstance(error, ValueError) and str(error) in self.CHECKS else "unknown"
         if isinstance(error, H.Interrupted): kind = "interrupted"
         elif isinstance(error, subprocess.CalledProcessError): kind = "command_exit"
@@ -575,12 +619,13 @@ class EmulatorDiagnostic:
         elif isinstance(error, OSError): kind = "os_error"
         elif check != "unknown": kind = "check_failed"
         else: kind = "unknown"
-        return dict(schema=1, kind="hosted-android-emulator-diagnostic",
+        return dict(schema=2, kind="hosted-android-emulator-diagnostic",
             phase=self.phase if self.phase in self.PHASES else "unknown",
             command_category=self.command if current else "none", failure_kind=kind, check_code=check,
             exit_status=self.status if current else None, output_bytes=len(raw),
             output_complete=current and self.complete, output_truncated=current and self.truncated,
-            sdk_error=classification, raw_text_exported=False, cause_established=False)
+            sdk_error=classification, java_error_family=java_family, filesystem_markers=filesystem,
+            raw_text_exported=False, cause_established=False)
 
     def publish_failure(self, error, *, avd=False):
         # Only called while re-raising the original failure. The inside OUTPUT

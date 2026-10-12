@@ -842,6 +842,89 @@ class GradleUserProperties(unittest.TestCase):
 
 
 class EmulatorDiagnostics(unittest.TestCase):
+    @staticmethod
+    def observed(raw, complete=True):
+        diagnostic = M.EmulatorDiagnostic(); diagnostic.phase = "avd_create"
+        error = subprocess.CalledProcessError(1, "private-command")
+        diagnostic.failed_command(error, "avdmanager", 1, raw, complete)
+        return diagnostic, error, diagnostic.receipt(error)
+
+    def test_startup_families_are_exact_closed_enums_not_extracted_classnames(self):
+        expected = {"version", "classpath", "initialization", "linkage", "invalid_operation", "state",
+            "null_reference", "security", "memory", "io", "network", "service_configuration", "internal"}
+        self.assertEqual(set(M.EmulatorDiagnostic.JAVA_FAMILIES), expected)
+        fields = {"schema", "kind", "phase", "command_category", "failure_kind", "check_code", "exit_status",
+            "output_bytes", "output_complete", "output_truncated", "sdk_error", "java_error_family",
+            "filesystem_markers", "raw_text_exported", "cause_established"}
+        for family, names in M.EmulatorDiagnostic.JAVA_FAMILIES.items():
+            for name in names:
+                for prefix in (b'', b'Exception in thread "main" ', b'Caused by: ', b'\tSuppressed: '):
+                    with self.subTest(family=family, name=name, prefix=prefix):
+                        raw = prefix + name.encode() + b': /private/canary https://private.invalid/?token=secret\n'
+                        _, _, result = self.observed(raw)
+                        self.assertEqual(set(result), fields)
+                        self.assertEqual(result["schema"], 2)
+                        self.assertEqual(result["java_error_family"], family)
+                        self.assertEqual(set(result["filesystem_markers"]), {"read_only", "missing", "access_denied"})
+                        self.assertTrue(all(type(value) is bool for value in result["filesystem_markers"].values()))
+                        self.assertFalse(result["raw_text_exported"] or result["cause_established"])
+                        encoded = json.dumps(result)
+                        self.assertLessEqual(len(encoded), M.EmulatorDiagnostic.MAX_RECEIPT)
+                        for forbidden in (name, "private-command", "canary", "private.invalid", "secret"):
+                            self.assertNotIn(forbidden, encoded)
+
+    def test_multiple_startup_families_are_ambiguous_but_same_family_cause_is_not(self):
+        _, _, result = self.observed(b'java.lang.ExceptionInInitializerError\n'
+            b'Caused by: java.io.FileNotFoundException: /private (Permission denied)\n')
+        self.assertEqual(result["java_error_family"], "ambiguous")
+        self.assertEqual(result["filesystem_markers"], dict(read_only=False, missing=False, access_denied=True))
+        _, _, result = self.observed(b'java.io.IOException: private\n'
+            b'Caused by: java.nio.file.NoSuchFileException: private\n')
+        self.assertEqual(result["java_error_family"], "io")
+        self.assertTrue(result["filesystem_markers"]["missing"])
+
+    def test_filesystem_indications_are_independent_booleans_without_missing_from_generic_file_error(self):
+        for raw, expected in ((b'java.io.FileNotFoundException: /private\n', (False, False, False)),
+                (b'private: Read-only file system\n', (True, False, False)),
+                (b'private: No such file or directory\n', (False, True, False)),
+                (b'private: Permission denied\n', (False, False, True)),
+                (b'private: Access is denied\n', (False, False, True)),
+                (b'private: Operation not permitted\n', (False, False, True)),
+                (b'Read-only file system\nNo such file or directory\nPermission denied\n', (True, True, True))):
+            with self.subTest(raw=raw):
+                _, _, result = self.observed(raw)
+                self.assertEqual(result["filesystem_markers"], dict(zip(("read_only", "missing", "access_denied"), expected)))
+                self.assertNotIn("private", json.dumps(result))
+                self.assertFalse(result["cause_established"])
+
+    def test_unknown_startup_text_and_classname_substrings_remain_unknown_and_redacted(self):
+        for raw in (b'Exception in thread "main" private.TokenException: secret\n',
+                b'java.lang.IllegalStateExceptionPrivate: secret\n',
+                b'private-prefixjava.lang.NullPointerException: secret\n',
+                b'at java.lang.IllegalArgumentException.method(private.java:123)\n',
+                b'https://private.invalid/java.lang.IllegalStateException?token=secret\n'):
+            with self.subTest(raw=raw):
+                _, _, result = self.observed(raw)
+                self.assertEqual(result["java_error_family"], "unknown")
+                self.assertEqual(result["filesystem_markers"], dict(read_only=False, missing=False, access_denied=False))
+                self.assertNotIn("secret", json.dumps(result))
+                self.assertNotIn("private", json.dumps(result))
+
+    def test_truncated_startup_prefix_and_later_exception_never_invent_complete_output_or_reuse_markers(self):
+        prefix = b'java.lang.IllegalStateException: private\nRead-only file system\n'
+        raw = prefix + b'x' * (65536 - len(prefix)) + b'\njava.io.IOException: No such file or directory\n'
+        diagnostic, error, result = self.observed(raw)
+        self.assertEqual(result["java_error_family"], "state")
+        self.assertEqual(result["filesystem_markers"], dict(read_only=True, missing=False, access_denied=False))
+        self.assertTrue(result["output_truncated"])
+        self.assertFalse(result["output_complete"] or result["cause_established"])
+        later = diagnostic.receipt(ValueError("EMULATOR_BOOT_FAILED"))
+        self.assertEqual(later["java_error_family"], "unknown")
+        self.assertEqual(later["filesystem_markers"], dict(read_only=False, missing=False, access_denied=False))
+        self.assertEqual(later["output_bytes"], 0)
+        self.assertIsNot(diagnostic.error, ValueError("EMULATOR_BOOT_FAILED"))
+        self.assertIs(diagnostic.error, error)
+
     def test_known_markers_are_closed_indications_and_ambiguous_or_missing_is_not_cause(self):
         cases = {
             "java_version": b'Exception in thread "main" java.lang.UnsupportedClassVersionError: private-class\n',
@@ -926,7 +1009,7 @@ class EmulatorDiagnostics(unittest.TestCase):
 
     def test_real_inert_failure_is_recorded_before_original_cleanup_and_exception_survives(self):
         children, order = [], []
-        code = "import sys;sys.stdin.read();print('Error: Package path is not valid.');print('private-token');sys.exit(7)"
+        code = "import sys;sys.stdin.read();print('Error: Package path is not valid.');print('java.io.FileNotFoundException: /private (Permission denied)');print('private-token');sys.exit(7)"
         with tempfile.TemporaryDirectory() as directory:
             proof = Path(directory)
             self.guarded_inside(proof, self.inert_popen(code, children))
@@ -935,6 +1018,9 @@ class EmulatorDiagnostics(unittest.TestCase):
                 value = json.loads((proof / "emulator-diagnostic.json").read_text())
                 self.assertEqual(value["exit_status"], 7)
                 self.assertEqual(value["sdk_error"], "sdk_package")
+                self.assertEqual(value["schema"], 2)
+                self.assertEqual(value["java_error_family"], "io")
+                self.assertEqual(value["filesystem_markers"], dict(read_only=False, missing=False, access_denied=True))
                 self.assertEqual(owned[0].returncode, 7)
                 order.append("diagnostic-before-drain")
                 return original_drain(owned)
