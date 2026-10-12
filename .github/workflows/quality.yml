@@ -33,6 +33,12 @@ jobs:
         run: node --test tests/*.test.mjs
       - name: Check Drizz.li adapter without downloading upstream dependencies
         run: node --test integrations/drizzli/test-client.mjs
+      - name: Check hosted input preparation without downloads or native builds
+        run: |
+          test -f tests/test_hosted_decoder.py
+          test -f tests/test_hosted_runtime.py
+          python3 -B -m unittest discover -s tests -p 'test_hosted_*.py'
+          python3 -m json.tool third_party/hosted-runtime-inputs.json > /dev/null
       - name: Check Overmorrow integration without downloading upstream dependencies
         run: |
           node --test integrations/overmorrow/test-browser-fixture.mjs integrations/overmorrow/test_prepare_core_browser.mjs integrations/overmorrow/test_table_fixture.mjs
