@@ -77,11 +77,11 @@ async function getBytes(url, { range = null, signal, fetcher = globalThis.fetch 
   if (signal?.aborted) throw new WeatherError('CANCELLED');
   signal?.addEventListener('abort', abort, { once: true });
   const timer = setTimeout(abort, 30000);
-  let reader;
+  let reader, response;
   try {
     const headers = { 'Accept-Encoding': 'identity' };
     if (range) headers.Range = `bytes=${range.offset}-${range.offset + range.length - 1}`;
-    const response = await fetcher(url, { method: 'GET', headers, signal: controller.signal,
+    response = await fetcher(url, { method: 'GET', headers, signal: controller.signal,
       redirect: 'error', credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store' });
     requireThat(response.url === url && !response.redirected, 'ORIGIN_CHANGED');
     requireThat(response.status === (range ? 206 : 200), range ? 'EXACT_RANGE_REQUIRED' : 'INDEX_HTTP_FAILED');
@@ -105,7 +105,13 @@ async function getBytes(url, { range = null, signal, fetcher = globalThis.fetch 
   } catch (error) {
     if (error instanceof WeatherError) throw error;
     throw new WeatherError(controller.signal.aborted ? (signal?.aborted ? 'CANCELLED' : 'TIMEOUT') : 'NETWORK_FAILED');
-  } finally { await reader?.cancel().catch(() => {}); clearTimeout(timer); signal?.removeEventListener('abort', abort); }
+  } finally {
+    clearTimeout(timer); signal?.removeEventListener('abort', abort); controller.abort();
+    // Abort owns the actual fetch, including rejected headers before getReader.
+    // Stream cancellation must not extend the request's existing deadline.
+    if (reader) void reader.cancel().catch(() => {});
+    else if (response?.body) void response.body.cancel().catch(() => {});
+  }
 }
 
 export function checkGrib(bytes, length) {
