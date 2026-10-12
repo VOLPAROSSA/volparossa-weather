@@ -93,6 +93,20 @@ export function prepareExpectedV2(bytes, receiptBytes, airQualityBytes, airQuali
     display_sha256: sha(canonical(Object.fromEntries(Object.entries(products).map(([key, product]) => [key, product.display])))) };
 }
 
+// Profile 4 changes the admitted public build/runtime provenance, not product
+// semantics. Its expectations still come from the two actual cold publications.
+export function prepareExpectedV4(...inputs) {
+  return { ...prepareExpectedV2(...inputs), schema: 4 };
+}
+
+export function selectBundleVersion(requested, products) {
+  requireThat(typeof products === 'boolean'
+    && (requested === undefined || ['1', '2', '4'].includes(requested)), 'CORE_BROWSER_VERSION_INVALID');
+  const version = requested === undefined ? (products ? 2 : 1) : Number(requested);
+  requireThat(products === (version !== 1), 'CORE_BROWSER_VERSION_INVALID');
+  return version;
+}
+
 async function readPrivate(path, maximum, mode) {
   requireThat(typeof path === 'string' && isAbsolute(path) && resolve(path) === path
     && await realpath(path) === path, 'CORE_BROWSER_PATH_INVALID');
@@ -111,10 +125,11 @@ async function readPrivate(path, maximum, mode) {
 
 async function main() {
   const { values } = parseArgs({ options: Object.fromEntries(
-    ['forecast', 'receipt', 'air-quality', 'air-quality-receipt', 'config', 'core-sha256', 'output']
+    ['forecast', 'receipt', 'air-quality', 'air-quality-receipt', 'config', 'core-sha256', 'output', 'bundle-version']
       .map(name => [name, { type: 'string' }])) });
   const v2 = values['air-quality'] !== undefined;
   requireThat(v2 === (values['air-quality-receipt'] !== undefined), 'CORE_BROWSER_INPUT_INVALID');
+  const version = selectBundleVersion(values['bundle-version'], v2);
   const bytes = await readPrivate(values.forecast, 131072, 0o600);
   const receiptBytes = await readPrivate(values.receipt, 16384, 0o600);
   const receipt = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(receiptBytes));
@@ -128,7 +143,7 @@ async function main() {
     const aqReceiptBytes = await readPrivate(values['air-quality-receipt'], 16384, 0o600);
     requireThat(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(aqReceiptBytes)).local_output
       === values['air-quality'], 'COLD_CORE_OUTPUT_MISMATCH');
-    expected = prepareExpectedV2(bytes, receiptBytes, aqBytes, aqReceiptBytes, config,
+    expected = (version === 4 ? prepareExpectedV4 : prepareExpectedV2)(bytes, receiptBytes, aqBytes, aqReceiptBytes, config,
       values['core-sha256'], displayValue, displayAccumulationWindow);
   } else expected = prepareExpected(bytes, receiptBytes, config, values['core-sha256'], displayValue);
   const raw = Buffer.from(JSON.stringify(expected, null, 2) + '\n');
