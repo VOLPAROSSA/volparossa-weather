@@ -365,6 +365,117 @@ class AptJavaProvenance(unittest.TestCase):
                 M.java_provenance(self.helper)
 
 
+class AptAwkProvenance(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.target = self.root / "mawk"
+        self.raw = b"inert declared distro helper; never executed\n"
+        self.target.write_bytes(self.raw)
+        self.target.chmod(0o755)
+        self.scope = ExitStack()
+        self.addCleanup(self.scope.close)
+        self.scope.enter_context(patch.object(M, "AWK", self.target))
+        real_lstat = Path.lstat
+        def root_lstat(path, *args, **kwargs):
+            info = real_lstat(path, *args, **kwargs)
+            if path == self.target:
+                fields = ("st_dev", "st_ino", "st_mode", "st_gid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+                return SimpleNamespace(st_uid=0, **{key: getattr(info, key) for key in fields})
+            return info
+        self.scope.enter_context(patch.object(Path, "lstat", root_lstat))
+
+    def test_fixed_root_owned_descriptor_digest_without_execution(self):
+        with patch.object(M.os, "fstat", side_effect=root_file_stat), patch.object(M.subprocess, "Popen") as execute:
+            observed = M.apt_awk_digest()
+        self.assertEqual(observed, dict(bytes=len(self.raw), sha256=hashlib.sha256(self.raw).hexdigest()))
+        execute.assert_not_called()
+
+    def test_unsafe_ownership_type_mode_link_and_size_are_rejected(self):
+        bad = (dict(st_uid=1001), dict(st_uid=65534), dict(st_nlink=2), dict(st_size=0),
+            dict(st_size=M.AWK_LIMIT + 1), dict(st_mode=stat.S_IFDIR | 0o755),
+            *(dict(st_mode=stat.S_IFREG | mode) for mode in (0o644, 0o775, 0o757, 0o4755, 0o2755, 0o1755)))
+        for changes in bad:
+            with self.subTest(changes=changes), patch.object(M.os, "fstat", side_effect=lambda fd: root_file_stat(fd, **changes)), \
+                    self.assertRaisesRegex(ValueError, "AWK_TOOL"):
+                M.apt_awk_digest()
+        self.target.unlink(); self.target.symlink_to(self.root / "not-allowed")
+        with self.assertRaisesRegex(ValueError, "AWK_TOOL_PATH"): M.apt_awk_digest()
+
+    def test_fifo_read_is_nonblocking_and_own_descriptor_closes(self):
+        self.target.unlink(); os.mkfifo(self.target, 0o600)
+        opened, actual_open = [], os.open
+        def open_fixed(path, flags):
+            self.assertEqual(path, self.target)
+            self.assertTrue(flags & os.O_NOFOLLOW and flags & os.O_NONBLOCK and flags & os.O_CLOEXEC)
+            opened.append(actual_open(path, flags)); return opened[-1]
+        with patch.object(M.os, "open", side_effect=open_fixed), patch.object(M.os, "fstat", side_effect=root_file_stat), \
+                self.assertRaisesRegex(ValueError, "AWK_TOOL"):
+            M.apt_awk_digest()
+        with self.assertRaises(OSError): FSTAT(opened[0])
+
+    def test_same_fd_mutation_and_equal_byte_path_replacement_are_rejected(self):
+        read = os.read
+        for renamed in (False, True):
+            with self.subTest(renamed=renamed):
+                self.target.write_bytes(self.raw); self.target.chmod(0o755)
+                replaced = []
+                def change(fd, size):
+                    raw = read(fd, size)
+                    if raw and not replaced:
+                        replaced.append(fd)
+                        if renamed:
+                            self.target.rename(self.root / "old-helper")
+                            self.target.write_bytes(self.raw); self.target.chmod(0o755)
+                        else:
+                            self.target.write_bytes(b"x" * len(self.raw))
+                            info = self.target.stat()
+                            os.utime(self.target, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
+                    return raw
+                with patch.object(M.os, "fstat", side_effect=root_file_stat), patch.object(M.os, "read", side_effect=change), \
+                        self.assertRaisesRegex(ValueError, "AWK_TOOL_CHANGED"):
+                    M.apt_awk_digest()
+                with self.assertRaises(OSError): FSTAT(replaced[0])
+
+    def test_growth_read_bound_is_not_only_initial_stat(self):
+        with patch.object(M, "AWK_LIMIT", 8), patch.object(M.os, "fstat", side_effect=lambda fd: root_file_stat(fd, st_size=8)), \
+                self.assertRaisesRegex(ValueError, "AWK_TOOL_BOUND"):
+            M.apt_awk_digest()
+
+    def test_alias_is_android_only_before_readonly_root_and_uses_no_alternatives_bind(self):
+        for mode in ("acquire", "compile", "emulator"):
+            argv = M.sandbox(["inert"], mode)
+            aliases = [argv[i:i+3] for i, value in enumerate(argv) if value == "--symlink" and argv[i+2] == "/tools/awk"]
+            self.assertEqual(aliases, [["--symlink", str(self.target), "/tools/awk"]])
+            self.assertLess(argv.index("/tools/awk"), argv.index("--remount-ro"))
+            self.assertNotIn("/etc/alternatives", argv)
+            self.assertEqual(argv[:5], ["/usr/bin/prlimit", "--core=0", "--cpu=900", "--nofile=1024", "--"])
+        for mode in ("acquire", "compile"):
+            self.assertNotIn("/tools/awk", M.W.sandbox(["inert"], mode=mode))
+        self.assertIn("shutil.which('awk')=='/tools/awk'", M.PROBE)
+        self.assertIn("os.readlink('/tools/awk')=='/usr/bin/mawk'", M.PROBE)
+        self.assertIn("('/tools','/usr/bin/mawk')", M.PROBE)
+
+    def test_initial_provenance_and_full_trial_rechecks_remain_required(self):
+        source = (ROOT / "scripts/prepare_hosted_android_ci.py").read_text().split("def execute(", 1)[1].split("def inside(", 1)[0]
+        self.assertLess(source.index('awk = apt_awk_digest()'), source.index('phase = "policy-install"'))
+        self.assertIn('sandbox_alias="/tools/awk"', source)
+        full = source.split('phase = "installed-emulator-trial"', 1)[1]
+        self.assertLess(full.index('require(apt_awk_digest() == awk'), full.index('H.run("installed-android-trial"'))
+        self.assertGreater(full.rindex('require(apt_awk_digest() == awk'), full.index('H.run("installed-android-trial"'))
+        self.assertIn('validate_report(original)', full)
+
+    def test_changed_awk_rejected_before_early_sandbox_or_sdk_execution(self):
+        with patch.object(M, "avd_input_identity", return_value={}), patch.object(M, "apt_java_digest", return_value={}), \
+                patch.object(M, "apt_awk_digest", return_value={"sha256": "b"*64}), \
+                patch.object(M, "preflight") as preflight, patch.object(M.H, "run") as run, \
+                self.assertRaisesRegex(ValueError, "AWK_TOOL_CHANGED"):
+            M.avd_preflight("inert", awk={"sha256": "a"*64})
+        preflight.assert_not_called()
+        run.assert_not_called()
+
+
 class RepositoryFixture(unittest.TestCase):
     @staticmethod
     def receipt(**changes):
@@ -916,7 +1027,7 @@ class AvdPreflight(unittest.TestCase):
         execute = source.split("def execute(", 1)[1].split("def inside(", 1)[0]
         self.assertEqual(execute.count('H.private_directory(PROOF)'), 1)
         for later in ('repository_fixture()', 'flutter("pub"', 'run_app_gradle(True)', 'run_app_gradle(False)'):
-            self.assertLess(execute.index('avd_preflight(netns)'), execute.index(later))
+            self.assertLess(execute.index('avd_preflight(netns, awk=awk)'), execute.index(later))
         self.assertIn('H.sha(H.read(OUTPUT / "emulator-preflight.json"))', execute)
         self.assertIn('validate_report(original)', execute)
         self.assertIn('"--inside"], "emulator")', execute)
@@ -984,7 +1095,7 @@ class AvdPreflight(unittest.TestCase):
             self.assertTrue(all(c.poll() is not None for c in children))
 
     def test_outer_binding_cleanup_and_fresh_state_are_mandatory(self):
-        cases = (None, "input", "java", "cleanup", "scope", "unknown", "child")
+        cases = (None, "input", "java", "awk", "alias", "cleanup", "scope", "unknown", "child")
         for bad in cases:
             with self.subTest(bad=bad), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory); proof = root / "proof"; proof.mkdir()
@@ -994,21 +1105,23 @@ class AvdPreflight(unittest.TestCase):
                 if bad == "cleanup": cleanup["direct_children_reaped"] = False
                 if bad == "scope": cleanup["installed_app_exercised"] = True
                 if bad == "unknown": observed["unclosed"] = "private"
+                if bad == "alias": observed["posix_helpers"]["awk"] = False
                 for name, value in (("inputs", observed), ("cleanup", cleanup)):
                     M.H.write(proof / ("emulator-preflight-" + name + ".json"), json.dumps(value).encode())
                 java = dict(bytes=1, sha256="a"*64)
                 with patch.object(M, "PROOF", proof), patch.object(M, "PRIVATE", private), \
                         patch.object(M, "avd_input_identity", return_value=self.observation()["inputs"]), \
                         patch.object(M, "apt_java_digest", side_effect=[java, dict(java, sha256="b"*64) if bad == "java" else java]), \
+                        patch.object(M, "apt_awk_digest", side_effect=[java, dict(java, sha256="b"*64) if bad == "awk" else java]), \
                         patch.object(M, "preflight") as preflight, patch.object(M.H, "save") as save, \
                         patch.object(M.H, "run", side_effect=ValueError("original-child-failure") if bad == "child" else None) as run:
                     if bad is None:
-                        M.avd_preflight("inert-netns")
+                        M.avd_preflight("inert-netns", awk=java)
                         self.assertEqual({p.name for p in private.iterdir()}, {"avd", "android-home"})
                         self.assertFalse(save.call_args.args[1]["installed_app_exercised"])
                         self.assertEqual(save.call_args.args[1]["creation_timeout_seconds"], 30)
                     else:
-                        with self.assertRaises(ValueError): M.avd_preflight("inert-netns")
+                        with self.assertRaises(ValueError): M.avd_preflight("inert-netns", awk=java)
                         save.assert_not_called()
                         self.assertEqual(list(private.iterdir()), [])
                     preflight.assert_called_once_with("emulator", "inert-netns", avd=True)

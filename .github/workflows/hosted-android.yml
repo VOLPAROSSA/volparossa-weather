@@ -54,12 +54,12 @@ jobs:
           timeout 180s sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update
           timeout 300s sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
             apparmor bubblewrap acl git python3 util-linux iproute2 ca-certificates curl unzip xz-utils zip \
-            debianutils openjdk-17-jdk-headless libglu1-mesa libgl1 libpulse0 libnss3 libxkbcommon0 \
+            debianutils mawk openjdk-17-jdk-headless libglu1-mesa libgl1 libpulse0 libnss3 libxkbcommon0 \
             libxcb-cursor0 libxi6 libxrandr2 libxrender1 libxfixes3 libxcursor1 libasound2t64 libgbm1 libatomic1
           umask 077
           mkdir -p build
           dpkg-query -W apparmor bubblewrap acl git python3 util-linux iproute2 ca-certificates curl unzip xz-utils zip \
-            debianutils openjdk-17-jdk-headless libc6 libstdc++6 libglu1-mesa libgl1 libpulse0 libnss3 \
+            debianutils mawk openjdk-17-jdk-headless libc6 libstdc++6 libglu1-mesa libgl1 libpulse0 libnss3 \
             libxkbcommon0 libxcb-cursor0 libxi6 libxrandr2 libxrender1 libxfixes3 libxcursor1 libasound2t64 libgbm1 libatomic1 \
             > build/hosted-android-packages.txt
       - name: Prepare exact public inputs without executing Android tools

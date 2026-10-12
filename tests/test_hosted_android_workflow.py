@@ -75,6 +75,14 @@ class Workflow(unittest.TestCase):
             self.assertNotRegex(value, r"(private|\.git|\.gradle|avd|keystore|token|android-inputs/sdk)")
             self.assertNotIn("**", value)
 
+    def test_canonical_awk_package_is_declared_and_recorded_only_on_disposable_runner(self):
+        install = self.text.split("apt-get install --yes --no-install-recommends", 1)[1].split("umask 077", 1)[0]
+        inventory = self.text.split("dpkg-query -W", 1)[1].split("> build/hosted-android-packages.txt", 1)[0]
+        self.assertEqual(install.split().count("mawk"), 1)
+        self.assertEqual(inventory.split().count("mawk"), 1)
+        self.assertNotIn("update-alternatives", self.text)
+        self.assertNotIn("/etc/alternatives", self.text)
+
 
 if __name__ == "__main__":
     unittest.main()

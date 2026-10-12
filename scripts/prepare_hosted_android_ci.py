@@ -42,6 +42,8 @@ SDK = W.SDK
 WORKFLOW = "Build hosted Android client"
 JAVA = Path("/usr/lib/jvm/java-17-openjdk-amd64")
 JAVA_LAUNCHER_LIMIT = 4 * 1024**2
+AWK = Path("/usr/bin/mawk")
+AWK_LIMIT = 4 * 1024**2
 ANDROID = Path("/tools/android-inputs/sdk")
 SERIAL = "emulator-5554"
 PACKAGE = "org.volparossa.weather.trial"
@@ -146,6 +148,10 @@ def sandbox(command, mode):
     # symlinks; this never exposes the runner's home, credentials or whole /etc.
     extra = ["--ro-bind", str(INPUTS), "/tools/android-inputs",
         "--ro-bind", "/etc/java-17-openjdk", "/etc/java-17-openjdk",
+        # The exact 19.0 launcher needs awk; /etc/alternatives stays absent.
+        # /tools already exists for the reviewed which alias, and is remounted
+        # read-only below. Never replace a host alias or modify the SDK.
+        "--symlink", str(AWK), "/tools/awk",
         "--ro-bind", str(PRIVATE / "gradle-home/gradle.properties"), "/state/gradle-home/gradle.properties"]
     if mode != "acquire":
         extra += ["--ro-bind", "/etc/ssl/certs", "/etc/ssl/certs"]
@@ -159,7 +165,7 @@ def sandbox(command, mode):
 
 
 PROBE = r'''
-import json,os,socket,stat,sys
+import json,os,shutil,socket,stat,sys
 from pathlib import Path
 s=dict(x.split(':',1) for x in Path('/proc/self/status').read_text().splitlines() if ':' in x)
 mode=sys.argv[1]; online=mode=='acquire'
@@ -171,6 +177,10 @@ assert not Path('/root').exists() and not Path('/run').exists()
 assert Path('/etc/resolv.conf').exists()==online
 assert not any('TOKEN' in k or 'PROXY' in k or 'AUTH' in k for k in os.environ)
 assert os.statvfs('/tools/android-inputs').f_flag & os.ST_RDONLY
+assert Path('/tools/awk').is_symlink() and os.readlink('/tools/awk')=='/usr/bin/mawk'
+assert Path('/tools/awk').resolve(strict=True)==Path('/usr/bin/mawk')
+assert shutil.which('awk')=='/tools/awk' and os.access('/tools/awk',os.X_OK)
+assert all(os.statvfs(p).f_flag & os.ST_RDONLY for p in ('/tools','/usr/bin/mawk'))
 assert os.statvfs(sys.argv[3]+'/packages/flutter_tools/gradle/src').f_flag & os.ST_RDONLY
 assert os.statvfs(sys.argv[3]+'/.git').f_flag & os.ST_RDONLY
 properties=Path('/state/gradle-home/gradle.properties')
@@ -387,6 +397,38 @@ def java_provenance(helper):
         authority="signed-disposable-apt-package-inventory", independently_reproducible=False)
 
 
+def apt_awk_digest():
+    """Only the canonical declared distro helper; never execute it here.
+
+    Keep the existing Java and generic runner-owned input readers unchanged.
+    Root ownership is checked outside the sandbox's UID mapping, before its
+    read-only /usr bind is used. The named path must still refer to the same fd.
+    """
+    require(AWK.resolve() == AWK, "AWK_TOOL_PATH")
+    fd = os.open(AWK, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        before = os.fstat(fd)
+        require(stat.S_ISREG(before.st_mode) and before.st_uid == 0 and before.st_nlink == 1
+            and before.st_mode & 0o111 and not before.st_mode & 0o7022
+            and 0 < before.st_size <= AWK_LIMIT, "AWK_TOOL")
+        digest, size = hashlib.sha256(), 0
+        while True:
+            block = os.read(fd, min(65536, AWK_LIMIT + 1 - size))
+            if not block:
+                break
+            size += len(block)
+            require(size <= AWK_LIMIT, "AWK_TOOL_BOUND")
+            digest.update(block)
+        after, named = os.fstat(fd), AWK.lstat()
+        fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink",
+            "st_size", "st_mtime_ns", "st_ctime_ns")
+        require(size == before.st_size and all(getattr(before, k) == getattr(after, k) == getattr(named, k)
+            for k in fields), "AWK_TOOL_CHANGED")
+        return dict(bytes=size, sha256=digest.hexdigest())
+    finally:
+        os.close(fd)
+
+
 def validate_report(value):
     require(value.get("schema") == 1 and value.get("kind") == "overmorrow-installed-android-synthetic-trial"
         and value.get("passed") is True and value.get("phase") == "complete" and value.get("package") == PACKAGE,
@@ -592,11 +634,12 @@ def avd_observations():
         raw_text_exported=False, cause_established=False)
 
 
-def avd_preflight(netns):
+def avd_preflight(netns, *, awk):
     expected = avd_input_identity(INPUTS)
     # Check distro ownership outside the user namespace, where its UID remains
     # meaningful. The existing /usr mount is read-only inside the sandbox.
     java = apt_java_digest()
+    require(apt_awk_digest() == awk, "AWK_TOOL_CHANGED")
     preflight("emulator", netns, avd=True)
     # Thirty seconds of work, then only the existing owned-child cleanup.
     # The outer bound allows that cleanup before namespace teardown.
@@ -607,8 +650,10 @@ def avd_preflight(netns):
         and observed["schema"] == 1 and observed["kind"] == "hosted-android-avd-preflight-inputs"
         and observed["inputs"] == expected == avd_input_identity(INPUTS)
         and apt_java_digest() == java
+        and apt_awk_digest() == awk
         and set(observed["posix_helpers"]) == {"sh", "dirname", "basename", "uname", "sed", "awk", "expr", "ls"}
         and all(type(v) is bool for v in observed["posix_helpers"].values())
+        and observed["posix_helpers"]["awk"] is True
         and observed["sdk_read_only"] is True and observed["raw_text_exported"] is False
         and observed["cause_established"] is False, "AVD_PREFLIGHT_INPUTS")
     cleanup = H.document(PROOF / "emulator-preflight-cleanup.json")
@@ -621,7 +666,7 @@ def avd_preflight(netns):
     H.save("emulator-preflight.json", dict(schema=1, kind="hosted-android-avd-preflight", success=True,
         inputs_sha256=H.sha(H.read(PROOF / "emulator-preflight-inputs.json")),
         cleanup_sha256=H.sha(H.read(PROOF / "emulator-preflight-cleanup.json")),
-        java_launcher=java,
+        java_launcher=java, awk=awk,
         creation_timeout_seconds=30, installed_app_exercised=False, production_authority=False))
 
 
@@ -637,7 +682,10 @@ def execute(helper, platform):
         H.save("baseline.json", helper.prechecks(platform))
         runtime, sdk = H.runtime_inventory(), W.sdk_inventory()
         android = runpy.run_path(str(ROOT / "scripts/prepare_hosted_android.py"))["verify"](INPUTS)
-        H.save("toolchain.json", dict(schema=1, android=android, flutter=sdk, runtime=runtime, java=java_provenance(helper)))
+        awk = apt_awk_digest()
+        H.save("toolchain.json", dict(schema=1, android=android, flutter=sdk, runtime=runtime, java=java_provenance(helper),
+            awk=dict(path=str(AWK), executable=awk, sandbox_alias="/tools/awk",
+                authority="signed-disposable-apt-package-inventory", independently_reproducible=False)))
         H.private_directory(PRIVATE)
         for name in ("config", "cache", "pub-cache", "android-home", "avd", "gradle-home", "java-home"):
             H.private_directory(PRIVATE / name)
@@ -668,7 +716,7 @@ def execute(helper, platform):
             60, env=environment(), memory=MEMORY)
         phase = "avdmanager-preflight"
         H.private_directory(PROOF)
-        avd_preflight(netns)
+        avd_preflight(netns, awk=awk)
         phase = "offline-repository-contract"
         repository_fixture()
         phase = "public-acquisition-build"
@@ -699,14 +747,16 @@ def execute(helper, platform):
         H.save("offline-apk.json", dict(schema=1, artifact=apk, compiled_networkless=True,
             dependency_checksums="strict-captured-not-prior-reviewed", debug_signed=True, production_authority=False))
         phase = "installed-emulator-trial"
+        require(apt_awk_digest() == awk, "AWK_TOOL_CHANGED")
         preflight("emulator", netns)
         H.run("installed-android-trial", sandbox(["/usr/bin/python3", "-B", str(Path(__file__)), "--inside"], "emulator"),
             520, env=dict(environment(), VOLPAROSSA_TEST_HOST_NETNS=netns), memory=MEMORY)
+        require(apt_awk_digest() == awk, "AWK_TOOL_CHANGED")
         original = H.document(PROOF / "report.json")
         validate_report(original)
         H.save("build.json", dict(schema=1, kind="hosted-android-debug-trial", source_commit=os.environ["GITHUB_SHA"],
             apk=apk, runtime=runtime, sdk=sdk, android=android, native_sources=native, dependencies=metadata,
-            gradle_configured_limits=app_gradle_resources(),
+            gradle_configured_limits=app_gradle_resources(), awk=awk,
             avd_preflight_sha256=H.sha(H.read(OUTPUT / "emulator-preflight.json")),
             installed_report_sha256=H.sha(H.read(PROOF / "report.json")), actual_installed_app=True,
             acquisition_build_network_enabled=True, final_build_networkless=True, emulator_networkless=True,
