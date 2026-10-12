@@ -30,6 +30,12 @@ SYSTEM_IMAGES = GOOGLE + "sys-img/android/sys-img2-3.xml"
 # name: archive, bytes, published SHA1, installed path, source.properties revision
 GOOGLE_INPUTS = {
     "platform": ("platform-36_r02.zip", 65878410, "2c1a80dd4d9f7d0e6dd336ec603d9b5c55a6f576", "sdk/platforms/android-36", "2"),
+    # The locked plugins retain their own compileSdk: dynamic_system_colors
+    # requires 34; home_widget, jni/jni_flutter and workmanager_android require
+    # 35. Materialize these exact platforms instead of rewriting plugin source
+    # or allowing Gradle/sdkmanager to install into the read-only SDK.
+    "platform-34": ("platform-34-ext7_r03.zip", 63180081, "1f2e9478d6a7601425ceaa553311dc43191f103d", "sdk/platforms/android-34", "3"),
+    "platform-35": ("platform-35_r02.zip", 64273788, "0bb560a90a7a2cbd0dd8348224d518b638fe7949", "sdk/platforms/android-35", "2"),
     "build-tools": ("build-tools_r35_linux.zip", 61958799, "2cfaa0bbb2336e9ec18ed3ecea84fa2e2af607bc", "sdk/build-tools/35.0.0", "35.0.0"),
     "ndk": ("android-ndk-r28c-linux.zip", 722261334, "a7b54a5de87fecd125a17d54f73c446199e72a64", "sdk/ndk/28.2.13676358", "28.2.13676358"),
     "command-line": ("commandlinetools-linux-13114758_latest.zip", 164760899, "5fdcc763663eefb86a5b8879697aa6088b041e70", "sdk/cmdline-tools/19.0", "19.0"),

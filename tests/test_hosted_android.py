@@ -37,12 +37,67 @@ class AndroidInputs(unittest.TestCase):
 
     def test_exact_official_pins(self):
         p = M["pins"]()
-        self.assertEqual(len(p), 8)
+        self.assertEqual(len(p), 10)
         self.assertEqual(p["gradle"]["algorithm"], "sha256")
         self.assertEqual(p["system-image"]["destination"], "sdk/system-images/android-36/default/x86_64")
         self.assertTrue(all(v["algorithm"] == "sha1" and v["url"].startswith(M["GOOGLE"])
             for k, v in p.items() if k != "gradle"))
         self.assertEqual(p["ndk"]["revision"], "28.2.13676358")
+
+    def test_locked_plugin_platforms_have_independent_official_archive_pins(self):
+        pins = M["pins"]()
+        expected = {
+            "platform-34": ("platform-34-ext7_r03.zip", 63180081, "1f2e9478d6a7601425ceaa553311dc43191f103d", "3"),
+            "platform-35": ("platform-35_r02.zip", 64273788, "0bb560a90a7a2cbd0dd8348224d518b638fe7949", "2"),
+        }
+        for name, (archive_name, size, sha1, revision) in expected.items():
+            self.assertEqual(pins[name], dict(url=M["GOOGLE"] + archive_name, bytes=size,
+                algorithm="sha1", digest=sha1, destination="sdk/platforms/android-" + name[-2:],
+                revision=revision, checksum_source=M["REPOSITORY"]))
+        self.assertEqual({pins[name]["destination"] for name in ("platform", *expected)},
+            {"sdk/platforms/android-34", "sdk/platforms/android-35", "sdk/platforms/android-36"})
+        self.assertEqual(pins["platform"]["digest"], "2c1a80dd4d9f7d0e6dd336ec603d9b5c55a6f576")
+
+    def test_multiple_platform_archives_remain_separate_verified_inputs_with_notices(self):
+        # Tiny inert archives use the real acquisition/hash/extract/verify path.
+        # No Google archive, SDK program or Gradle auto-install is executed.
+        inputs, payloads = {}, {}
+        for name in ("platform", "platform-34", "platform-35"):
+            pin = M["pins"]()[name]
+            raw = archive([("fixture/source.properties", ("Pkg.Revision=" + pin["revision"] + "\n").encode(), 0o100644),
+                ("fixture/android.jar", ("inert " + name).encode(), 0o100644),
+                ("fixture/NOTICE.txt", b"original fixture notice", 0o100644)]).getvalue()
+            inputs[name] = dict(pin, bytes=len(raw), digest=hashlib.sha1(raw).hexdigest())
+            payloads[pin["url"]] = raw
+        class Response(io.BytesIO):
+            status = 200
+            def __init__(self, raw):
+                super().__init__(raw)
+                self.headers = {"Content-Length": str(len(raw))}
+        class Opener:
+            def open(self, url, timeout):
+                return Response(payloads[url])
+        with tempfile.TemporaryDirectory() as parent:
+            output = Path(parent) / "output"
+            output.mkdir(mode=0o700)
+            old_umask = os.umask(0o077)
+            try:
+                with patch.dict(M["materialize"].__globals__, pins=lambda: inputs), \
+                        patch.object(M["urllib"].request, "build_opener", return_value=Opener()):
+                    result = M["materialize"](output)
+                    self.assertFalse(result["runtime_executed"])
+                    self.assertEqual(result["files"], 9)
+                    provenance = json.loads((output / "provenance.json").read_bytes())
+                    self.assertEqual(set(provenance["inputs"]), set(inputs))
+                    self.assertFalse(provenance["independent_sha256_authority"])
+                    for name, pin in inputs.items():
+                        self.assertEqual((output / pin["destination"] / "android.jar").read_bytes(), ("inert " + name).encode())
+                        self.assertEqual((output / pin["destination"] / "NOTICE.txt").read_bytes(), b"original fixture notice")
+                    (output / inputs["platform-34"]["destination"] / "android.jar").unlink()
+                    with self.assertRaisesRegex(ValueError, "TREE_CLOSURE"):
+                        M["verify"](output)
+            finally:
+                os.umask(old_umask)
 
     def test_extract_preserves_license_and_mode(self):
         result = self.extract([("root/bin/tool", b"inert", 0o100755), ("root/LICENSE", b"original", 0o100644)])

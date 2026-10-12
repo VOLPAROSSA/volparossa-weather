@@ -107,14 +107,23 @@ passes this real fixture, then reaches further into Android plugin configuration
 before exhausting the inherited 1,024-file-descriptor limit. It does not produce
 an APK; process drain, policy cleanup and KVM access restoration pass.
 
-The next candidate gives only the three fixed Gradle invocations a finite
+The correction gives only the three fixed Gradle invocations a finite
 4,096-descriptor limit. Other build, browser and emulator profiles keep their
 existing limits; the parent process and development host are unchanged. The
 fixture must report the actual JVM's soft and hard limits. All 47
 hosted-preparation tests and 11 native preparer tests pass locally, including a
 real inert child-process reproduction of descriptor exhaustion. They do not
-execute Gradle. The corrected APK build, offline rebuild and installed-app trial
-still require successful hosted execution.
+execute Gradle. The [fifth attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38249512469)
+passes the real fixture with JVM soft/hard limits of 4,096, then stops during the
+app build because a locked plugin requires the missing Android 34 platform.
+Other locked plugins require Android 35. Process drain, policy cleanup and KVM
+access restoration pass; no APK or emulator result is produced.
+
+The next candidate adds exactly those two official platform archives to the
+read-only SDK preparation, preserving plugin source and dependency locks. It
+does not enable SDK auto-installation or change build resource limits. The APK
+build, offline rebuild and installed-app trial still require successful hosted
+execution.
 
 The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only
@@ -135,7 +144,8 @@ iOS operation, home-screen widgets or release readiness.
 
 The [official Android and Gradle input pins](../../scripts/prepare_hosted_android.py)
 record exact archive URLs, sizes and published checksums. The native stage uses
-Android API 36, build-tools 35.0.0, NDK 28.2.13676358 and Gradle 8.13; its
+Android API 36, additional compile platforms 34/35 for locked plugins,
+build-tools 35.0.0, NDK 28.2.13676358 and Gradle 8.13; its
 Android-only plugin change selects AGP 8.11.1. Java 17 comes from the disposable
 runner's recorded system packages. Google archive pins use the published SHA1;
 an observed SHA256 is additional provenance, not independent authorization.
