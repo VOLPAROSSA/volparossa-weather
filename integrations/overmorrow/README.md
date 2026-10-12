@@ -182,7 +182,27 @@ resource limits and other clients' receipts stay unchanged. No raw daemon logs,
 process IDs, cgroup paths or dumps are exported. Missing, changed or truncated
 sources remain explicitly unknown. Sampled counters are indicators, not proof
 of a particular kill signal or a successful build. All 119 targeted inert tests
-pass; the new diagnostic path still needs actual hosted execution.
+pass.
+
+The [tenth attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38272739293)
+on `29bf7c4` now records actual `OutOfMemoryError: Java heap space` messages
+during dex merging. It exits 1 after 558.643 seconds with peak RSS of
+3,969,150,976 bytes, below the aggregate cap. One sampled Java process reaches
+902.140 CPU seconds with 900-second soft/hard limits; this does not identify the
+daemon or establish its final kill cause. Shared cgroup memory-event deltas are
+zero, without child-level attribution. All nine original step-log hashes match;
+process drain, policy/staging removal and KVM-access restoration pass. No APK,
+offline rebuild or installed-app result exists.
+
+The next candidate sets `-Pandroid.r8.threadPoolSize=1` only on the two fixed
+app-build commands. The same pinned AGP 8.11.1 source shows that external dex
+merging uses an internal D8 work-stealing pool, independent of Gradle's worker
+limit. Its `IntegerOption` is supplied through a Gradle project property. This
+reduces that pool's concurrency; it does not increase the JVM heap, RSS budget,
+CPU/wall deadlines or host reserve. The configuration receipt is not a runtime
+measurement. All 120 targeted inert checks and independent review pass, including
+exact acquisition/offline argument parity. Actual build fit and app execution
+still require the next hosted trial.
 
 The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only

@@ -92,7 +92,7 @@ class NativeCI(unittest.TestCase):
     def test_configured_limits_receipt_is_not_runtime_or_cleanup_evidence(self):
         value = M.app_gradle_resources()
         self.assertEqual(value, dict(schema=1, kind="hosted-android-gradle-configured-limits",
-            scope="acquisition-and-offline-app-build", max_workers=1,
+            scope="acquisition-and-offline-app-build", max_workers=1, d8_thread_pool_size=1,
             jvm_args=["-Xmx1024m", "-XX:MaxMetaspaceSize=512m", "-XX:ReservedCodeCacheSize=128m", "-Dfile.encoding=UTF-8"],
             child_rss_limit_bytes=4294967296, host_reserve_bytes=2147483648, launch_min_available_bytes=6442450944,
             step_timeout_seconds=900, runtime_measurement=False))
@@ -106,6 +106,28 @@ class NativeCI(unittest.TestCase):
         # turn an unconfirmed drain into cleanup success.
         self.assertIn('helper.DRAIN_CONFIRMED = helper.DRAIN_CONFIRMED and H.DRAIN_CONFIRMED', source)
         self.assertIn('require(cleanup["complete"], "CLEANUP_UNCONFIRMED")', source)
+
+    def test_d8_project_property_is_exactly_bound_on_both_app_commands_only(self):
+        option = "-Pandroid.r8.threadPoolSize=1"
+        for acquire, mode in ((True, "acquire"), (False, "compile")):
+            command = M.gradle(acquire)
+            self.assertEqual([arg for arg in command if "threadPoolSize" in arg], [option])
+            self.assertNotIn("threadPoolSize", next(arg for arg in command if arg.startswith("-Dorg.gradle.jvmargs=")))
+            sandbox = M.gradle_sandbox(command, mode)
+            self.assertEqual(sandbox[-len(command):], command)
+            self.assertEqual(sandbox[:5], ["/usr/bin/prlimit", "--core=0", "--cpu=900", "--nofile=4096:4096", "--"])
+            self.assertEqual(M.app_gradle_resources()["d8_thread_pool_size"], int(option.rsplit("=", 1)[1]))
+            for replacement in ("-Pandroid.r8.threadPoolSize=2", "-Pandroid.r8.threadPoolSize=0",
+                    "-Dandroid.r8.threadPoolSize=1", "-Pandroid.r8.maxWorkers=1"):
+                changed = [replacement if arg == option else arg for arg in command]
+                with self.assertRaisesRegex(ValueError, "NATIVE_GRADLE_RESOURCE_SCOPE"):
+                    M.gradle_sandbox(changed, mode)
+            for changed in ([arg for arg in command if arg != option], command + [option]):
+                with self.assertRaisesRegex(ValueError, "NATIVE_GRADLE_RESOURCE_SCOPE"):
+                    M.gradle_sandbox(changed, mode)
+        self.assertFalse(any("threadPoolSize" in arg for arg in M.repository_fixture_command()))
+        self.assertFalse(any("threadPoolSize" in value for value in M.environment().values()))
+        self.assertNotIn("threadPoolSize", (ROOT / "tests/fixtures/hosted-android-repositories/gradle.properties").read_text())
 
     def test_sandbox_network_and_kvm_separation(self):
         for mode in ("acquire", "compile", "emulator"):

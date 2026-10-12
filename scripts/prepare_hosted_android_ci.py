@@ -55,6 +55,12 @@ APP_MEMORY = 4 * GIB
 APP_GRADLE_WORKERS = 1
 APP_GRADLE_JVM_ARGS = ("-Xmx1024m", "-XX:MaxMetaspaceSize=512m",
     "-XX:ReservedCodeCacheSize=128m", "-Dfile.encoding=UTF-8")
+# Exact AGP 8.11.1 sources: IntegerOption.R8_THREAD_POOL_SIZE feeds
+# R8D8ThreadPoolBuildService; DexMergingTask uses it for mergeExtDex's single
+# bucket. Gradle --max-workers does not constrain this internal work-stealing
+# pool. Source: https://dl.google.com/dl/android/maven2/com/android/tools/build/gradle/8.11.1/gradle-8.11.1-sources.jar
+# This is a scoped concurrency candidate, not proof that the build fits.
+APP_D8_THREADS = 1
 H.OUTPUT, H.PRIVATE, H.STAGE, H.PROOF = OUTPUT, PRIVATE, STAGE, PROOF
 W.OUTPUT, W.PRIVATE, W.STAGE = OUTPUT, PRIVATE, STAGE
 W.SDK_TOOL_STATE = PRIVATE / "flutter-tool-state"
@@ -150,6 +156,7 @@ def app_gradle_resources():
     """Configured command limits, not observations of JVM or build success."""
     return dict(schema=1, kind="hosted-android-gradle-configured-limits",
         scope="acquisition-and-offline-app-build", max_workers=APP_GRADLE_WORKERS,
+        d8_thread_pool_size=APP_D8_THREADS,
         jvm_args=list(APP_GRADLE_JVM_ARGS), child_rss_limit_bytes=APP_MEMORY,
         host_reserve_bytes=2 * GIB, launch_min_available_bytes=APP_MEMORY + 2 * GIB,
         step_timeout_seconds=900, runtime_measurement=False)
@@ -162,6 +169,7 @@ def gradle(acquire):
         ("VOLPAROSSA_WEATHER=true", "VOLPAROSSA_CORE_ORIGIN=http://127.0.0.1:43210"))
     return [str(STAGE / "android/gradlew"), "-p", str(STAGE / "android"), "--no-daemon",
         f"--max-workers={APP_GRADLE_WORKERS}", "-Dorg.gradle.jvmargs=" + " ".join(APP_GRADLE_JVM_ARGS), "--console=plain",
+        f"-Pandroid.r8.threadPoolSize={APP_D8_THREADS}",
         "--init-script", str(ROOT / "scripts/hosted-android-repositories.gradle"),
         *( ["--write-verification-metadata", "sha256"] if acquire else ["--offline", "--dependency-verification", "strict", "clean"]),
         "assembleDebug", "-Ptarget-platform=android-x64", "-Ptarget=" + str(STAGE / "lib/volparossa_native_trial.dart"),
