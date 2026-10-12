@@ -109,6 +109,23 @@ def products_dom(expected, requests=1):
 
 
 class BindingTests(unittest.TestCase):
+    def test_v4_preserves_exact_product_expectations_and_separates_unrun_core_scope(self):
+        expected, config = products_fixture()
+        legacy = smoke.report_base({}, expected)
+        expected["schema"] = 4
+        self.assertIs(smoke.validate_expected(expected, config), expected)
+        self.assertTrue(smoke.check_products_dom(products_dom(expected, 2), expected, 2))
+        report = smoke.report_base({}, expected)
+        self.assertEqual(report, {**legacy, "schema": 4})
+        self.assertFalse(report["passed"])
+        self.assertTrue(all(value is False for value in report["scope"].values()))
+        bad = copy.deepcopy(expected)
+        bad["products"]["weather"]["display"]["values"][0][3] = "0"
+        with self.assertRaises(ValueError): smoke.validate_expected(bad, config)
+        for schema in (3, 5, True):
+            bad = {**expected, "schema": schema}
+            with self.assertRaises(ValueError): smoke.validate_expected(bad, config)
+
     def test_two_product_expected_binds_independent_queries_expiries_and_combined_display(self):
         expected, config = products_fixture()
         self.assertIs(smoke.validate_expected(expected, config), expected)
@@ -373,7 +390,7 @@ print(json.dumps(dict(generic_rejected=generic_rejected, exact_readonly_core_ver
             with self.assertRaises(ValueError): smoke.file_hash(value, 6)
 
     def test_manifest_binds_complete_immutable_tree_and_built_assets(self):
-        for version in (1, 2):
+        for version in (1, 2, 4):
             with self.subTest(version=version):
                 self.check_manifest(version)
 
@@ -381,18 +398,26 @@ print(json.dumps(dict(generic_rejected=generic_rejected, exact_readonly_core_ver
         with tempfile.TemporaryDirectory(prefix="drizzli-core-test-", dir=smoke.ROOT / "build") as directory:
             root = Path(directory)
             assets = {"index.html": digest(b"test asset")}
-            retained = json.dumps({"source": {"built_tree_sha256": digest(smoke.canonical(assets))}}).encode()
+            proof = {"source": {"built_tree_sha256": digest(smoke.canonical(assets))}}
+            if version == 4:
+                proof.update(passed=True, phase="complete", scenario="precipitation", air_quality_scenario=True,
+                    scope=dict(actual_drizzli_ui=True, actual_http_bridge=True, synthetic_weather=True,
+                               synthetic_air_quality=True, core_executed=False, overlay_proven=False,
+                               upstream_origin_proven=False), cleanup=dict(private_profile_removed=True))
+                proof["source"]["driver_sha256"] = "d" * 64
+            retained = json.dumps(proof).encode()
+            proof_path = "volparossa-weather/integrations/drizzli/" + {
+                1: "browser-smoke.json", 2: "air-quality-browser-smoke.json", 4: "hosted-browser-proof.json"}[version]
             inputs = {
                 "volparossa-weather/integrations/drizzli/smoke_core_browser.py": b"inert driver",
                 "volparossa-weather/integrations/drizzli/prepare-core-browser.mjs": b"inert preparer",
-                ("volparossa-weather/integrations/drizzli/browser-smoke.json" if version == 1
-                    else "volparossa-weather/integrations/drizzli/air-quality-browser-smoke.json"): retained,
+                proof_path: retained,
                 "volparossa-weather/scripts/serve-provider.mjs": b"inert bridge",
                 **{f"volparossa-weather/src/{name}.mjs": b"inert source" for name in ("provider-http", "provider-core", "core-cache")},
                 "volparossa-weather/build/drizzli-volparossa/build/index.html": b"test asset",
                 "runtime/node": b"not an executable runtime",
             }
-            if version == 2:
+            if version in (2, 4):
                 inputs.update({f"volparossa-weather/src/{name}.mjs": b"inert AQ source"
                                for name in ("air-quality", "air-quality-provider", "air-quality-core")})
             records = {}
@@ -411,7 +436,22 @@ print(json.dumps(dict(generic_rejected=generic_rejected, exact_readonly_core_ver
                     result = smoke.validate_bundle(root, digest(manifest), version)
                     self.assertEqual(result[3]["built_tree_sha256"], digest(smoke.canonical(assets)))
                     self.assertEqual(len(result[3]["bridge_modules"]), 4 if version == 1 else 7)
-                    with self.assertRaises(ValueError): smoke.validate_bundle(root, digest(manifest), 3 - version)
+                    if version == 4:
+                        self.assertEqual(result[3]["synthetic_ui_proof"], dict(sha256=digest(retained),
+                            driver_sha256="d" * 64, core_executed=False, overlay_proven=False))
+                        self.assertEqual(result[3]["driver_sha256"], digest(b"inert driver"))
+                        # A synthetic receipt is not a substitute for the joined
+                        # core execution. Even a bound receipt with wrong scope
+                        # or incomplete cleanup is rejected independently.
+                        for key, replacement in [("passed", False), ("air_quality_scenario", False),
+                                ("scope", {**proof["scope"], "core_executed": True}),
+                                ("cleanup", {"private_profile_removed": False})]:
+                            with patch.object(smoke, "read_json", return_value={**proof, key: replacement}), \
+                                 self.assertRaises(ValueError):
+                                smoke.validate_bundle(root, digest(manifest), version)
+                    else:
+                        self.assertNotIn("synthetic_ui_proof", result[3])
+                    with self.assertRaises(ValueError): smoke.validate_bundle(root, digest(manifest), 1 if version != 1 else 2)
                     with self.assertRaises(ValueError): smoke.validate_bundle(root, "f" * 64)
                     path = root / "runtime/node"; path.chmod(0o600); path.write_bytes(b"changed"); path.chmod(0o400)
                     with self.assertRaises(ValueError): smoke.validate_bundle(root, digest(manifest))

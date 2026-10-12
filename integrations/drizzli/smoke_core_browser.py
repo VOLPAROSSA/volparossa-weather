@@ -144,7 +144,7 @@ def stamp(value):
 
 def validate_expected(value, config):
     require(type(value) is dict and type(value.get("schema")) is int)
-    if value["schema"] == 2:
+    if value["schema"] in (2, 4):
         require(set(value) == {"schema", "core_sha256", "products", "display_sha256"}
                 and hex64(value["core_sha256"]) and hex64(value["display_sha256"])
                 and type(value["products"]) is dict and set(value["products"]) == {"weather", "air_quality"}
@@ -239,7 +239,7 @@ def validate_bundle(root, expected, version=None):
     require(hashlib.sha256(raw).hexdigest() == expected)
     manifest = json.loads(raw, object_pairs_hook=pairs)
     require(type(manifest) is dict and set(manifest) == {"version", "kind", "files"}
-            and type(manifest["version"]) is int and manifest["version"] in (1, 2)
+            and type(manifest["version"]) is int and manifest["version"] in (1, 2, 4)
             and manifest["kind"] == "volparossa-weather-client-inputs"
             and type(manifest["files"]) is dict and 1 <= len(manifest["files"]) <= 1024)
     require(version is None or manifest["version"] == version)
@@ -274,17 +274,34 @@ def validate_bundle(root, expected, version=None):
     built = root / "volparossa-weather/build/drizzli-volparossa/build"
     hashes = {name.split("/build/drizzli-volparossa/build/", 1)[1]: record["sha256"]
               for name, record in files.items() if "/build/drizzli-volparossa/build/" in name}
-    retained = read_json(ROOT / ("integrations/drizzli/browser-smoke.json" if manifest["version"] == 1
-        else "integrations/drizzli/air-quality-browser-smoke.json"), 16384)
+    proof_path = "integrations/drizzli/" + {1: "browser-smoke.json", 2: "air-quality-browser-smoke.json",
+                                          4: "hosted-browser-proof.json"}[manifest["version"]]
+    retained = read_json(ROOT / proof_path, 16384)
+    if manifest["version"] == 4:
+        # This unchanged receipt proves the admitted synthetic UI build only.
+        # The current driver/preparer have their own manifest hashes below;
+        # neither they nor real core delivery are retroactively proven by it.
+        require(retained.get("passed") is True and retained.get("phase") == "complete"
+                and retained.get("scenario") == "precipitation" and retained.get("air_quality_scenario") is True
+                and retained.get("scope") == dict(actual_drizzli_ui=True, actual_http_bridge=True,
+                    synthetic_weather=True, synthetic_air_quality=True, core_executed=False,
+                    overlay_proven=False, upstream_origin_proven=False)
+                and type(retained.get("cleanup")) is dict and bool(retained["cleanup"])
+                and all(value is True for value in retained["cleanup"].values())
+                and hex64(retained["source"]["driver_sha256"]))
     require(hashlib.sha256(canonical(hashes)).hexdigest() == retained["source"]["built_tree_sha256"])
     browser = root / "volparossa-browser/build/firefox-esr-smoke-v3"
     metadata = shared.validate_stage(browser)
-    return built, browser, metadata, dict(bundle_manifest_sha256=expected,
+    source = dict(bundle_manifest_sha256=expected,
         driver_sha256=files[required[0]]["sha256"], preparer_sha256=files[required[1]]["sha256"],
         built_tree_sha256=retained["source"]["built_tree_sha256"], node_sha256=shared.NODE_SHA256,
         bridge_modules={name: files["volparossa-weather/" + name]["sha256"] for name in
             ("scripts/serve-provider.mjs", "src/provider-http.mjs", "src/provider-core.mjs", "src/core-cache.mjs",
-             *(("src/air-quality.mjs", "src/air-quality-provider.mjs", "src/air-quality-core.mjs") if manifest["version"] == 2 else ()))})
+             *(("src/air-quality.mjs", "src/air-quality-provider.mjs", "src/air-quality-core.mjs") if manifest["version"] in (2, 4) else ()))})
+    if manifest["version"] == 4:
+        source["synthetic_ui_proof"] = dict(sha256=files["volparossa-weather/" + proof_path]["sha256"],
+            driver_sha256=retained["source"]["driver_sha256"], core_executed=False, overlay_proven=False)
+    return built, browser, metadata, source
 
 
 def available_memory():
@@ -335,8 +352,8 @@ def cleanup(work, expected):
 
 
 def report_base(source, expected):
-    if expected["schema"] == 2:
-        return dict(schema=2, passed=False, phase="inputs", source=source,
+    if expected["schema"] in (2, 4):
+        return dict(schema=expected["schema"], passed=False, phase="inputs", source=source,
             expected=dict(expected_sha256=None, core_sha256=expected["core_sha256"], display_sha256=expected["display_sha256"]),
             products={name: dict(expected=dict(cold_receipt_sha256=product["cold_receipt_sha256"],
                 display_sha256=product["display_sha256"], forecast_sha256=product["publication"]["sha256"],
@@ -525,7 +542,7 @@ def inside(args, built, browser_stage, metadata, source, expected, config):
     environment.update(MOZ_NO_REMOTE="1", MOZ_CRASHREPORTER_DISABLE="1", XDG_CONFIG_HOME=str(work / "config"),
         XDG_CACHE_HOME=str(work / "cache"), XDG_RUNTIME_DIR=str(work / "runtime"), TMPDIR=str(work / "tmp"))
     report = report_base(source, expected)
-    v2 = expected["schema"] == 2
+    v2 = expected["schema"] in (2, 4)
     report["expected"]["expected_sha256"] = shared.digest(args.expected)
     browser = bridge = connection = client = None
     normal_browser = normal_bridge = False
@@ -657,7 +674,7 @@ def main():
     config = read_json(args.config, 16384, 0o600)
     raw_expected = raw_file(args.expected, 384 * 1024, 0o400)
     expected = validate_expected(json.loads(raw_expected, object_pairs_hook=pairs), config)
-    require(len(raw_expected) <= (384 if expected["schema"] == 2 else 192) * 1024)
+    require(len(raw_expected) <= (384 if expected["schema"] in (2, 4) else 192) * 1024)
     built, browser, metadata, source = validate_bundle(args.bundle_root, args.bundle_manifest_sha256, expected["schema"])
     require(config["core"]["scratchParent"] == str(args.output / "scratch"))
     binary = Path(config["core"]["executable"])

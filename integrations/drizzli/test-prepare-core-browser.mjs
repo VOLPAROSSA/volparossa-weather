@@ -11,7 +11,7 @@ import { spawnSync } from 'node:child_process';
 import { windForecast, QUERY } from '../../tests/fixtures.mjs';
 import { precipitationForecast } from '../../tests/precipitation-fixtures.mjs';
 import { aqForecast } from '../../tests/air-quality-fixtures.mjs';
-import { canonical, prepareExpected, prepareExpectedV2 } from './prepare-core-browser.mjs';
+import { canonical, prepareExpected, prepareExpectedV2, prepareExpectedV4, selectBundleVersion } from './prepare-core-browser.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
 const work = await mkdtemp(join(root, 'build/drizzli-core-prepare-test-'));
@@ -75,6 +75,25 @@ function productsFixture() {
 
 const prepareProducts = f => prepareExpectedV2(f.raw, bytes(f.receipt), f.aq.raw, bytes(f.aq.receipt),
   f.config, 'c'.repeat(64), displayValue, displayAccumulationWindow);
+
+test('v4 is explicit and preserves the exact two-product cold-publication semantics', () => {
+  const f = productsFixture();
+  const expected = prepareExpectedV4(f.raw, bytes(f.receipt), f.aq.raw, bytes(f.aq.receipt),
+    f.config, 'c'.repeat(64), displayValue, displayAccumulationWindow);
+  assert.deepEqual(expected, { ...prepareProducts(f), schema: 4 });
+  assert.equal(selectBundleVersion(undefined, false), 1);
+  assert.equal(selectBundleVersion(undefined, true), 2);
+  assert.equal(selectBundleVersion('1', false), 1);
+  assert.equal(selectBundleVersion('2', true), 2);
+  assert.equal(selectBundleVersion('4', true), 4);
+  for (const [requested, products] of [['4', false], ['2', false], ['1', true], ['3', true],
+    ['04', true], ['4.0', true], [4, true], ['4', 1]]) {
+    assert.throws(() => selectBundleVersion(requested, products), /CORE_BROWSER_VERSION_INVALID/);
+  }
+  f.aq.receipt.origin_body_bytes = 1;
+  assert.throws(() => prepareExpectedV4(f.raw, bytes(f.receipt), f.aq.raw, bytes(f.aq.receipt),
+    f.config, 'c'.repeat(64), displayValue, displayAccumulationWindow));
+});
 
 test('v2 binds two cold publications and actual UI precision, accumulation windows and independent native timelines', () => {
   const f = productsFixture(), result = prepareProducts(f);
@@ -177,23 +196,24 @@ test('CLI binds local_output, private modes and exclusive destination without ex
   assert.deepEqual(await readExpected(output), saved);
 });
 
-test('v2 CLI requires both AQ inputs, binds both local outputs and keeps products separate', async () => {
+for (const version of [2, 4]) test(`v${version} CLI requires both AQ inputs, binds both local outputs and keeps products separate`, async () => {
   for (const name of ['integrations/drizzli/prepare-core-browser.mjs',
     ...['provider-http', 'provider-core', 'core-cache', 'provider', 'forecast',
       'air-quality', 'air-quality-provider', 'air-quality-core'].map(name => `src/${name}.mjs`)]) {
     const target = join(work, name); await mkdir(dirname(target), { recursive: true, mode: 0o700 });
     await copyFile(join(root, name), target);
   }
-  const f = productsFixture(), input = join(work, 'weather-v2.json'), aq = join(work, 'aq-v2.json');
-  const receipt = join(work, 'receipt-v2.json'), aqReceipt = join(work, 'aq-receipt-v2.json');
-  const config = join(work, 'config-v2.json'), output = join(work, 'expected-v2.json');
+  const f = productsFixture(), input = join(work, `weather-v${version}.json`), aq = join(work, `aq-v${version}.json`);
+  const receipt = join(work, `receipt-v${version}.json`), aqReceipt = join(work, `aq-receipt-v${version}.json`);
+  const config = join(work, `config-v${version}.json`), output = join(work, `expected-v${version}.json`);
   f.receipt.local_output = input;
   await writeFile(input, f.raw, { mode: 0o600 }); await writeFile(aq, f.aq.raw, { mode: 0o600 });
   await writeFile(receipt, bytes(f.receipt), { mode: 0o600 });
   await writeFile(aqReceipt, bytes(f.aq.receipt), { mode: 0o600 });
   await writeFile(config, bytes(f.config), { mode: 0o600 });
   const args = [join(work, 'integrations/drizzli/prepare-core-browser.mjs'), '--forecast', input,
-    '--receipt', receipt, '--config', config, '--core-sha256', 'c'.repeat(64), '--output', output];
+    '--receipt', receipt, '--config', config, '--core-sha256', 'c'.repeat(64), '--output', output,
+    ...(version === 4 ? ['--bundle-version', '4'] : [])];
   const invoke = more => spawnSync(process.execPath, [...args, ...more], { encoding: 'utf8', timeout: 10000,
     env: { LANG: 'C.UTF-8' }, maxBuffer: 4096 });
   assert.equal(invoke(['--air-quality', aq]).status, 1);
@@ -204,7 +224,7 @@ test('v2 CLI requires both AQ inputs, binds both local outputs and keeps product
   const result = invoke(['--air-quality', aq, '--air-quality-receipt', aqReceipt]);
   assert.equal(result.status, 0, result.stderr);
   const saved = JSON.parse((await readExpected(output)).toString('utf8'));
-  assert.equal(saved.schema, 2);
+  assert.equal(saved.schema, version);
   assert.equal(saved.products.weather.publication.sha256, sha(f.raw));
   assert.equal(saved.products.air_quality.publication.sha256, sha(f.aq.raw));
   assert.equal(invoke(['--air-quality', aq, '--air-quality-receipt', aqReceipt]).status, 1);

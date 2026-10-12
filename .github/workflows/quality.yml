@@ -32,7 +32,23 @@ jobs:
       - name: Check ECMWF and core-cache contracts
         run: node --test tests/*.test.mjs
       - name: Check Drizz.li adapter without downloading upstream dependencies
-        run: node --test integrations/drizzli/test-client.mjs
+        run: |
+          node --test integrations/drizzli/test-client.mjs integrations/drizzli/test-prepare-core-browser.mjs
+          test -d build
+          test -f "$GITHUB_WORKSPACE/build/test-browser-support/scripts/smoke_compute_model.py"
+          VOLPAROSSA_TEST_BROWSER_ROOT="$GITHUB_WORKSPACE/build/test-browser-support" python3 -B - <<'PY'
+          import os, runpy, sys, unittest
+          sys.argv = ["inert-tests", "--browser-root", os.environ["VOLPAROSSA_TEST_BROWSER_ROOT"]]
+          tests = runpy.run_path("integrations/drizzli/test_smoke_core_browser.py")
+          suite = unittest.TestSuite()
+          for name in ("BindingTests", "FilesystemTests"):
+              for case in unittest.defaultTestLoader.loadTestsFromTestCase(tests[name]):
+                  # This job admits source/contract tests, not native namespace probes.
+                  if case._testMethodName != "test_real_bwrap_root_owned_binary_keeps_strict_generic_guard_but_exact_readonly_core_verifies":
+                      suite.addTest(case)
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          raise SystemExit(not result.wasSuccessful())
+          PY
       - name: Check hosted input preparation without downloads or native builds
         run: |
           test -f tests/test_hosted_decoder.py
