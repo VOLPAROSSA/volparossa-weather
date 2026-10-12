@@ -956,6 +956,67 @@ class EmulatorDiagnostics(unittest.TestCase):
                 for forbidden in ("private-canary", "private-class", "private-argv", "private.invalid", "secret"):
                     self.assertNotIn(forbidden, encoded)
 
+    def test_exact_sdk_progress_cr_and_crlf_preserve_closed_error_and_raw_byte_count(self):
+        # Exact 19.0 ConsoleProgressIndicator pads to 80 columns and writes CR;
+        # AvdManagerCli's logger adds "Error: ", without ANSI or indentation.
+        progress = b"Loading local repository...".ljust(80, b" ")
+        errors = {
+            "sdk_package": b"Error: Package path is not valid. Valid system image paths are:\n/private/canary\n",
+            "sdk_image": b"Error: Package private-canary contains no system images.\n",
+            "sdk_root": b"Error: The tools directory property is not set, please make sure you are executing avdmanager\n",
+        }
+        for separator in (b"\r", b"\r\n", b"\n"):
+            for expected, error in errors.items():
+                with self.subTest(separator=separator, expected=expected):
+                    raw = progress + separator + error
+                    _, _, result = self.observed(raw)
+                    self.assertEqual(result["sdk_error"], expected)
+                    self.assertEqual(result["output_bytes"], len(raw))
+                    self.assertEqual(result["schema"], 2)
+                    self.assertTrue(result["output_complete"])
+                    self.assertFalse(result["output_truncated"] or result["cause_established"] or result["raw_text_exported"])
+                    self.assertLessEqual(len(json.dumps(result)), 1024)
+                    self.assertNotIn("canary", json.dumps(result))
+
+    def test_sdk_cr_boundary_does_not_strip_prefix_color_spaces_or_homoglyphs(self):
+        exact = b"Error: Package path is not valid.\n"
+        for raw in (b"prefix" + exact, b"progress\rnote: " + exact,
+                b"progress\r " + exact, b"progress\r\x1b[31m" + exact,
+                b"progress\r" + exact.replace(b"Error", "Err\u043er".encode()),
+                b"progress\r" + exact.replace(b"Error", b"error")):
+            with self.subTest(raw=raw):
+                _, _, result = self.observed(raw)
+                self.assertEqual(result["sdk_error"], "unknown")
+                self.assertEqual(result["java_error_family"], "unknown")
+                self.assertFalse(result["cause_established"])
+
+    def test_cr_separated_known_errors_remain_ambiguous_without_exporting_text(self):
+        raw = (b"progress\rError: Package path is not valid.\r"
+            b"Error: Could not determine SDK root.\r"
+            b"java.lang.IllegalStateException: /private/token\r"
+            b"java.io.IOException: https://private.invalid/?secret\r")
+        _, _, result = self.observed(raw)
+        self.assertEqual(result["sdk_error"], "ambiguous")
+        self.assertEqual(result["java_error_family"], "ambiguous")
+        self.assertEqual(result["output_bytes"], len(raw))
+        self.assertFalse(result["cause_established"] or result["raw_text_exported"])
+        for forbidden in ("private", "token", "secret", "IllegalStateException", "IOException"):
+            self.assertNotIn(forbidden, json.dumps(result))
+
+    def test_cr_normalization_happens_after_original_prefix_bound_not_before(self):
+        # Canonicalizing before truncation would improperly admit this marker.
+        raw = b"\r\n" * (65536 // 2) + b"Error: Package path is not valid.\n"
+        _, _, result = self.observed(raw)
+        self.assertEqual(result["output_bytes"], 65536)
+        self.assertTrue(result["output_truncated"])
+        self.assertFalse(result["output_complete"])
+        self.assertEqual(result["sdk_error"], "unknown")
+        partial = b"x" * (65536 - 12) + b"\rError: Package path is not valid.\n"
+        _, _, result = self.observed(partial)
+        self.assertEqual(result["sdk_error"], "unknown")
+        self.assertTrue(result["output_truncated"])
+        self.assertFalse(result["output_complete"] or result["cause_established"])
+
     def test_unknown_fields_bounds_and_caught_boot_errors_do_not_misattribute(self):
         diagnostic = M.EmulatorDiagnostic(); diagnostic.phase = "/private/phase"
         error = ValueError("EMULATOR_COMMAND_OUTPUT")
@@ -1009,7 +1070,7 @@ class EmulatorDiagnostics(unittest.TestCase):
 
     def test_real_inert_failure_is_recorded_before_original_cleanup_and_exception_survives(self):
         children, order = [], []
-        code = "import sys;sys.stdin.read();print('Error: Package path is not valid.');print('java.io.FileNotFoundException: /private (Permission denied)');print('private-token');sys.exit(7)"
+        code = "import sys;sys.stdin.read();sys.stdout.write('Loading local repository...'.ljust(80)+'\\r');print('Error: Package path is not valid.');print('java.io.FileNotFoundException: /private (Permission denied)');print('private-token');sys.exit(7)"
         with tempfile.TemporaryDirectory() as directory:
             proof = Path(directory)
             self.guarded_inside(proof, self.inert_popen(code, children))

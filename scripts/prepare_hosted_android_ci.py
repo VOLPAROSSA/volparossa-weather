@@ -606,9 +606,16 @@ class EmulatorDiagnostic:
         # A caught boot-poll error is not the cause of a later failed predicate.
         current = error is self.error
         raw = self.raw if current else b""
-        markers = [name for name, pattern in self.MARKERS.items() if re.search(pattern, raw)]
+        # Pinned commandlinetools 13114758 / 19.0 ConsoleProgressIndicator emits
+        # 80-column progress + CR; AvdManagerCli's logger then writes "Error: ".
+        # tools.repository.jar SHA256:
+        # ee7331131b6d80dc83ea7d78fb6600847300733f2964d18861709c4d23075e08
+        # Normalize only line boundaries AFTER the existing raw-prefix cap.
+        # Keep original byte counts; do not strip spaces, colors or other text.
+        lines = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        markers = [name for name, pattern in self.MARKERS.items() if re.search(pattern, lines)]
         classification = self.classify(markers)
-        java_family, filesystem = self.startup_markers(raw)
+        java_family, filesystem = self.startup_markers(lines)
         check = str(error) if isinstance(error, ValueError) and str(error) in self.CHECKS else "unknown"
         if isinstance(error, H.Interrupted): kind = "interrupted"
         elif isinstance(error, subprocess.CalledProcessError): kind = "command_exit"
