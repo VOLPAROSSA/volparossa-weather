@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Pure commands/scope/lifecycle contracts; no native tools or policy execution."""
+import ast
 import base64
 from contextlib import ExitStack
 import hashlib
@@ -109,6 +110,57 @@ class NativeCI(unittest.TestCase):
         # turn an unconfirmed drain into cleanup success.
         self.assertIn('helper.DRAIN_CONFIRMED = helper.DRAIN_CONFIRMED and H.DRAIN_CONFIRMED', source)
         self.assertIn('require(cleanup["complete"], "CLEANUP_UNCONFIRMED")', source)
+
+    def test_only_installed_emulator_call_gets_four_gib_with_unchanged_command(self):
+        source = ast.parse((ROOT / "scripts/prepare_hosted_android_ci.py").read_text())
+        calls = [n for n in ast.walk(source) if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name)
+            and n.func.value.id == "H" and n.func.attr == "run" and n.args
+            and isinstance(n.args[0], ast.Constant) and n.args[0].value == "installed-android-trial"]
+        self.assertEqual(len(calls), 1)
+        # Evaluate the actual call expression with only H.run replaced: this
+        # constructs the real fixed sandbox argv but never launches it.
+        with patch.object(M.H, "run", return_value=b"inert") as run:
+            result = eval(compile(ast.Expression(calls[0]), "<installed-trial-call>", "eval"),
+                dict(vars(M), netns="inert-netns"))
+        self.assertEqual(result, b"inert")
+        args, kwargs = run.call_args
+        command = ["/usr/bin/python3", "-B", str(ROOT / "scripts/prepare_hosted_android_ci.py"), "--inside"]
+        self.assertEqual(args, ("installed-android-trial", M.sandbox(command, "emulator"), 520))
+        self.assertEqual(kwargs, dict(env=dict(M.environment(), VOLPAROSSA_TEST_HOST_NETNS="inert-netns"),
+            memory=4*M.GIB))
+        self.assertEqual(M.EMULATOR_MEMORY, 4*M.GIB)
+        self.assertEqual(M.MEMORY, 3*M.GIB)
+        self.assertEqual(M.APP_MEMORY, 4*M.GIB)
+        self.assertEqual(args[1][:5], ["/usr/bin/prlimit", "--core=0", "--cpu=900", "--nofile=1024", "--"])
+        uses = [n for n in ast.walk(source) if isinstance(n, ast.Name)
+            and n.id == "EMULATOR_MEMORY" and isinstance(n.ctx, ast.Load)]
+        self.assertEqual(len(uses), 1)
+        self.assertTrue(any(k.arg == "memory" and k.value is uses[0] for k in calls[0].keywords))
+        # The same shared runner supplies its existing 6 GiB launch check and
+        # 2 GiB ongoing reserve. No reserve=False or altered shared runner.
+        self.assertTrue(M.H.run.__kwdefaults__["reserve"])
+        emulator = [n for n in ast.walk(source) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id == "start" and n.args and isinstance(n.args[0], ast.Constant)
+            and n.args[0].value == "emulator"]
+        self.assertEqual(len(emulator), 1)
+        argv = eval(compile(ast.Expression(emulator[0].args[1]), "<emulator-argv>", "eval"), vars(M))
+        self.assertEqual(argv, [str(M.ANDROID / "emulator/emulator"), "-avd", "volparossa_trial", "-port", "5554",
+            "-accel", "on", "-cores", "2", "-memory", "1536", "-no-window", "-no-audio", "-no-snapshot",
+            "-no-boot-anim", "-gpu", "swiftshader_indirect", "-no-metrics", "-camera-back", "none", "-camera-front", "none"])
+
+    def test_all_sandbox_preflights_keep_three_gib_and_twenty_seconds(self):
+        for mode, avd in (("compile", False), ("acquire", False), ("emulator", False), ("emulator", True)):
+            value = dict(schema=1, mode=mode, unprivileged=True, capabilities_zero=True,
+                no_new_privileges=True, source_read_only=True, toolchain_read_only=True,
+                isolated_network=mode != "acquire", public_acquisition=mode == "acquire", kvm_only=mode == "emulator")
+            with self.subTest(mode=mode, avd=avd), patch.object(M.H, "run", return_value=json.dumps(value).encode()) as run, \
+                    patch.object(M.H, "save"):
+                M.preflight(mode, "inert-netns", avd=avd)
+            args, kwargs = run.call_args
+            self.assertEqual(args[0], "preflight-avdmanager" if avd else "preflight-" + mode)
+            self.assertEqual(args[2], 20)
+            self.assertEqual(kwargs, dict(env=M.environment(), memory=3*M.GIB))
 
     def test_d8_project_property_is_exactly_bound_on_both_app_commands_only(self):
         option = "-Pandroid.r8.threadPoolSize=1"

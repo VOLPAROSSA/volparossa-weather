@@ -328,6 +328,26 @@ state removal, KVM restoration and unchanged host network namespace pass.
 Installation, UI operation and mobile lifecycle behavior remain unproved.
 Bounded emulator substep diagnostics are needed before another attempt.
 
+The [twenty-fourth attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38314299583)
+on `6fb0114cbbd13a73f7a5e00c3b3a0ccfb9194813` passes actual AVD creation
+after the exact emulator-only local metadata registration. Its separate
+preflight cleanup passes. Acquisition and the clean, strict-checksum offline
+APK rebuild both succeed, with receipt size 74,366,059 bytes and SHA256
+`94c84cd6980bd26a59a8dda16db9fe5f03c25a90c05e6d6c8b0fd4643efb1595`.
+The APK itself is not exported by this failed run.
+
+The installed emulator phase then crosses its 3 GiB RSS guard after 34.075
+seconds: 3,240,882,176 bytes against 3,221,225,472. Forced termination does not
+confirm descendant drain, so scoped policy/staging cleanup remains unconfirmed;
+KVM access restoration and the unchanged host network namespace do pass. There
+is no inner installation/UI report or full-trial cleanup receipt.
+
+The next candidate permits 4 GiB RSS only for this fixed installed emulator
+phase, with at least 6 GiB available at launch and the same continuous 2 GiB
+host reserve. Other preflights stay at 3 GiB. Guest RAM (1536 MiB), two cores,
+graphics, CPU/wall deadlines, sandbox and conservative cleanup gates are
+unchanged. This candidate is not a demonstrated fit or installed-app success.
+
 The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only
 `lib/volparossa_native_trial.dart` entrypoint starts the real app with

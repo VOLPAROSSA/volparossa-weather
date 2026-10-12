@@ -52,6 +52,11 @@ GRADLE_STATE = (".gradle", "build", ".kotlin")
 GIB = 1024**3
 MEMORY = 3 * GIB
 APP_MEMORY = 4 * GIB
+# Run 38314299583 passed AVD creation and both builds, then the installed
+# emulator trial crossed 3 GiB (3240882176 B). Only that fixed step receives
+# this bounded fit candidate: shared H.run requires 6 GiB at launch and keeps
+# its 2 GiB host reserve. Guest RAM/CPU/graphics and drain gates stay unchanged.
+EMULATOR_MEMORY = 4 * GIB
 APP_CPU_SECONDS = 1800
 # The app Gradle JVM remains resident while Flutter starts its own compiler.
 # Bound only the two app-build commands, not the shared aggregate RSS guard.
@@ -888,7 +893,7 @@ def execute(helper, platform):
         require(apt_awk_digest() == awk, "AWK_TOOL_CHANGED")
         preflight("emulator", netns)
         H.run("installed-android-trial", sandbox(["/usr/bin/python3", "-B", str(Path(__file__)), "--inside"], "emulator"),
-            520, env=dict(environment(), VOLPAROSSA_TEST_HOST_NETNS=netns), memory=MEMORY)
+            520, env=dict(environment(), VOLPAROSSA_TEST_HOST_NETNS=netns), memory=EMULATOR_MEMORY)
         require(apt_awk_digest() == awk, "AWK_TOOL_CHANGED")
         original = H.document(PROOF / "report.json")
         validate_report(original)
