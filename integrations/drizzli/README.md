@@ -131,11 +131,33 @@ unchanged upstream `package-lock.json`; installation scripts are not run.
 
 ## Stage and build
 
+The [hosted client workflow](../../.github/workflows/hosted-clients.yml) uses public, pinned Node/npm,
+Firefox and source inputs on a disposable runner, preserving the existing
+developer stages and historical receipts. Dependency acquisition is separate
+from offline compilation; the browser exercises synthetic precipitation and
+particulate products through the real client and HTTP bridge.
+
+The [hosted trial on `397693c4`](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38224151028)
+passes the complete production build, all 21 client/render tests and actual
+Firefox interaction. The browser checks native precipitation windows and
+particulate values, missing versus zero, refresh, independent product failures
+and expiry. Both applications exit normally; private profiles, owned processes
+and temporary sandbox policy are cleaned up. Compilation has no external
+network, and browser interaction runs in a loopback-only namespace.
+
+These are **synthetic product results**, not joined core delivery. The public
+artifacts require a separately reviewed core input profile before that trial.
+No existing private bundle is uploaded, and no weather origin is contacted.
+Earlier failed attempts remain recorded in [PR15](https://github.com/VOLPAROSSA/volparossa-weather/pull/15);
+their results are not replaced by this success.
+
 Run from this repository on a Linux development system with Git, Python 3, and
 an independently verified Node/npm installation. The verified run used Node
 24.19.0 and npm 11.17.0. Keep downloads, dependency cache and generated files
-inside the ignored `build/` directory. Allow at least 1 GiB of working memory
-in addition to the host's reserved headroom; the dependency tree uses about
+inside the ignored `build/` directory. The hosted production build allows 2 GiB
+of aggregate process RSS and requires another 2 GiB of available memory before
+starting; it keeps checking the host reserve during execution. Other compilation
+steps retain a 1.5 GiB budget, and the per-Node heap remains 768 MiB. The dependency tree uses about
 590 MiB of disk space on the verified Linux amd64 stage.
 
 `stage.py` requires a **new** direct child of `build/`. It fetches only the pinned

@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Derived from AppArmor v4.0.1 b0eb95457bc2de401920308869d016e696c73664.
+# Separate disposable hosted Weather client build profile, 2026-10-12.
+# Original license: ../third_party/apparmor-ci/LICENSE (unchanged).
+# Retains the upstream stacked capability-denied child boundary. It does not
+# disable the global unprivileged-userns restriction or alter decoder policy.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile volparossa_ci_weather_clients_bwrap /usr/bin/bwrap flags=(attach_disconnected) {
+  allow capability,
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+  allow px /** -> volparossa_ci_weather_clients_bwrap//&volparossa_ci_weather_clients_child,
+}
+
+profile volparossa_ci_weather_clients_child flags=(attach_disconnected) {
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+  allow pix /** -> &volparossa_ci_weather_clients_child,
+  audit deny capability,
+}

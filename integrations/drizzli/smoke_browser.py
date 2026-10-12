@@ -6,6 +6,7 @@ No core, weather origin, host profile or host network mutation is used. Reuses t
 reviewed Browser runtime validator, Marionette framing and isolated-home helper.
 """
 import argparse
+import base64
 import datetime
 import hashlib
 import json
@@ -19,6 +20,7 @@ import socket
 import stat
 import subprocess
 import sys
+import threading
 import time
 
 HERE = Path(__file__).resolve().parent
@@ -55,6 +57,80 @@ from stage_firefox import isolated_browser_home, validate_isolated_browser_home
 
 NODE_SHA256 = "bc17c508ffeed0ec622934f9b7fa72f8e78da65350e63c3eceb56fa688aa5e12"
 PROFILE_DIRS = ("profile", "config", "cache", "runtime", "tmp", "appdata")
+MAX_STARTUP_STDERR = 2048
+
+
+class StartupStderr:
+    """Bounded about:blank diagnostics, never page/navigation logging.
+
+    Continue draining after the capture freezes so a verbose child cannot
+    deadlock on stderr. Only a failed startup exports the captured prefix.
+    """
+    def __init__(self, stream):
+        self.stream = stream
+        self.data = bytearray()
+        self.observed = 0
+        self.capture = True
+        self.eof = False
+        self.failed = False
+        self.started = time.monotonic()
+        self.lock = threading.Lock()
+        self.stopping = threading.Event()
+        self.thread = threading.Thread(target=self._drain, name="browser-startup-stderr", daemon=True)
+        os.set_blocking(stream.fileno(), False)
+        self.thread.start()
+
+    def _drain(self):
+        stop_deadline = None
+        try:
+            while True:
+                if self.stopping.is_set() and stop_deadline is None:
+                    stop_deadline = time.monotonic() + 0.5
+                if stop_deadline is not None and time.monotonic() >= stop_deadline:
+                    return
+                readable, _, _ = select.select([self.stream], [], [], 0.05)
+                if not readable:
+                    if stop_deadline is not None:
+                        return
+                    continue
+                try:
+                    raw = os.read(self.stream.fileno(), 4096)
+                except BlockingIOError:
+                    continue
+                if not raw:
+                    self.eof = True
+                    return
+                with self.lock:
+                    if self.capture:
+                        self.observed += len(raw)
+                        self.data.extend(raw[:max(0, MAX_STARTUP_STDERR - len(self.data))])
+        except (OSError, ValueError):
+            self.failed = True
+
+    def freeze(self):
+        # Called before WebDriver creates a session, well before any navigation.
+        with self.lock:
+            self.capture = False
+
+    def finish(self):
+        self.stopping.set()
+        self.thread.join(timeout=2)
+        finished = not self.thread.is_alive()
+        if finished:
+            self.stream.close()
+        return finished and self.eof and not self.failed
+
+    def diagnostic(self, exit_code, exit_code_before_cleanup=None):
+        with self.lock:
+            raw = bytes(self.data)
+            observed = self.observed
+        return dict(scope="startup-about-blank-before-webdriver-navigation", exit_code=exit_code,
+            exit_code_before_cleanup=exit_code_before_cleanup,
+            observed_elapsed_ms=int((time.monotonic() - self.started) * 1000),
+            encoding="base64", stderr_prefix=base64.b64encode(raw).decode("ascii"),
+            captured_bytes=len(raw), observed_bytes=observed, limit_bytes=MAX_STARTUP_STDERR,
+            truncated=observed > len(raw), prefix_sha256=hashlib.sha256(raw).hexdigest(),
+            stream_eof=self.eof, read_failed=self.failed)
 
 
 def require(condition):
@@ -384,7 +460,7 @@ def inside(args, stage, work, node, browser_stage, metadata, source):
     if args.air_quality:
         report['air_quality_scenario'] = True
         report['scope']['synthetic_air_quality'] = True
-    fixture = browser = client = connection = None
+    fixture = browser = client = connection = startup_stderr = None
     normal_browser_stop = normal_fixture_stop = False
     try:
         report["phase"] = "fixture_lifecycle"
@@ -410,7 +486,8 @@ def inside(args, stage, work, node, browser_stage, metadata, source):
         browser = subprocess.Popen([str(browser_stage / metadata["executable"]), "--headless", "--no-remote",
             "--new-instance", "--profile", str(work / "profile"), "--marionette",
             "--remote-allow-system-access", "about:blank"], env=environment,
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, start_new_session=True)
+        startup_stderr = StartupStderr(browser.stderr)
         deadline = time.monotonic() + 40
         while time.monotonic() < deadline:
             require(browser.poll() is None)
@@ -425,6 +502,7 @@ def inside(args, stage, work, node, browser_stage, metadata, source):
                     connection = None
                 time.sleep(0.1)
         require(client is not None)
+        startup_stderr.freeze()
         report["phase"] = "browser_session"
         client.command("WebDriver:NewSession", {"capabilities": {"alwaysMatch": {"acceptInsecureCerts": False}}})
         client.command("Marionette:SetContext", {"value": "chrome"})
@@ -568,7 +646,18 @@ def inside(args, stage, work, node, browser_stage, metadata, source):
                 connection.close()
         except OSError:
             pass
+        browser_exit_before_cleanup = browser.poll() if browser is not None else None
         browser_stopped, fixture_stopped = stop(browser), stop(fixture)
+        stderr_drained = True
+        if startup_stderr is not None:
+            stderr_drained = startup_stderr.finish()
+        elif browser is not None and browser.stderr is not None:
+            # Preserve cleanup even if reader construction failed after Popen.
+            browser.stderr.close()
+            stderr_drained = False
+        if startup_stderr is not None and report["phase"] in ("browser_start", "browser_session"):
+            report["startup_diagnostics"] = startup_stderr.diagnostic(browser.poll(), browser_exit_before_cleanup)
+        report["browser_process_exit_code"] = browser.poll() if browser is not None else None
         if fixture is not None:
             for stream in (fixture.stdin, fixture.stdout):
                 try:
@@ -578,7 +667,8 @@ def inside(args, stage, work, node, browser_stage, metadata, source):
         private_removed = remove_private(work, identity) if browser_stopped and fixture_stopped else False
         report["cleanup"] = dict(browser_exited=browser_stopped, fixture_exited=fixture_stopped,
             private_profile_removed=private_removed,
-            normal_browser_stop=normal_browser_stop, normal_fixture_stop=normal_fixture_stop)
+            normal_browser_stop=normal_browser_stop, normal_fixture_stop=normal_fixture_stop,
+            startup_stderr_drained=stderr_drained)
         report["passed"] = report["passed"] and all(report["cleanup"].values())
         save_report(work, report)
 

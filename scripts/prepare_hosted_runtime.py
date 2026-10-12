@@ -5,6 +5,8 @@ Use --fetch explicitly or supply --archives containing the exact archives.
 Output is a NEW private direct child of this checkout's build/. On failure it
 is retained for inspection, never reused or represented as successful. Only
 Python's standard library is used; .deb control/maintainer scripts never run.
+--with-npm explicitly includes the exact npm tree bundled in the Node archive;
+invoke it through the pinned node and npm/bin/npm-cli.js, not a global npm shim.
 This is artifact preparation, not a browser proof or source-reproducible build.
 """
 
@@ -25,6 +27,9 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 PIN = ROOT / "third_party/hosted-runtime-inputs.json"
+NPM_PIN = ROOT / "third_party/hosted-runtime-npm.json"
+NPM_PREFIX = "lib/node_modules/npm"
+NPM_PROFILE = "historical-weather-linux-x64-2026-09-with-npm"
 MAX_ARCHIVE = 96 * 1024**2
 MAX_EXPANDED = 512 * 1024**2
 MAX_FILE = 192 * 1024**2
@@ -123,6 +128,61 @@ def load_pin():
                 and all(isinstance(item["abi"][key], str) and re.fullmatch(r"\d+(\.\d+){1,2}", item["abi"][key])
                         for key in ("glibc_min", "glibcxx_min")), "Invalid ABI metadata")
     return pin, hashlib.sha256(raw).hexdigest()
+
+
+def validate_npm_pin(pin, node):
+    require(type(pin) is dict and set(pin) == {"schema", "profile", "version", "node_archive_sha256",
+            "prefix", "files", "bytes", "inventory_sha256", "expected_files"}
+            and type(pin["schema"]) is int and pin["schema"] == 1
+            and pin["profile"] == NPM_PROFILE and pin["version"] == "11.17.0"
+            and hex64(pin["node_archive_sha256"]) and pin["node_archive_sha256"] == node["sha256"]
+            and pin["prefix"] == NPM_PREFIX
+            and type(pin["files"]) is int and 3 <= pin["files"] <= 2048
+            and type(pin["bytes"]) is int and 0 < pin["bytes"] <= 16 * 1024**2
+            and hex64(pin["inventory_sha256"]), "Unsupported npm pin")
+    expected = pin["expected_files"]
+    require(type(expected) is dict and set(expected) == {"bin/npm-cli.js", "package.json", "LICENSE"},
+            "Required npm entrypoint/package/license pins missing")
+    for name, item in expected.items():
+        require(type(item) is dict and set(item) == {"bytes", "sha256", "mode"}
+                and type(item["bytes"]) is int and 0 < item["bytes"] <= 16384 and hex64(item["sha256"])
+                and type(item["mode"]) is int and item["mode"] == (0o700 if name == "bin/npm-cli.js" else 0o600),
+                "Invalid npm file pin")
+    return pin
+
+
+def load_npm_pin(runtime_pin):
+    with regular_input(NPM_PIN) as stream:
+        raw = stream.read(MAX_PIN + 1)
+    require(len(raw) <= MAX_PIN, "npm pin is oversized")
+    pin = validate_npm_pin(json.loads(raw, object_pairs_hook=unique_pairs), runtime_pin["artifacts"]["node"])
+    return pin, hashlib.sha256(raw).hexdigest()
+
+
+def npm_inventory(records):
+    prefix = "node/" + NPM_PREFIX + "/"
+    return {name[len(prefix):]: {key: item[key] for key in ("bytes", "sha256", "mode")}
+            for name, item in records.items() if name.startswith(prefix)}
+
+
+def inventory_sha256(inventory):
+    # Original relative paths, byte counts, hashes and normalized output modes.
+    raw = (json.dumps(inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def verify_npm(output, records, pin):
+    inventory = npm_inventory(records)
+    require(len(inventory) == pin["files"] and sum(item["bytes"] for item in inventory.values()) == pin["bytes"]
+            and inventory_sha256(inventory) == pin["inventory_sha256"], "npm inventory differs from its pin")
+    require(all(inventory.get(name) == item for name, item in pin["expected_files"].items()),
+            "npm entrypoint/package/license differs from its pin")
+    with regular_input(output / "node" / NPM_PREFIX / "package.json") as stream:
+        raw = stream.read(16385)
+    require(len(raw) <= 16384, "npm package metadata oversized")
+    package = json.loads(raw, object_pairs_hook=unique_pairs)
+    require(type(package) is dict and package.get("name") == "npm" and package.get("version") == pin["version"],
+            "npm package version differs from its pin")
 
 
 @contextmanager
@@ -277,7 +337,7 @@ def deb_data(stream):
     return ArSlice(stream, *data)
 
 
-def selected_path(name, kind, item):
+def selected_path(name, kind, item, npm=None):
     prefix = item["prefix"] + "/"
     if kind == "firefox" and name == item["license_file"]:
         return "licenses/firefox-copyright"
@@ -285,7 +345,8 @@ def selected_path(name, kind, item):
         if not name.startswith(prefix):
             return None
         relative = name[len(prefix):]
-        return "node/" + relative if relative in ("bin/node", item["license_file"]) else None
+        return "node/" + relative if relative in ("bin/node", item["license_file"]) or (
+            npm is not None and relative.startswith(NPM_PREFIX + "/")) else None
     relative = name[len(prefix):] if name.startswith(prefix) else None
     for source, target in FIREFOX_DIRECTORIES.items():
         if name.startswith(target + "/"):
@@ -322,10 +383,10 @@ def private_parents(path, output):
                     and stat.S_IMODE(info.st_mode) == 0o700, "Unsafe output directory")
 
 
-def extract(stream, output, kind, item):
+def extract(stream, output, kind, item, npm=None):
     reader = BoundedXZ(stream)
     seen, records, links, aliases = set(), {}, {}, set()
-    payload = 0
+    payload = npm_files = npm_payload = 0
     with tarfile.open(fileobj=reader, mode="r|") as archive:
         for member in archive:
             if member.name in (".", "./") and member.isdir():
@@ -342,7 +403,17 @@ def extract(stream, output, kind, item):
                         "Pinned Debian runtime alias changed")
                 aliases.add(name)
                 continue
-            relative = selected_path(name, kind, item)
+            if npm is not None and kind == "node":
+                npm_root = item["prefix"] + "/" + NPM_PREFIX
+                if name == npm_root:
+                    require(member.isdir(), "npm root must be a directory")
+                elif name.startswith(npm_root + "/"):
+                    require(member.isdir() or member.isfile(), "npm tree may not contain links")
+                    if member.isfile():
+                        npm_files += 1
+                        npm_payload += member.size
+                        require(npm_files <= npm["files"] and npm_payload <= npm["bytes"], "npm inventory exceeds its pin")
+            relative = selected_path(name, kind, item, npm)
             if relative is None or member.isdir():
                 continue
             require(len(records) + len(links) < MAX_OUTPUT_FILES, "Too many selected runtime files")
@@ -353,7 +424,7 @@ def extract(stream, output, kind, item):
                 # Only the exact aliases above may leave the GRE. Adding
                 # relocation inputs must not broaden ordinary link authority.
                 require(normalized.startswith(item["prefix"] + "/")
-                        and selected_path(normalized, kind, item) is not None,
+                        and selected_path(normalized, kind, item, npm) is not None,
                         "Selected archive link escapes runtime")
                 links[name] = (relative, normalized)
                 continue
@@ -400,6 +471,8 @@ def extract(stream, output, kind, item):
             "Required original runtime license missing or oversized")
     executable = by_path[kind + ("/bin/node" if kind == "node" else "/firefox-esr")]
     require(executable["mode"] == 0o700, "Pinned executable has no archive execute bit")
+    if npm is not None and kind == "node":
+        verify_npm(output, by_path, npm)
     return by_path
 
 
@@ -421,7 +494,9 @@ def new_output(value):
     return path
 
 
-def prepare(output, pin, pin_sha, archives=None, fetch=False):
+def prepare(output, pin, pin_sha, archives=None, fetch=False, *, with_npm=False):
+    require(type(with_npm) is bool, "npm profile must be explicitly selected")
+    npm, npm_sha = load_npm_pin(pin) if with_npm else (None, None)
     info = output.lstat()
     require(output.resolve() == output and stat.S_ISDIR(info.st_mode)
             and info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700
@@ -432,7 +507,7 @@ def prepare(output, pin, pin_sha, archives=None, fetch=False):
     for kind, item in pin["artifacts"].items():
         path = acquire(item, downloads, archives, fetch)
         with regular_input(path) as source, deadline(EXTRACT_SECONDS):
-            files.update(extract(deb_data(source) if kind == "firefox" else source, output, kind, item))
+            files.update(extract(deb_data(source) if kind == "firefox" else source, output, kind, item, npm))
         inputs[kind] = {key: item[key] for key in ("version", "url", "bytes", "sha256", "checksum_source", "abi")}
     # Neither runtime receives any execute permission before BOTH archive and
     # extracted-file checks succeed. No subprocess or runtime is ever launched.
@@ -447,6 +522,10 @@ def prepare(output, pin, pin_sha, archives=None, fetch=False):
                   "host_abi_verified": False, "browser_proof_performed": False,
                   "legacy_bundle_equivalent": False, "current_update_authority": False},
     }
+    if with_npm:
+        report.update(schema=2, profile=npm["profile"], npm={
+            "pin_sha256": npm_sha, "version": npm["version"], "files": npm["files"], "bytes": npm["bytes"],
+            "inventory_sha256": npm["inventory_sha256"], "cli": "node/" + NPM_PREFIX + "/bin/npm-cli.js"})
     raw = (json.dumps(report, sort_keys=True, indent=2) + "\n").encode()
     require(len(raw) <= 2 * 1024**2, "Runtime receipt exceeds bound")
     fd = os.open(output / "provenance.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -460,12 +539,13 @@ def main(argv=None):
     parser.add_argument("--output", required=True, help="New direct child of this checkout's build/")
     parser.add_argument("--archives", type=Path, help="Read-only local cache of the exact pinned archive filenames")
     parser.add_argument("--fetch", action="store_true", help="Explicitly fetch missing pinned public archives")
+    parser.add_argument("--with-npm", action="store_true", help="Include the separately pinned npm tree from the same Node archive")
     args = parser.parse_args(argv)
     require(os.geteuid() != 0, "Use an ordinary user; never root")
     pin, pin_sha = load_pin()
     output = new_output(args.output)
-    report = prepare(output, pin, pin_sha, args.archives, args.fetch)
-    print(json.dumps({"schema": 1, "prepared": True, "profile": report["profile"],
+    report = prepare(output, pin, pin_sha, args.archives, args.fetch, with_npm=args.with_npm)
+    print(json.dumps({"schema": report["schema"], "prepared": True, "profile": report["profile"],
                       "files": len(report["files"]), "runtime_executed": False}, sort_keys=True))
 
 
