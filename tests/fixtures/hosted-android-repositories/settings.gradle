@@ -7,3 +7,4 @@ pluginManagement {
     }
 }
 rootProject.name = 'offline-native-repository-contract'
+includeBuild('compiler-property')

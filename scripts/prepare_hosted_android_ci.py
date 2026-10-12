@@ -63,6 +63,14 @@ APP_GRADLE_JVM_ARGS = ("-Xmx1024m", "-XX:MaxMetaspaceSize=512m",
 # pool. Source: https://dl.google.com/dl/android/maven2/com/android/tools/build/gradle/8.11.1/gradle-8.11.1-sources.jar
 # This is a scoped concurrency candidate, not proof that the build fits.
 APP_D8_THREADS = 1
+# The app's gradle.properties does not configure Flutter's included plugin
+# build. Use the already private Gradle user home, shared by both builds:
+# https://raw.githubusercontent.com/gradle/gradle/v8.13.0/subprojects/core/src/main/java/org/gradle/initialization/DefaultGradlePropertiesLoader.java
+# https://raw.githubusercontent.com/gradle/gradle/v8.13.0/subprojects/core-api/src/main/java/org/gradle/StartParameter.java
+# https://raw.githubusercontent.com/flutter/flutter/f6ff1529fd6d8af5f706051d9251ac9231c83407/packages/flutter_tools/gradle/build.gradle.kts
+# https://raw.githubusercontent.com/JetBrains/kotlin/v1.9.20/libraries/tools/kotlin-gradle-plugin/src/common/kotlin/org/jetbrains/kotlin/gradle/plugin/PropertiesProvider.kt
+# No daemon-role/performance conclusion is inferred from this configuration.
+GRADLE_USER_PROPERTIES = b"kotlin.compiler.execution.strategy=in-process\n"
 H.OUTPUT, H.PRIVATE, H.STAGE, H.PROOF = OUTPUT, PRIVATE, STAGE, PROOF
 W.OUTPUT, W.PRIVATE, W.STAGE = OUTPUT, PRIVATE, STAGE
 W.SDK_TOOL_STATE = PRIVATE / "flutter-tool-state"
@@ -75,6 +83,33 @@ def environment():
         PATH=f"{SDK}/bin:{JAVA}/bin:{ANDROID}/platform-tools:/tools:/usr/bin:/bin",
         ANDROID_EMULATOR_USE_SYSTEM_LIBS="1", QT_QPA_PLATFORM="offscreen",
         NODE_OPTIONS="--max-old-space-size=256", GRADLE_OPTS="-Dorg.gradle.daemon=false")
+
+
+def verify_gradle_user_properties():
+    parent = PRIVATE / "gradle-home"
+    info = parent.lstat()
+    require(parent.resolve() == parent and stat.S_ISDIR(info.st_mode)
+        and info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700, "GRADLE_USER_HOME_PRIVATE")
+    fd = os.open(parent / "gradle.properties", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(fd, "rb") as stream:
+        before = os.fstat(stream.fileno())
+        require(stat.S_ISREG(before.st_mode) and before.st_uid == os.getuid()
+            and before.st_nlink == 1 and stat.S_IMODE(before.st_mode) == 0o600
+            and before.st_size == len(GRADLE_USER_PROPERTIES), "GRADLE_USER_PROPERTIES_PRIVATE")
+        raw = stream.read(len(GRADLE_USER_PROPERTIES) + 1)
+        after = os.fstat(stream.fileno())
+        named = (parent / "gradle.properties").lstat()
+    fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+    require(raw == GRADLE_USER_PROPERTIES
+        and all(getattr(before, k) == getattr(after, k) == getattr(named, k) for k in fields),
+        "GRADLE_USER_PROPERTIES_CHANGED")
+    return dict(schema=1, kind="hosted-android-kotlin-configured-scope", scopes=["main-build", "included-builds"],
+        compiler_execution_strategy="in-process", bytes=len(raw), sha256=H.sha(raw), runtime_measurement=False)
+
+
+def prepare_gradle_user_properties():
+    H.write(PRIVATE / "gradle-home/gradle.properties", GRADLE_USER_PROPERTIES)
+    return verify_gradle_user_properties()
 
 
 def guards(env):
@@ -106,7 +141,8 @@ def sandbox(command, mode):
     # Exact read-only distro Java configuration is required by Ubuntu's Java
     # symlinks; this never exposes the runner's home, credentials or whole /etc.
     extra = ["--ro-bind", str(INPUTS), "/tools/android-inputs",
-        "--ro-bind", "/etc/java-17-openjdk", "/etc/java-17-openjdk"]
+        "--ro-bind", "/etc/java-17-openjdk", "/etc/java-17-openjdk",
+        "--ro-bind", str(PRIVATE / "gradle-home/gradle.properties"), "/state/gradle-home/gradle.properties"]
     if mode != "acquire":
         extra += ["--ro-bind", "/etc/ssl/certs", "/etc/ssl/certs"]
     for name in GRADLE_STATE:
@@ -133,6 +169,12 @@ assert not any('TOKEN' in k or 'PROXY' in k or 'AUTH' in k for k in os.environ)
 assert os.statvfs('/tools/android-inputs').f_flag & os.ST_RDONLY
 assert os.statvfs(sys.argv[3]+'/packages/flutter_tools/gradle/src').f_flag & os.ST_RDONLY
 assert os.statvfs(sys.argv[3]+'/.git').f_flag & os.ST_RDONLY
+properties=Path('/state/gradle-home/gradle.properties')
+assert os.environ['GRADLE_USER_HOME']==str(properties.parent)
+with properties.open('rb') as stream:
+ assert stream.read(47)==b'kotlin.compiler.execution.strategy=in-process\n'
+assert os.statvfs(properties).f_flag & os.ST_RDONLY
+assert not os.statvfs(properties.parent).f_flag & os.ST_RDONLY
 assert Path('/dev/kvm').exists()==(mode=='emulator')
 print(json.dumps(dict(schema=1,mode=mode,unprivileged=True,capabilities_zero=True,
  no_new_privileges=True,source_read_only=True,toolchain_read_only=True,
@@ -189,6 +231,7 @@ def repository_fixture_command():
 def run_app_gradle(acquire):
     """The larger finite RSS profile applies only to these two fixed steps."""
     require(type(acquire) is bool, "NATIVE_APP_BUILD_SCOPE")
+    verify_gradle_user_properties()
     # The single outer prlimit lowers the new app process and its descendants,
     # not this wrapper. Never attempt a late raise inside an already limited
     # namespace, require privilege, or retry an inherited hard-limit failure.
@@ -247,9 +290,9 @@ def repository_fixture_report(raw):
     records = [line[len(prefix):] for line in raw.splitlines() if line.startswith(prefix)]
     require(len(records) == 1 and len(records[0]) <= 1024, "REPOSITORY_FIXTURE_RECEIPT")
     value = json.loads(records[0], object_pairs_hook=H.unique)
-    expected = dict(schema=2, kind="gradle-repository-contract", gradle_version="8.13", plugin_wrappers=3,
+    expected = dict(schema=3, kind="gradle-repository-contract", gradle_version="8.13", plugin_wrappers=3,
         rejected=["artifact-url", "unadmitted", "http", "file", "ivy", "flatdir"], networkless=True, external_dependencies=False,
-        nofile_soft=4096, nofile_hard=4096)
+        nofile_soft=4096, nofile_hard=4096, kotlin_property_scopes=["root", "included"])
     require(value == expected and type(value.get("schema")) is int and type(value.get("plugin_wrappers")) is int
         and type(value.get("nofile_soft")) is int and type(value.get("nofile_hard")) is int
         and type(value.get("networkless")) is bool and type(value.get("external_dependencies")) is bool,
@@ -260,10 +303,12 @@ def repository_fixture_report(raw):
 def repository_fixture():
     """Hosted-only: one offline Gradle invocation with no external dependencies."""
     target = PRIVATE / "repository-fixture"
-    for path in (target, target / "gradle", target / "gradle/wrapper"):
+    verify_gradle_user_properties()
+    for path in (target, target / "gradle", target / "gradle/wrapper", target / "compiler-property"):
         H.private_directory(path)
     fixture = ROOT / "tests/fixtures/hosted-android-repositories"
-    files = {name: H.read(fixture / name) for name in ("settings.gradle", "build.gradle", "gradle.properties")}
+    files = {name: H.read(fixture / name) for name in ("settings.gradle", "build.gradle", "gradle.properties",
+        "compiler-property/settings.gradle", "compiler-property/build.gradle")}
     wrapper = SDK / "bin/cache/artifacts/gradle_wrapper"
     files.update({name: H.read(wrapper / name) for name in ("gradlew", "gradle/wrapper/gradle-wrapper.jar")})
     # Reuse the native preparer's exact local distribution URL and published
@@ -441,6 +486,7 @@ def execute(helper, platform):
         H.private_directory(PRIVATE)
         for name in ("config", "cache", "pub-cache", "android-home", "avd", "gradle-home", "java-home"):
             H.private_directory(PRIVATE / name)
+        H.save("gradle-kotlin-config.json", prepare_gradle_user_properties())
         W.prepare_tool_state()
         for name in GRADLE_STATE:
             H.private_directory(PRIVATE / ("flutter-gradle-" + name.lstrip(".")))

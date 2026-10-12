@@ -9,9 +9,16 @@ import org.gradle.api.internal.artifacts.repositories.descriptor.MavenRepository
 plugins { id 'java' }
 
 tasks.register('verifyRepositoryContract') {
+    dependsOn(gradle.includedBuild('compiler-property').task(':verifyCompilerProperty'))
     doLast {
         assert gradle.startParameter.offline
         assert gradle.gradleVersion == '8.13'
+        assert providers.gradleProperty('kotlin.compiler.execution.strategy').get() == 'in-process'
+        // This file is produced by the genuine included-build task in the
+        // fresh disposable fixture, not by a mocked Kotlin/Gradle compiler.
+        def includedProperty = file('compiler-property/build/verified-property.txt')
+        assert includedProperty.length() == 11
+        assert includedProperty.getText('US-ASCII') == 'in-process\n'
         // Observe the actual Gradle JVM, including any single-use daemon, not
         // merely the launcher's intended limits. Both bounds remain finite.
         def limits = new File('/proc/self/limits').getText('US-ASCII')
@@ -85,9 +92,9 @@ tasks.register('verifyRepositoryContract') {
             project.repositories.flatDir { dirs '/state/not-a-repository' }
         }
         println('NATIVE_REPOSITORY_FIXTURE ' + JsonOutput.toJson([
-            schema: 2, kind: 'gradle-repository-contract', gradle_version: gradle.gradleVersion,
+            schema: 3, kind: 'gradle-repository-contract', gradle_version: gradle.gradleVersion,
             plugin_wrappers: wrappers.size(), rejected: rejected, networkless: true, external_dependencies: false,
-            nofile_soft: nofileSoft, nofile_hard: nofileHard
+            nofile_soft: nofileSoft, nofile_hard: nofileHard, kotlin_property_scopes: ['root', 'included']
         ]))
     }
 }

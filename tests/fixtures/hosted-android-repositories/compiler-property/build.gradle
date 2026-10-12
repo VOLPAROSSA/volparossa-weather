@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// No Kotlin/plugin download: test the real included-build property scope.
+tasks.register('verifyCompilerProperty') {
+    doLast {
+        assert gradle.startParameter.offline
+        assert gradle.gradleVersion == '8.13'
+        assert !file('gradle.properties').exists()
+        assert providers.gradleProperty('kotlin.compiler.execution.strategy').get() == 'in-process'
+        assert project.configurations.every { it.allDependencies.empty }
+        assert project.buildscript.configurations.every { it.allDependencies.empty }
+        def target = layout.buildDirectory.file('verified-property.txt').get().asFile
+        assert !target.exists()
+        assert target.parentFile.mkdirs() || target.parentFile.isDirectory()
+        target.setText('in-process\n', 'US-ASCII')
+    }
+}

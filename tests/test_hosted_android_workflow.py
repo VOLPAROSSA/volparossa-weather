@@ -18,6 +18,7 @@ class Workflow(unittest.TestCase):
         self.assertIn("branches: [feature/overmorrow-native-android]", trigger)
         self.assertIn("    paths:\n", trigger)
         self.assertIn("tests/fixtures/hosted-android-repositories/*", trigger)
+        self.assertIn("tests/fixtures/hosted-android-repositories/compiler-property/*.gradle", trigger)
         self.assertNotIn("main", trigger)
         self.assertNotIn("**", trigger)
         self.assertNotIn("README", trigger)

@@ -15,6 +15,7 @@ on:
       - integrations/overmorrow/test-native-android.mjs
       - tests/test_hosted_android*.py
       - tests/fixtures/hosted-android-repositories/*
+      - tests/fixtures/hosted-android-repositories/compiler-property/*.gradle
 
 permissions:
   contents: read

@@ -215,7 +215,7 @@ process drain, policy/staging removal, network-namespace preservation and
 KVM-access restoration pass. There is still no APK, offline rebuild or
 installed-app proof.
 
-The next controlled trial gives only the two fixed app-build commands a
+Commit `1da6f2a` gives only the two fixed app-build commands a
 1,800-second per-process CPU budget. Their 900-second wall-time deadline,
 4 GiB aggregate RSS cap, 2 GiB host reserve, one Gradle worker, 1,024 MiB heap
 and D8 pool of one remain unchanged. CPU time across a process's threads can
@@ -225,7 +225,37 @@ rejected before launch, without changing the parent or attempting a privileged
 raise. The schema-2 configuration receipt distinguishes CPU limits from the
 wall-time deadline. All 126 targeted inert Python/Node checks and independent
 review pass, including tiny real child processes checking the limits and
-unchanged parent. Build fit still requires actual hosted evidence.
+unchanged parent.
+
+The [twelfth attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38282437155)
+on that source ends at the 900-second acquisition-build deadline after
+900.130 seconds. The last logged task is `:app:mergeExtDexDebug`; the logs do
+not measure that task's duration separately. Maximum sampled individual Java
+CPU is 1,662.590 seconds under the actual 1,800-second limit. Peak aggregate RSS
+is 3,988,389,888 bytes, below 4 GiB. All nine original step-log hashes match.
+Process drain and policy/staging cleanup remain unconfirmed; daemon-log scanning
+is therefore skipped and heap-marker status is unknown. Unchanged host network
+namespace and restored KVM access do not establish full cleanup. No APK,
+offline rebuild or installed-app evidence was produced. The deadline is proved;
+an internal D8 or garbage-collection cause is not.
+
+The next candidate makes the existing Kotlin in-process setting apply to both
+the app and Flutter's included Gradle build. The app's `gradle.properties` alone
+does not configure that separate build; Gradle's
+[property loader](https://github.com/gradle/gradle/blob/v8.13.0/subprojects/core/src/main/java/org/gradle/initialization/DefaultGradlePropertiesLoader.java)
+also reads the private Gradle user home shared by both builds. The fixed setting
+is therefore written there before Gradle starts, checked before each app build,
+and mounted read-only while caches remain writable. The original app setting
+stays in place; Flutter SDK source is not modified.
+
+The offline repository fixture now includes a real dependency-free second build
+that must observe the same property. Its receipt establishes property scope,
+not a completed Kotlin compiler run or improved build performance. JVM heap,
+RSS reserve/cap, CPU/wall deadlines, Gradle workers and D8 pool size are unchanged.
+The previous three-Java-process observation does not identify which process was
+a Kotlin daemon; a successful actual build remains required.
+All 138 targeted Python/Node checks, workflow parsing and independent review
+pass; none executes Gradle, the Android toolchain or an emulator locally.
 
 The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only

@@ -367,9 +367,9 @@ class AptJavaProvenance(unittest.TestCase):
 class RepositoryFixture(unittest.TestCase):
     @staticmethod
     def receipt(**changes):
-        value = dict(schema=2, kind="gradle-repository-contract", gradle_version="8.13", plugin_wrappers=3,
+        value = dict(schema=3, kind="gradle-repository-contract", gradle_version="8.13", plugin_wrappers=3,
             rejected=["artifact-url", "unadmitted", "http", "file", "ivy", "flatdir"], networkless=True,
-            external_dependencies=False, nofile_soft=4096, nofile_hard=4096)
+            external_dependencies=False, nofile_soft=4096, nofile_hard=4096, kotlin_property_scopes=["root", "included"])
         value.update(changes)
         return b"NATIVE_REPOSITORY_FIXTURE " + json.dumps(value).encode() + b"\n"
 
@@ -379,7 +379,9 @@ class RepositoryFixture(unittest.TestCase):
                 self.receipt(plugin_wrappers=True), self.receipt(plugin_wrappers=3.0), self.receipt(schema=True),
                 self.receipt(rejected=[]), self.receipt(networkless=False), self.receipt(networkless=1),
                 self.receipt(external_dependencies=True), self.receipt(external_dependencies=0),
-                self.receipt(schema=1), self.receipt(nofile_soft=1024), self.receipt(nofile_hard=8192),
+                self.receipt(schema=1), self.receipt(schema=2), self.receipt(kotlin_property_scopes=["root"]),
+                self.receipt(kotlin_property_scopes=["included", "root"]),
+                self.receipt(nofile_soft=1024), self.receipt(nofile_hard=8192),
                 self.receipt(nofile_soft=4096.0), self.receipt(nofile_hard=None),
                 self.receipt(gradle_version="8.14"), self.receipt(extra="not closed")):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
@@ -390,6 +392,9 @@ class RepositoryFixture(unittest.TestCase):
     def fixture_paths(self, directory, properties=None):
         sdk, stage, private = (directory / name for name in ("sdk", "stage", "private"))
         private.mkdir(mode=0o700)
+        (private / "gradle-home").mkdir(mode=0o700)
+        with patch.object(M, "PRIVATE", private):
+            M.prepare_gradle_user_properties()
         wrapper = sdk / "bin/cache/artifacts/gradle_wrapper"
         (wrapper / "gradle/wrapper").mkdir(parents=True)
         (stage / "android/gradle/wrapper").mkdir(parents=True)
@@ -422,7 +427,9 @@ class RepositoryFixture(unittest.TestCase):
             self.assertEqual(kwargs["memory"], 3 * M.GIB)
             self.assertEqual((private / "repository-fixture/gradlew").stat().st_mode & 0o777, 0o700)
             saved = save.call_args.args[1]
-            self.assertEqual(len(saved["fixture_files"]), 6)
+            self.assertEqual(len(saved["fixture_files"]), 8)
+            self.assertEqual(saved["fixture_files"]["compiler-property/build.gradle"],
+                M.H.sha((ROOT / "tests/fixtures/hosted-android-repositories/compiler-property/build.gradle").read_bytes()))
             self.assertEqual(saved["fixture_files"]["gradle/wrapper/gradle-wrapper.jar"], hashlib.sha256(b"inert jar").hexdigest())
             self.assertEqual(saved["guard_sha256"], M.H.sha(M.H.read(ROOT / "scripts/hosted-android-repositories.gradle")))
 
@@ -468,6 +475,16 @@ class RepositoryFixture(unittest.TestCase):
 
 
 class GradleDescriptorProfile(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        private = Path(temporary.name)
+        (private / "gradle-home").mkdir(mode=0o700)
+        scope = patch.object(M, "PRIVATE", private)
+        scope.start()
+        self.addCleanup(scope.stop)
+        M.prepare_gradle_user_properties()
+
     def test_app_cpu_hard_limit_admission_is_read_only_and_before_child(self):
         for hard in (resource.RLIM_INFINITY, 1800, 3600, 1799, 900):
             with patch.object(M.resource, "getrlimit", return_value=(900, hard)) as read, \
@@ -612,6 +629,104 @@ finally:
             with patch.object(M.H, "run") as run, self.assertRaisesRegex(ValueError, "NATIVE_APP_BUILD_SCOPE"):
                 M.run_app_gradle(value)
             run.assert_not_called()
+
+
+class GradleUserProperties(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.private = Path(temporary.name)
+        (self.private / "gradle-home").mkdir(mode=0o700)
+        self.target = self.private / "gradle-home/gradle.properties"
+        scope = patch.object(M, "PRIVATE", self.private)
+        scope.start()
+        self.addCleanup(scope.stop)
+
+    def test_exact_private_initialization_and_non_overwriting(self):
+        receipt = M.prepare_gradle_user_properties()
+        self.assertEqual(self.target.read_bytes(), b"kotlin.compiler.execution.strategy=in-process\n")
+        self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), 0o600)
+        self.assertEqual(receipt, dict(schema=1, kind="hosted-android-kotlin-configured-scope",
+            scopes=["main-build", "included-builds"], compiler_execution_strategy="in-process",
+            bytes=46, sha256=hashlib.sha256(self.target.read_bytes()).hexdigest(), runtime_measurement=False))
+        with self.assertRaises(FileExistsError):
+            M.prepare_gradle_user_properties()
+        source = (ROOT / "scripts/prepare_hosted_android_ci.py").read_text().split("def execute(", 1)[1]
+        self.assertLess(source.index('prepare_gradle_user_properties()'), source.index('repository_fixture()'))
+        self.assertLess(source.index('prepare_gradle_user_properties()'), source.index('preflight("compile"'))
+        original = (ROOT / "integrations/overmorrow/prepare_native_android.py").read_text()
+        self.assertIn("kotlin.compiler.execution.strategy=in-process", original)
+
+    def test_changed_missing_oversized_mode_and_link_are_rejected_before_either_build(self):
+        for bad in ("missing", "changed", "oversized", "mode", "link", "hardlink"):
+            with self.subTest(bad=bad):
+                if self.target.exists() or self.target.is_symlink(): self.target.unlink()
+                if bad != "missing": M.prepare_gradle_user_properties()
+                if bad == "changed": self.target.write_bytes(b"kotlin.compiler.execution.strategy=daemon    \n")
+                if bad == "oversized": self.target.write_bytes(b"x" * 1024)
+                if bad == "mode": self.target.chmod(0o644)
+                if bad in ("link", "hardlink"):
+                    other = self.private / ("other-" + bad)
+                    self.target.rename(other)
+                    if bad == "link": self.target.symlink_to(other)
+                    else: os.link(other, self.target)
+                for acquire in (True, False):
+                    with patch.object(M.H, "run") as child, self.assertRaises((OSError, ValueError)):
+                        M.run_app_gradle(acquire)
+                    child.assert_not_called()
+
+    def test_private_parent_and_changed_same_length_bytes_rejected(self):
+        M.prepare_gradle_user_properties()
+        self.target.parent.chmod(0o755)
+        with self.assertRaisesRegex(ValueError, "GRADLE_USER_HOME_PRIVATE"):
+            M.verify_gradle_user_properties()
+        self.target.parent.chmod(0o700)
+        raw = M.GRADLE_USER_PROPERTIES.replace(b"in-process", b"notprocess")
+        self.assertEqual(len(raw), len(M.GRADLE_USER_PROPERTIES))
+        self.target.write_bytes(raw)
+        with self.assertRaisesRegex(ValueError, "GRADLE_USER_PROPERTIES_CHANGED"):
+            M.verify_gradle_user_properties()
+
+    def test_sandbox_mount_is_exact_readonly_file_inside_private_home(self):
+        for mode in ("acquire", "compile", "emulator"):
+            argv = M.sandbox(["inert"], mode)
+            matches = [argv[i:i+3] for i, value in enumerate(argv) if value == "--ro-bind"
+                and argv[i+2] == "/state/gradle-home/gradle.properties"]
+            self.assertEqual(matches, [["--ro-bind", str(self.target), "/state/gradle-home/gradle.properties"]])
+            self.assertLess(argv.index(str(self.target)), argv.index("--remount-ro"))
+            self.assertEqual(M.environment()["GRADLE_USER_HOME"], "/state/gradle-home")
+        self.assertIn("assert os.statvfs(properties).f_flag & os.ST_RDONLY", M.PROBE)
+        self.assertIn("assert not os.statvfs(properties.parent).f_flag & os.ST_RDONLY", M.PROBE)
+
+    def test_equal_bytes_path_replacement_after_fd_check_is_rejected(self):
+        M.prepare_gradle_user_properties()
+        original_lstat = Path.lstat
+        def replace_before_named_check(path, *args, **kwargs):
+            if path == self.target:
+                path.rename(self.private / "original-properties")
+                M.H.write(path, M.GRADLE_USER_PROPERTIES)
+            return original_lstat(path, *args, **kwargs)
+        with patch.object(Path, "lstat", replace_before_named_check), \
+                self.assertRaisesRegex(ValueError, "GRADLE_USER_PROPERTIES_CHANGED"):
+            M.verify_gradle_user_properties()
+        self.assertEqual(self.target.read_bytes(), M.GRADLE_USER_PROPERTIES)
+
+    def test_hosted_included_build_assertion_is_a_real_dependency_without_downloads(self):
+        fixture = ROOT / "tests/fixtures/hosted-android-repositories"
+        root = (fixture / "build.gradle").read_text()
+        included = (fixture / "compiler-property/build.gradle").read_text()
+        self.assertIn("includeBuild('compiler-property')", (fixture / "settings.gradle").read_text())
+        self.assertIn("dependsOn(gradle.includedBuild('compiler-property').task(':verifyCompilerProperty'))", root)
+        assertion = "assert providers.gradleProperty('kotlin.compiler.execution.strategy').get() == 'in-process'"
+        self.assertIn(assertion, root)
+        self.assertIn(assertion, included)
+        self.assertIn("assert !file('gradle.properties').exists()", included)
+        self.assertIn("assert gradle.startParameter.offline", included)
+        self.assertIn("assert !target.exists()", included)
+        self.assertFalse((fixture / "compiler-property/gradle.properties").exists())
+        self.assertNotIn("kotlin.compiler.execution.strategy", (fixture / "gradle.properties").read_text())
+        self.assertNotIn("plugins {", included)
+        self.assertIn("assert includedProperty.getText('US-ASCII') == 'in-process\\n'", root)
 
 
 if __name__ == "__main__":
