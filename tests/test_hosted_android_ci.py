@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Pure commands/scope/lifecycle contracts; no native tools or policy execution."""
 import base64
+from contextlib import ExitStack
 import hashlib
 import importlib.util
 import os
@@ -727,6 +728,169 @@ class GradleUserProperties(unittest.TestCase):
         self.assertNotIn("kotlin.compiler.execution.strategy", (fixture / "gradle.properties").read_text())
         self.assertNotIn("plugins {", included)
         self.assertIn("assert includedProperty.getText('US-ASCII') == 'in-process\\n'", root)
+
+
+class EmulatorDiagnostics(unittest.TestCase):
+    def test_known_markers_are_closed_indications_and_ambiguous_or_missing_is_not_cause(self):
+        cases = {
+            "java_version": b'Exception in thread "main" java.lang.UnsupportedClassVersionError: private-class\n',
+            "java_home": b'ERROR: JAVA_HOME is set to an invalid directory: /private/canary\n',
+            "sdk_root": b'Error: Could not determine SDK root. /private/canary\n',
+            "sdk_package": b'Error: Package path is not valid. Valid system image paths are:\nprivate-canary\n',
+            "sdk_license": b'com.android.builder.sdk.LicenceNotAcceptedException: private-canary\n',
+            "unknown": b'private-canary https://private.invalid/?token=secret\n',
+            "ambiguous": b'Error: Could not determine SDK root.\nJava version 17 or higher is required.\n',
+        }
+        for expected, raw in cases.items():
+            with self.subTest(expected=expected):
+                diagnostic = M.EmulatorDiagnostic(); diagnostic.phase = "avd_create"
+                error = subprocess.CalledProcessError(7, ["private-argv"], output=raw)
+                diagnostic.failed_command(error, "avdmanager", 7, raw, True)
+                result = diagnostic.receipt(error)
+                self.assertEqual(result["sdk_error"], expected)
+                self.assertEqual(result["failure_kind"], "command_exit")
+                self.assertEqual(result["exit_status"], 7)
+                self.assertTrue(result["output_complete"])
+                self.assertFalse(result["raw_text_exported"] or result["cause_established"])
+                encoded = json.dumps(result)
+                self.assertLess(len(encoded), 1024)
+                for forbidden in ("private-canary", "private-class", "private-argv", "private.invalid", "secret"):
+                    self.assertNotIn(forbidden, encoded)
+
+    def test_unknown_fields_bounds_and_caught_boot_errors_do_not_misattribute(self):
+        diagnostic = M.EmulatorDiagnostic(); diagnostic.phase = "/private/phase"
+        error = ValueError("EMULATOR_COMMAND_OUTPUT")
+        diagnostic.failed_command(error, "/private/argv", -999,
+            b"x" * 65536 + b"Error: Could not determine SDK root.", False)
+        result = diagnostic.receipt(error)
+        self.assertEqual(result["phase"], "unknown")
+        self.assertEqual(result["command_category"], "unknown")
+        self.assertIsNone(result["exit_status"])
+        self.assertEqual(result["output_bytes"], 65536)
+        self.assertTrue(result["output_truncated"])
+        self.assertFalse(result["output_complete"])
+        self.assertEqual(result["sdk_error"], "unknown")
+        diagnostic.phase = "boot"
+        later = diagnostic.receipt(ValueError("EMULATOR_BOOT_FAILED"))
+        self.assertEqual(later["command_category"], "none")
+        self.assertEqual(later["output_bytes"], 0)
+        self.assertIsNone(later["exit_status"])
+        self.assertEqual(later["check_code"], "EMULATOR_BOOT_FAILED")
+        self.assertEqual(diagnostic.receipt(ValueError("private exception token"))["check_code"], "unknown")
+
+    def guarded_inside(self, proof, popen):
+        """Only fake guard observations and an explicit inert Python child.
+
+        No native executable, /state mutation, namespace or policy operation.
+        """
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        original_read, original_exists = Path.read_text, Path.exists
+        def read(path, *args, **kwargs):
+            return "volparossa_ci_weather_clients_child" if str(path) == "/proc/self/attr/current" else original_read(path, *args, **kwargs)
+        def exists(path):
+            return False if str(path) in ("/etc/resolv.conf", "/state/avd", "/state/android-home", "/state/native-fixture") else original_exists(path)
+        stack.enter_context(patch.object(M, "PROOF", proof))
+        stack.enter_context(patch.object(M.os, "getuid", return_value=1000))
+        stack.enter_context(patch.object(M.socket, "if_nameindex", return_value=[(1, "lo")]))
+        stack.enter_context(patch.object(Path, "read_text", read))
+        stack.enter_context(patch.object(Path, "exists", exists))
+        stack.enter_context(patch.object(M.subprocess, "Popen", side_effect=popen))
+        return stack
+
+    def inert_popen(self, code, children):
+        original = subprocess.Popen
+        def spawn(argv, **kwargs):
+            self.assertEqual(argv[0], str(M.ANDROID / "cmdline-tools/19.0/bin/avdmanager"))
+            self.assertEqual(argv[1:4], ["create", "avd", "--name"])
+            child = original([sys.executable, "-I", "-c", code], **kwargs)
+            children.append(child)
+            return child
+        return spawn
+
+    def test_real_inert_failure_is_recorded_before_original_cleanup_and_exception_survives(self):
+        children, order = [], []
+        code = "import sys;sys.stdin.read();print('Error: Package path is not valid.');print('private-token');sys.exit(7)"
+        with tempfile.TemporaryDirectory() as directory:
+            proof = Path(directory)
+            self.guarded_inside(proof, self.inert_popen(code, children))
+            original_drain = M.drain_children
+            def drain(owned):
+                value = json.loads((proof / "emulator-diagnostic.json").read_text())
+                self.assertEqual(value["exit_status"], 7)
+                self.assertEqual(value["sdk_error"], "sdk_package")
+                self.assertEqual(owned[0].returncode, 7)
+                order.append("diagnostic-before-drain")
+                return original_drain(owned)
+            with patch.object(M, "drain_children", side_effect=drain), self.assertRaises(subprocess.CalledProcessError) as raised:
+                M.inside()
+            self.assertEqual(raised.exception.returncode, 7)
+            self.assertEqual(order, ["diagnostic-before-drain"])
+            raw = (proof / "emulator-diagnostic.json").read_bytes()
+            self.assertLessEqual(len(raw), 1024)
+            self.assertNotIn(b"private-token", raw)
+            self.assertEqual((proof / "emulator-diagnostic.json").stat().st_mode & 0o777, 0o600)
+            self.assertFalse((proof / "emulator-diagnostic.part").exists())
+            cleanup = json.loads((proof / "emulator-cleanup.json").read_text())
+            self.assertTrue(cleanup["direct_children_reaped"] and cleanup["private_avd_removed"])
+            self.assertFalse(cleanup["trial_returned"])
+            self.assertTrue(all(c.poll() is not None and c.stdout.closed and c.stdin.closed for c in children))
+
+    def test_spawn_failure_has_no_invented_exit_or_output_and_cleanup_still_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            proof = Path(directory)
+            original = FileNotFoundError("private path/token")
+            self.guarded_inside(proof, Mock(side_effect=original))
+            with self.assertRaises(FileNotFoundError) as raised: M.inside()
+            self.assertIs(raised.exception, original)
+            result = json.loads((proof / "emulator-diagnostic.json").read_text())
+            self.assertEqual(result["phase"], "avd_create")
+            self.assertEqual(result["command_category"], "avdmanager")
+            self.assertEqual(result["failure_kind"], "not_found")
+            self.assertIsNone(result["exit_status"])
+            self.assertEqual(result["output_bytes"], 0)
+            self.assertFalse(result["output_complete"])
+            self.assertTrue(json.loads((proof / "emulator-cleanup.json").read_text())["direct_children_reaped"])
+
+    def test_output_limit_retains_only_bounded_classification_and_reaps_real_inert_child(self):
+        children = []
+        code = "import os,sys;sys.stdin.read();os.write(1,b'x'*70000);import time;time.sleep(30)"
+        with tempfile.TemporaryDirectory() as directory:
+            proof = Path(directory)
+            self.guarded_inside(proof, self.inert_popen(code, children))
+            with self.assertRaisesRegex(ValueError, "EMULATOR_COMMAND_OUTPUT"): M.inside()
+            result = json.loads((proof / "emulator-diagnostic.json").read_text())
+            self.assertEqual(result["failure_kind"], "output_bound")
+            self.assertEqual(result["output_bytes"], 65536)
+            self.assertTrue(result["output_truncated"])
+            self.assertFalse(result["output_complete"])
+            self.assertIsNone(result["exit_status"])
+            self.assertTrue(all(c.poll() is not None for c in children))
+
+    def test_timeout_and_diagnostic_write_failure_keep_original_failure_and_cleanup(self):
+        for failed_write in (False, True):
+            with self.subTest(failed_write=failed_write), tempfile.TemporaryDirectory() as directory:
+                children, proof = [], Path(directory)
+                with self.guarded_inside(proof, self.inert_popen("import time;time.sleep(30)", children)):
+                    original = subprocess.TimeoutExpired("private-cmd-token", 20)
+                    original_write = M.H.write
+                    def write(path, raw):
+                        if failed_write and path.name == "emulator-diagnostic.part":
+                            raise PermissionError("private IO failure")
+                        return original_write(path, raw)
+                    with patch.object(M.selectors, "DefaultSelector", side_effect=original), \
+                            patch.object(M.H, "write", side_effect=write), self.assertRaises(subprocess.TimeoutExpired) as raised:
+                        M.inside()
+                    self.assertIs(raised.exception, original)
+                    self.assertTrue(all(c.poll() is not None and c.stdout.closed for c in children))
+                    self.assertTrue(json.loads((proof / "emulator-cleanup.json").read_text())["direct_children_reaped"])
+                    if failed_write:
+                        self.assertFalse((proof / "emulator-diagnostic.json").exists())
+                    else:
+                        result = json.loads((proof / "emulator-diagnostic.json").read_text())
+                        self.assertEqual(result["failure_kind"], "deadline")
+                        self.assertIsNone(result["exit_status"])
+                        self.assertFalse(result["output_complete"])
 
 
 if __name__ == "__main__":

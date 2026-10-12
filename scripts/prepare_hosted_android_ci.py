@@ -474,6 +474,85 @@ def no_guest_egress_routes(raw):
     return True
 
 
+class EmulatorDiagnostic:
+    """Closed observations only; never persist command text, output or VM tokens."""
+    MAX_OUTPUT = 65536  # The existing command reader's bound, not a larger log scan.
+    MAX_RECEIPT = 1024
+    PHASES = frozenset(("avd_create", "avd_configure", "service_start", "boot", "guest_identity",
+        "guest_network", "apk_install", "port_reverse", "app_driver"))
+    COMMANDS = frozenset(("avdmanager", "adb", "adb_server", "fixture", "emulator", "app_driver"))
+    CHECKS = frozenset(("EMULATOR_DEADLINE", "EMULATOR_COMMAND_DEADLINE", "EMULATOR_COMMAND_OUTPUT",
+        "EMULATOR_BOOT_FAILED", "ANDROID_API", "ANDROID_ABI", "GUEST_ROUTE_OUTPUT_BOUND",
+        "GUEST_NETWORK_STILL_ACTIVE"))
+    # These fixed SDK/JVM message forms are indications, not a claimed cause.
+    # An unfamiliar message (including a new SDK version's wording) is unknown.
+    MARKERS = {
+        "java_version": rb'(?:^|\n)(?:Exception in thread "[A-Za-z0-9_-]{1,32}" )?java\.lang\.UnsupportedClassVersionError\b|(?:^|\n)Java version [0-9]{1,2} or higher is required\.',
+        "java_home": rb'(?:^|\n)ERROR: JAVA_HOME is set to an invalid directory:',
+        "sdk_root": rb'(?:^|\n)(?:Error: )?Could not determine SDK root\.',
+        "sdk_package": rb'(?:^|\n)Error: Package path is not valid\.',
+        "sdk_license": rb'\bcom\.android\.builder\.sdk\.LicenceNotAcceptedException\b',
+    }
+
+    def __init__(self):
+        self.phase = "unknown"
+        self.error = None
+        self.command = "none"
+        self.status = None
+        self.raw = b""
+        self.complete = self.truncated = False
+
+    def failed_command(self, error, category, status=None, raw=b"", complete=False):
+        self.error = error
+        self.command = category if category in self.COMMANDS else "unknown"
+        self.status = status if type(status) is int and -255 <= status <= 255 else None
+        self.raw = bytes(raw[:self.MAX_OUTPUT])
+        self.truncated = len(raw) > self.MAX_OUTPUT
+        self.complete = complete is True and not self.truncated
+
+    def receipt(self, error):
+        # A caught boot-poll error is not the cause of a later failed predicate.
+        current = error is self.error
+        raw = self.raw if current else b""
+        markers = [name for name, pattern in self.MARKERS.items() if re.search(pattern, raw)]
+        classification = markers[0] if len(markers) == 1 else "ambiguous" if markers else "unknown"
+        check = str(error) if isinstance(error, ValueError) and str(error) in self.CHECKS else "unknown"
+        if isinstance(error, H.Interrupted): kind = "interrupted"
+        elif isinstance(error, subprocess.CalledProcessError): kind = "command_exit"
+        elif isinstance(error, subprocess.TimeoutExpired) or check in ("EMULATOR_DEADLINE", "EMULATOR_COMMAND_DEADLINE"): kind = "deadline"
+        elif check == "EMULATOR_COMMAND_OUTPUT": kind = "output_bound"
+        elif isinstance(error, FileNotFoundError): kind = "not_found"
+        elif isinstance(error, PermissionError): kind = "permission_denied"
+        elif isinstance(error, OSError): kind = "os_error"
+        elif check != "unknown": kind = "check_failed"
+        else: kind = "unknown"
+        return dict(schema=1, kind="hosted-android-emulator-diagnostic",
+            phase=self.phase if self.phase in self.PHASES else "unknown",
+            command_category=self.command if current else "none", failure_kind=kind, check_code=check,
+            exit_status=self.status if current else None, output_bytes=len(raw),
+            output_complete=current and self.complete, output_truncated=current and self.truncated,
+            sdk_error=classification, raw_text_exported=False, cause_established=False)
+
+    def publish_failure(self, error):
+        # Only called while re-raising the original failure. The inside OUTPUT
+        # is an unexported tmpfs; PROOF is the existing explicit writable bind.
+        part = PROOF / "emulator-diagnostic.part"
+        try:
+            raw = (json.dumps(self.receipt(error), sort_keys=True, separators=(",", ":")) + "\n").encode()
+            require(len(raw) <= self.MAX_RECEIPT, "EMULATOR_DIAGNOSTIC_BOUND")
+            H.write(part, raw)
+            os.replace(part, PROOF / "emulator-diagnostic.json")
+        except BaseException:
+            # Neither diagnostic IO nor another interruption may replace the
+            # failure already being propagated into the existing cleanup.
+            pass
+        finally:
+            try:
+                part.unlink(missing_ok=True)
+            except BaseException:
+                pass
+
+
 def execute(helper, platform):
     installed = attempted = success = False
     phase, netns = "baseline", os.readlink("/proc/self/ns/net")
@@ -588,6 +667,7 @@ def inside():
     # Explicitly owned children only. All private raw logs/VM authentication
     # material remain under /state, never among uploaded public evidence.
     children, logs = [], []
+    diagnostic = EmulatorDiagnostic()
     prior = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
     def interrupted(_s, _f):
         raise H.Interrupted("EMULATOR_INTERRUPTED")
@@ -609,11 +689,16 @@ def inside():
         if pending:
             raise H.Interrupted("NATIVE_OWNED_SPAWN_INTERRUPTED")
         return child
-    def command(argv, seconds=20, data=None):
-        require(time.monotonic() < stop, "EMULATOR_DEADLINE")
-        end = min(stop, time.monotonic() + seconds)
-        child = spawn(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    def command(category, argv, seconds=20, data=None):
+        try:
+            require(time.monotonic() < stop, "EMULATOR_DEADLINE")
+            end = min(stop, time.monotonic() + seconds)
+            child = spawn(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        except BaseException as error:
+            diagnostic.failed_command(error, category)
+            raise
         raw = bytearray()
+        output_complete = False
         try:
             if data:
                 child.stdin.write(data)
@@ -628,10 +713,16 @@ def inside():
                             selector.unregister(key.fileobj)
                         raw.extend(part)
                         require(len(raw) <= 65536, "EMULATOR_COMMAND_OUTPUT")
+            output_complete = True
             child.wait(timeout=max(0.1, end - time.monotonic()))
             if child.returncode:
                 raise subprocess.CalledProcessError(child.returncode, "owned-native-command")
             return bytes(raw)
+        except BaseException as error:
+            # Capture the observed status before TERM/KILL cleanup can change
+            # it. Only this propagated error may consume its command context.
+            diagnostic.failed_command(error, category, child.returncode, raw, output_complete)
+            raise
         finally:
             if child.poll() is None:
                 child.terminate()
@@ -642,25 +733,32 @@ def inside():
                     child.wait(timeout=3)
             child.stdout.close()
     def start(name, argv):
-        log = open("/state/" + name + ".log", "xb")
-        logs.append(log)
-        child = spawn(argv, stdin=subprocess.PIPE, stdout=log, stderr=log)
-        return child
+        try:
+            log = open("/state/" + name + ".log", "xb")
+            logs.append(log)
+            return spawn(argv, stdin=subprocess.PIPE, stdout=log, stderr=log)
+        except BaseException as error:
+            diagnostic.failed_command(error, "adb_server" if name == "adb" else name)
+            raise
     def adb_command(*args, seconds=20):
-        return command([adb, "-s", SERIAL, *args], seconds)
+        return command("adb", [adb, "-s", SERIAL, *args], seconds)
     complete = False
     try:
-        command([str(ANDROID / "cmdline-tools/19.0/bin/avdmanager"), "create", "avd", "--name", "volparossa_trial",
+        diagnostic.phase = "avd_create"
+        command("avdmanager", [str(ANDROID / "cmdline-tools/19.0/bin/avdmanager"), "create", "avd", "--name", "volparossa_trial",
             "--package", "system-images;android-36;default;x86_64", "--path", "/state/avd/trial.avd"], 30, b"no\n")
+        diagnostic.phase = "avd_configure"
         config = Path("/state/avd/trial.avd/config.ini")
         with config.open("a") as out:
             out.write("\nhw.lcd.width=1080\nhw.lcd.height=1920\nhw.lcd.density=420\nhw.keyboard=yes\n")
+        diagnostic.phase = "service_start"
         start("adb", [adb, "-L", "tcp:127.0.0.1:5037", "nodaemon", "server"])
         Path("/state/native-fixture").mkdir(mode=0o700)
         fixture = start("fixture", [str(H.NODE), str(W.HERE / "native-android-fixture.mjs"), "--work", "/state/native-fixture"])
         emulator = start("emulator", [str(ANDROID / "emulator/emulator"), "-avd", "volparossa_trial", "-port", "5554",
             "-accel", "on", "-cores", "2", "-memory", "1536", "-no-window", "-no-audio", "-no-snapshot",
             "-no-boot-anim", "-gpu", "swiftshader_indirect", "-no-metrics", "-camera-back", "none", "-camera-front", "none"])
+        diagnostic.phase = "boot"
         boot_end = min(stop, time.monotonic() + 180)
         while True:
             require(emulator.poll() is None and fixture.poll() is None and time.monotonic() < boot_end, "EMULATOR_BOOT_FAILED")
@@ -670,11 +768,13 @@ def inside():
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 pass
             time.sleep(1)
+        diagnostic.phase = "guest_identity"
         require(adb_command("shell", "getprop", "ro.build.version.sdk").strip() == b"36", "ANDROID_API")
         require(adb_command("shell", "getprop", "ro.product.cpu.abi").strip() == b"x86_64", "ANDROID_ABI")
         # Emulator 10.0.2.2 otherwise reaches namespace loopback, including the
         # observer-only fixture control port. Disable guest uplinks, then admit
         # only the explicit adbd reverse to the public fixture API.
+        diagnostic.phase = "guest_network"
         adb_command("shell", "svc", "wifi", "disable")
         adb_command("shell", "svc", "data", "disable")
         route_end = min(stop, time.monotonic() + 10)
@@ -688,18 +788,24 @@ def inside():
             kvm_required=True, guest_wifi_disabled=True, guest_mobile_data_disabled=True, guest_default_routes_absent=True,
             guest_non_loopback_routes_absent=True,
             reverse_ports=[43210], fixture_control_reversed=False, host_network_namespace_isolated=True)) + "\n").encode())
+        diagnostic.phase = "apk_install"
         adb_command("install", "--no-streaming", str(APK), seconds=45)
+        diagnostic.phase = "port_reverse"
         adb_command("reverse", "tcp:43210", "tcp:43210")
         # Driver creates a fresh directory; existing outer root only holds the
         # final original report copied byte-for-byte below.
+        diagnostic.phase = "app_driver"
         try:
-            command([str(H.NODE), str(W.HERE / "native-android-driver.mjs"), "--adb", adb,
+            command("app_driver", [str(H.NODE), str(W.HERE / "native-android-driver.mjs"), "--adb", adb,
                 "--serial", SERIAL, "--output", str(PROOF / "driver")], 190)
         finally:
             original = PROOF / "driver/report.json"
             if original.exists():
                 H.write(PROOF / "report.json", H.read(original))
         complete = True
+    except BaseException as error:
+        diagnostic.publish_failure(error)
+        raise
     finally:
         for s in prior:
             signal.signal(s, signal.SIG_IGN)

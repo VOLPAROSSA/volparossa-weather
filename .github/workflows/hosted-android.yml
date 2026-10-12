@@ -113,6 +113,7 @@ jobs:
             build/overmorrow-hosted-android-proof/report.json
             build/overmorrow-hosted-android-proof/emulator-cleanup.json
             build/overmorrow-hosted-android-proof/emulator-boundary.json
+            build/overmorrow-hosted-android-proof/emulator-diagnostic.json
       - name: Retain only successful unadmitted debug APK and notices
         if: success()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
