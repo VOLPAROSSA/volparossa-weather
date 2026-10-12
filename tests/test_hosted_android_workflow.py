@@ -58,6 +58,7 @@ class Workflow(unittest.TestCase):
         self.assertNotIn("sysctl", self.text)
 
     def test_no_private_runtime_uploads(self):
+        self.assertIn("            build/hosted-android-inputs/download-failure.json\n", self.text)
         paths = []
         for block in self.text.split("          path: |\n")[1:]:
             for line in block.splitlines():

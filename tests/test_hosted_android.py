@@ -44,6 +44,86 @@ class AndroidInputs(unittest.TestCase):
             for k, v in p.items() if k != "gradle"))
         self.assertEqual(p["ndk"]["revision"], "28.2.13676358")
 
+    def test_digest_failure_records_actual_short_or_wrong_bytes_without_extracting(self):
+        expected = b"original inert bytes"
+        for received in (expected[:-3], b"x" * len(expected)):
+            with self.subTest(received=received), tempfile.TemporaryDirectory() as root:
+                output = Path(root)
+                pin = dict(M["pins"]()["platform"], bytes=len(expected), digest=hashlib.sha1(expected).hexdigest())
+                class Response(io.BytesIO):
+                    status = 200
+                    headers = {"Content-Length": str(len(expected)), "private-header": "not-exported"}
+                class Opener:
+                    requests = 0
+                    def open(self, url, timeout):
+                        self.requests += 1
+                        return Response(received)
+                opener = Opener()
+                with patch.dict(M["materialize"].__globals__, pins=lambda: {"platform": pin}), \
+                        patch.object(M["urllib"].request, "build_opener", return_value=opener), \
+                        patch.dict(M["materialize"].__globals__, extract=unittest.mock.Mock()) as scope:
+                    with self.assertRaisesRegex(M["ArchiveDigestError"], "^ARCHIVE_DIGEST$"):
+                        M["materialize"](output)
+                    scope["extract"].assert_not_called()
+                self.assertEqual(opener.requests, 1)
+                receipt = output / "download-failure.json"
+                self.assertEqual(stat.S_IMODE(receipt.stat().st_mode), 0o600)
+                raw = receipt.read_bytes()
+                self.assertLessEqual(len(raw), 1024)
+                self.assertEqual(json.loads(raw), dict(schema=1, kind="hosted-android-download-failure",
+                    code="ARCHIVE_DIGEST", package="platform", algorithm="sha1",
+                    expected_bytes=len(expected), received_bytes=len(received),
+                    expected_digest=hashlib.sha1(expected).hexdigest(), observed_digest=hashlib.sha1(received).hexdigest(),
+                    observed_sha256=hashlib.sha256(received).hexdigest(), archive_accepted=False, runtime_executed=False))
+                self.assertNotIn(b"http", raw)
+                self.assertNotIn(b"not-exported", raw)
+                self.assertEqual((output / ".platform.zip").read_bytes(), received)
+                self.assertFalse((output / "provenance.json").exists())
+                self.assertFalse((output / "sdk").exists())
+
+    def test_digest_diagnostic_failure_never_replaces_rejection(self):
+        pin = M["pins"]()["platform"]
+        error = M["ArchiveDigestError"](1, "a" * 40, "b" * 64)
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root)
+            existing = output / "download-failure.json"
+            existing.write_bytes(b"existing receipt remains unchanged")
+            with patch.dict(M["materialize"].__globals__, pins=lambda: {"platform": pin},
+                    download=unittest.mock.Mock(side_effect=error), extract=unittest.mock.Mock()) as scope:
+                with self.assertRaises(M["ArchiveDigestError"]) as caught:
+                    M["materialize"](output)
+                self.assertIs(caught.exception, error)
+                scope["extract"].assert_not_called()
+                scope["download"].assert_called_once()
+            self.assertEqual(existing.read_bytes(), b"existing receipt remains unchanged")
+
+    def test_download_failure_receipt_only_admits_fixed_labels_pins_and_closed_hashes(self):
+        pin = M["pins"]()["platform"]
+        for name, candidate, size, digest, sha256 in (
+                ("url?secret", pin, 1, "a" * 40, "b" * 64),
+                ("platform", dict(pin, digest="c" * 40), 1, "a" * 40, "b" * 64),
+                ("platform", pin, True, "a" * 40, "b" * 64),
+                ("platform", pin, pin["bytes"] + 1, "a" * 40, "b" * 64),
+                ("platform", pin, pin["bytes"], pin["digest"], "b" * 64),
+                ("platform", pin, 1, "private body", "b" * 64),
+                ("platform", pin, 1, "a" * 40, "b" * 65),
+                ("gradle", M["pins"]()["gradle"], 1, "a" * 64, "b" * 64)):
+            with self.subTest(name=name, size=size), tempfile.TemporaryDirectory() as root:
+                output = Path(root)
+                with self.assertRaises(ValueError):
+                    M["save_download_failure"](output, name, candidate, M["ArchiveDigestError"](size, digest, sha256))
+                self.assertFalse((output / "download-failure.json").exists())
+
+    def test_gradle_failure_uses_sha256_identity_not_an_assumed_google_package(self):
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root)
+            M["save_download_failure"](output, "gradle", M["pins"]()["gradle"],
+                M["ArchiveDigestError"](10, "a" * 64, "a" * 64))
+            value = json.loads((output / "download-failure.json").read_bytes())
+            self.assertEqual(value["package"], "gradle")
+            self.assertEqual(value["algorithm"], "sha256")
+            self.assertEqual(value["expected_digest"], M["GRADLE"]["digest"])
+
     def test_locked_plugin_platforms_have_independent_official_archive_pins(self):
         pins = M["pins"]()
         expected = {

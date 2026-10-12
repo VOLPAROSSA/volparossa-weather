@@ -92,6 +92,38 @@ def phase_budget(end, maximum):
     return min(maximum, remaining)
 
 
+class ArchiveDigestError(ValueError):
+    """Rejected bytes only; never carry a URL, response body or headers."""
+    def __init__(self, size, digest, sha256):
+        super().__init__("ARCHIVE_DIGEST")
+        self.received_bytes = size
+        self.observed_digest = digest
+        self.observed_sha256 = sha256
+
+
+def save_download_failure(output, name, pin, error):
+    """One closed receipt for a known pin; failed archives remain unaccepted."""
+    require(name in (*GOOGLE_INPUTS, "gradle") and pin == pins()[name], "DOWNLOAD_FAILURE_PIN")
+    expected = 40 if pin["algorithm"] == "sha1" else 64
+    require(isinstance(error, ArchiveDigestError) and type(error.received_bytes) is int
+        and 0 <= error.received_bytes <= pin["bytes"]
+        and re.fullmatch(r"[0-9a-f]{" + str(expected) + "}", error.observed_digest)
+        and R["hex64"](error.observed_sha256)
+        and (pin["algorithm"] != "sha256" or error.observed_digest == error.observed_sha256)
+        and (error.received_bytes != pin["bytes"] or error.observed_digest != pin["digest"]), "DOWNLOAD_FAILURE_FIELDS")
+    info = output.lstat()
+    require(output.resolve() == output and stat.S_ISDIR(info.st_mode)
+        and info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700, "DOWNLOAD_FAILURE_DIRECTORY")
+    raw = canonical(dict(schema=1, kind="hosted-android-download-failure", code="ARCHIVE_DIGEST",
+        package=name, algorithm=pin["algorithm"], expected_bytes=pin["bytes"], received_bytes=error.received_bytes,
+        expected_digest=pin["digest"], observed_digest=error.observed_digest, observed_sha256=error.observed_sha256,
+        archive_accepted=False, runtime_executed=False))
+    require(len(raw) <= 1024, "DOWNLOAD_FAILURE_BOUND")
+    fd = os.open(output / "download-failure.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(raw)
+
+
 def download(pin, target, *, seconds=600):
     sha = hashlib.sha256()
     published = hashlib.new(pin["algorithm"])
@@ -110,7 +142,8 @@ def download(pin, target, *, seconds=600):
             sha.update(part)
             published.update(part)
             out.write(part)
-    require(size == pin["bytes"] and published.hexdigest() == pin["digest"], "ARCHIVE_DIGEST")
+    if size != pin["bytes"] or published.hexdigest() != pin["digest"]:
+        raise ArchiveDigestError(size, published.hexdigest(), sha.hexdigest())
     return dict(pin, observed_sha256=sha.hexdigest())
 
 
@@ -244,7 +277,16 @@ def materialize(output):
     inputs, records = {}, {}
     for name, pin in pins().items():
         archive = output / ("gradle-8.13-all.zip" if name == "gradle" else "." + name + ".zip")
-        inputs[name] = download(pin, archive, seconds=phase_budget(end, 600))
+        try:
+            inputs[name] = download(pin, archive, seconds=phase_budget(end, 600))
+        except ArchiveDigestError as error:
+            try:
+                save_download_failure(output, name, pin, error)
+            except (OSError, ValueError, TypeError):
+                # Optional diagnostic failure must not replace the original
+                # rejection or authorize extraction/execution/retry.
+                pass
+            raise
         if name == "gradle":
             records[archive.name] = dict(kind="file", bytes=pin["bytes"], sha256=pin["digest"], mode=0o600)
             continue

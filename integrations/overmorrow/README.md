@@ -275,6 +275,20 @@ limit, one Gradle worker and one-thread D8 setting are unchanged. The independen
 repository fixture retains its 256 MiB heap and Kotlin remains in-process for
 both app and included builds.
 
+The [fourteenth attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38290352014)
+on `7f071b2b` fails before native execution at the download `ARCHIVE_DIGEST`
+check. The retained traceback does not distinguish a short download from a
+digest mismatch or name the failed package. Only preparation artifacts exist;
+this attempt does not exercise the larger app heap, Gradle, KVM or an APK.
+Original logs and artifacts are retained without replacing any source pin.
+
+Download failures now have a bounded receipt identifying the known package,
+expected and received byte counts, and expected and observed digests. Rejection
+still stops before extraction or execution; there is no automatic retry or
+checksum fallback. The receipt excludes URLs, response bodies and headers.
+All 79 targeted lightweight checks and independent review pass; actual preparation
+and native execution on the corrected source remain required.
+
 The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only
 `lib/volparossa_native_trial.dart` entrypoint starts the real app with

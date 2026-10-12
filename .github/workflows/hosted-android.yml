@@ -105,6 +105,7 @@ jobs:
             build/hosted-android-packages.txt
             build/hosted-android-kvm-cleanup.json
             build/hosted-android-inputs/provenance.json
+            build/hosted-android-inputs/download-failure.json
             build/hosted-flutter-sdk/provenance.json
             build/hosted-client-runtime/provenance.json
             build/hosted-android-ci/*.json
