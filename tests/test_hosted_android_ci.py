@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import os
 import io
+import json
 from pathlib import Path
 import subprocess
 import stat
@@ -297,6 +298,104 @@ class AptJavaProvenance(unittest.TestCase):
         with patch.object(M.os, "fstat", side_effect=root_file_stat):
             with self.assertRaisesRegex(ValueError, "JAVA_17_REQUIRED"):
                 M.java_provenance(self.helper)
+
+
+class RepositoryFixture(unittest.TestCase):
+    @staticmethod
+    def receipt(**changes):
+        value = dict(schema=1, kind="gradle-repository-contract", gradle_version="8.13", plugin_wrappers=3,
+            rejected=["artifact-url", "unadmitted", "http", "file", "ivy", "flatdir"], networkless=True,
+            external_dependencies=False)
+        value.update(changes)
+        return b"NATIVE_REPOSITORY_FIXTURE " + json.dumps(value).encode() + b"\n"
+
+    def test_exact_runtime_receipt_required_not_a_success_message_or_mock_count(self):
+        self.assertEqual(M.repository_fixture_report(b"Gradle output\n" + self.receipt())["plugin_wrappers"], 3)
+        for raw in (b"BUILD SUCCESSFUL", self.receipt() * 2, self.receipt(plugin_wrappers=0),
+                self.receipt(plugin_wrappers=True), self.receipt(plugin_wrappers=3.0), self.receipt(schema=True),
+                self.receipt(rejected=[]), self.receipt(networkless=False), self.receipt(networkless=1),
+                self.receipt(external_dependencies=True), self.receipt(external_dependencies=0),
+                self.receipt(gradle_version="8.14"), self.receipt(extra="not closed")):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                M.repository_fixture_report(raw)
+        with self.assertRaises(ValueError):
+            M.repository_fixture_report(b"x" * (M.H.LIMIT + 1))
+
+    def fixture_paths(self, directory, properties=None):
+        sdk, stage, private = (directory / name for name in ("sdk", "stage", "private"))
+        private.mkdir(mode=0o700)
+        wrapper = sdk / "bin/cache/artifacts/gradle_wrapper"
+        (wrapper / "gradle/wrapper").mkdir(parents=True)
+        (stage / "android/gradle/wrapper").mkdir(parents=True)
+        for name, raw in (("gradlew", b"inert launcher"), ("gradle/wrapper/gradle-wrapper.jar", b"inert jar")):
+            (wrapper / name).write_bytes(raw)
+            (wrapper / name).chmod(0o600)
+        native = M.runpy.run_path(str(M.W.HERE / "prepare_native_android.py"))
+        if properties is None:
+            properties = f'distributionUrl={native["GRADLE_URL"]}\ndistributionSha256Sum={native["GRADLE_SHA"]}\n'.encode()
+        path = stage / "android/gradle/wrapper/gradle-wrapper.properties"
+        path.write_bytes(properties)
+        path.chmod(0o600)
+        return sdk, stage, private
+
+    def test_real_preparation_binds_wrapper_and_runs_only_offline_fake_child(self):
+        with tempfile.TemporaryDirectory() as root:
+            sdk, stage, private = self.fixture_paths(Path(root))
+            with patch.object(M, "SDK", sdk), patch.object(M, "STAGE", stage), patch.object(M, "PRIVATE", private), \
+                    patch.object(M, "sandbox", side_effect=lambda argv, mode: ["inert-" + mode, *argv]), \
+                    patch.object(M.H, "run", return_value=self.receipt()) as run, patch.object(M.H, "save") as save:
+                M.repository_fixture()
+            args, kwargs = run.call_args
+            self.assertEqual(args[0], "gradle-repository-contract")
+            self.assertEqual(args[2], 120)
+            self.assertEqual(args[1][0], "inert-compile")
+            self.assertIn("--offline", args[1])
+            self.assertIn("--no-daemon", args[1])
+            self.assertIn("--max-workers=2", args[1])
+            self.assertEqual(args[1][-1], "verifyRepositoryContract")
+            self.assertEqual(kwargs["memory"], 3 * M.GIB)
+            self.assertEqual((private / "repository-fixture/gradlew").stat().st_mode & 0o777, 0o700)
+            saved = save.call_args.args[1]
+            self.assertEqual(len(saved["fixture_files"]), 6)
+            self.assertEqual(saved["fixture_files"]["gradle/wrapper/gradle-wrapper.jar"], hashlib.sha256(b"inert jar").hexdigest())
+            self.assertEqual(saved["guard_sha256"], M.H.sha(M.H.read(ROOT / "scripts/hosted-android-repositories.gradle")))
+
+    def test_distribution_authority_checked_before_first_gradle_child(self):
+        for properties in (b"", b"distributionUrl=https://unadmitted.invalid/gradle.zip\n",
+                           b"distributionSha256Sum=" + b"a" * 64 + b"\n"):
+            with self.subTest(properties=properties), tempfile.TemporaryDirectory() as root:
+                sdk, stage, private = self.fixture_paths(Path(root), properties)
+                with patch.object(M, "SDK", sdk), patch.object(M, "STAGE", stage), patch.object(M, "PRIVATE", private), \
+                        patch.object(M.H, "run") as run, self.assertRaisesRegex(ValueError, "REPOSITORY_FIXTURE_DISTRIBUTION"):
+                    M.repository_fixture()
+                run.assert_not_called()
+
+    def test_source_contract_keeps_exact_typed_wrapper_and_all_url_checks(self):
+        source = (ROOT / "scripts/hosted-android-repositories.gradle").read_text()
+        self.assertIn("gradle.gradleVersion != '8.13'", source)
+        self.assertIn("repository.class.name == 'org.gradle.plugin.use.internal.PluginArtifactRepository'", source)
+        self.assertIn("repository instanceof ResolutionAwareRepository", source)
+        self.assertIn("descriptor instanceof MavenRepositoryDescriptor", source)
+        self.assertIn("descriptor.properties['URL']", source)
+        self.assertIn("descriptor.properties['ARTIFACT_URLS']", source)
+        self.assertIn("artifactUrls = repository.artifactUrls", source)
+        self.assertIn("!artifactUrls.every(admittedUrl)", source)
+        self.assertNotIn("getDeclaredField", source)
+        self.assertNotIn("setAccessible", source)
+        self.assertNotIn("getArtifactUrls()", source)
+        self.assertIn('NATIVE_REPOSITORY_DENIED:${reason}:${kind}', source)
+
+    def test_hosted_fixture_requires_actual_wrappers_and_negative_cases_before_app_build(self):
+        fixture = (ROOT / "tests/fixtures/hosted-android-repositories/build.gradle").read_text()
+        self.assertIn("plugins { id 'java' }", fixture)
+        self.assertIn("assert wrappers.size() == 3", fixture)
+        self.assertIn("it instanceof ResolutionAwareRepository && it.descriptor instanceof MavenRepositoryDescriptor", fixture)
+        self.assertIn("assert gradle.startParameter.offline", fixture)
+        self.assertIn("assert caught", fixture)
+        for label in ("artifact-url", "unadmitted", "http", "file", "ivy", "flatdir"):
+            self.assertIn("deny('" + label + "'", fixture)
+        source = (ROOT / "scripts/prepare_hosted_android_ci.py").read_text().split("def execute(", 1)[1]
+        self.assertLess(source.index('repository_fixture()'), source.index('phase = "public-acquisition-build"'))
 
 
 if __name__ == "__main__":

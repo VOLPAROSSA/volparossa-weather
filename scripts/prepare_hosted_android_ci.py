@@ -149,6 +149,51 @@ def gradle(acquire):
         "-Pdart-obfuscation=false", "-Ptrack-widget-creation=true", "-Ptree-shake-icons=false"]
 
 
+def repository_fixture_report(raw):
+    require(type(raw) is bytes and len(raw) <= H.LIMIT, "REPOSITORY_FIXTURE_OUTPUT_BOUND")
+    prefix = b"NATIVE_REPOSITORY_FIXTURE "
+    records = [line[len(prefix):] for line in raw.splitlines() if line.startswith(prefix)]
+    require(len(records) == 1 and len(records[0]) <= 1024, "REPOSITORY_FIXTURE_RECEIPT")
+    value = json.loads(records[0], object_pairs_hook=H.unique)
+    expected = dict(schema=1, kind="gradle-repository-contract", gradle_version="8.13", plugin_wrappers=3,
+        rejected=["artifact-url", "unadmitted", "http", "file", "ivy", "flatdir"], networkless=True, external_dependencies=False)
+    require(value == expected and type(value.get("schema")) is int and type(value.get("plugin_wrappers")) is int
+        and type(value.get("networkless")) is bool and type(value.get("external_dependencies")) is bool,
+        "REPOSITORY_FIXTURE_PROOF")
+    return value
+
+
+def repository_fixture():
+    """Hosted-only: one offline Gradle invocation with no external dependencies."""
+    target = PRIVATE / "repository-fixture"
+    for path in (target, target / "gradle", target / "gradle/wrapper"):
+        H.private_directory(path)
+    fixture = ROOT / "tests/fixtures/hosted-android-repositories"
+    files = {name: H.read(fixture / name) for name in ("settings.gradle", "build.gradle", "gradle.properties")}
+    wrapper = SDK / "bin/cache/artifacts/gradle_wrapper"
+    files.update({name: H.read(wrapper / name) for name in ("gradlew", "gradle/wrapper/gradle-wrapper.jar")})
+    # Reuse the native preparer's exact local distribution URL and published
+    # checksum. No Gradle/npm/SDK download or code runs on the developer host.
+    properties = H.read(STAGE / "android/gradle/wrapper/gradle-wrapper.properties")
+    native = runpy.run_path(str(W.HERE / "prepare_native_android.py"))
+    for key, expected in (("distributionUrl", native["GRADLE_URL"]), ("distributionSha256Sum", native["GRADLE_SHA"])):
+        entries = [line for line in properties.decode("ascii").splitlines() if line.split("=", 1)[0].strip() == key]
+        require(entries == [key + "=" + expected], "REPOSITORY_FIXTURE_DISTRIBUTION")
+    files["gradle/wrapper/gradle-wrapper.properties"] = properties
+    for name, raw in files.items():
+        H.write(target / name, raw)
+    (target / "gradlew").chmod(0o700)
+    for name in ("gradlew", "gradle/wrapper/gradle-wrapper.jar"):
+        require(H.digest(target / name) == H.digest(wrapper / name), "REPOSITORY_FIXTURE_WRAPPER_CHANGED")
+    command = ["/state/repository-fixture/gradlew", "-p", "/state/repository-fixture", "--offline", "--no-daemon",
+        "--max-workers=2", "--console=plain", "--init-script", str(ROOT / "scripts/hosted-android-repositories.gradle"),
+        "verifyRepositoryContract"]
+    raw = H.run("gradle-repository-contract", sandbox(command, "compile"), 120, env=environment(), memory=MEMORY)
+    result = repository_fixture_report(raw)
+    H.save("repository-contract.json", dict(result, fixture_files={name: H.sha(raw) for name, raw in files.items()},
+        guard_sha256=H.sha(H.read(ROOT / "scripts/hosted-android-repositories.gradle"))))
+
+
 def verification_metadata():
     path = STAGE / "android/gradle/verification-metadata.xml"
     raw = H.read(path, 4 * 1024**2)
@@ -328,6 +373,8 @@ def execute(helper, platform):
         preflight("compile", netns)
         H.run("native-contract-tests", sandbox([str(H.NODE), "--test", str(W.HERE / "test-native-android.mjs")], "compile"),
             60, env=environment(), memory=MEMORY)
+        phase = "offline-repository-contract"
+        repository_fixture()
         phase = "public-acquisition-build"
         preflight("acquire", netns)
         H.run("pub-acquisition", sandbox(flutter("pub", "get", "--enforce-lockfile"), "acquire"), 600, env=environment(), memory=MEMORY)

@@ -48,10 +48,10 @@ requested exactly twice; the browser uses only loopback resources and cleanup
 passes. This additional trial uses synthetic products and does not replace the
 full browser trial.
 
-Core-to-Overmorrow delivery and Android/iOS packaging remain
-unverified. This synthetic browser proof establishes neither forecast accuracy
-nor mobile execution; background lifecycle and native home-screen widgets remain
-open.
+The separate joined core delivery trial below now passes. Android/iOS packaging,
+mobile background lifecycle and native home-screen widgets remain unverified.
+The synthetic browser proof establishes neither forecast accuracy nor mobile
+execution.
 
 ## Hosted build and browser trials
 
@@ -78,7 +78,7 @@ source requests and do not prove core delivery or native Android/iOS operation.
 ## Android trial candidate
 
 The [Android hosted workflow](../../.github/workflows/hosted-android.yml) prepares
-a debug APK build and installed-app emulator trial; neither has yet run. The
+a debug APK build and installed-app emulator trial; neither has yet passed. The
 [first attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38242345261)
 stopped during input preparation because two nested process alarms conflicted.
 The correction keeps the total and per-step deadlines without nesting alarms.
@@ -89,10 +89,20 @@ artifact hash check. Cleanup restores the original KVM access.
 
 The Java correction hashes only the fixed apt launcher with root-ownership,
 no-follow, same-descriptor and size checks, and rechecks its bytes after the
-version probe. Generic artifact ownership requirements are unchanged. All 38
-hosted-preparation tests pass, including both reproduced failures; 11 native
-preparer tests also pass. No native runtime was executed locally. A corrected
-hosted APK/emulator trial is still required.
+version probe. Generic artifact ownership requirements are unchanged. The
+[third attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38245213294)
+passes that check, app staging and all ten native Node contracts. It reaches
+Gradle configuration, then fails the Maven-only repository type check before
+producing an APK. Process cleanup and restoration of the original KVM access
+pass.
+
+The next correction recognizes Gradle 8.13's plugin-repository wrapper through
+its Maven descriptor, keeping the same HTTPS allowlist for both base and
+additional artifact URLs. A new offline Gradle fixture must exercise three real
+wrappers and six rejected repository cases before the app build. All 43
+hosted-preparation tests and 11 native preparer tests pass locally; these do not
+execute Gradle. The fixture, APK build, offline rebuild and installed-app trial
+still require successful hosted execution.
 
 The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only
@@ -126,7 +136,7 @@ not SDKs, caches, signing keys, emulator state or debug-service credentials.
 
 ## Joined core delivery trial
 
-The core's version-three Weather bundle selects this actual Overmorrow client,
+The core's version-five Weather bundle selects this actual Overmorrow client,
 the production HTTP bridge and the existing protected peer-delivery path. It
 acquires weather and particulate products separately, publishes both, removes
 the original publisher inputs and retrieves each product through the core before
@@ -144,14 +154,19 @@ the last preceding title does not establish table ownership. Missing, duplicate
 or unknown tables and changed cells still fail. Five pure DOM regressions cover
 this correction; CI includes the pinned Browser helper sources.
 
-The separate synthetic browser trial proves this exact table verifier, not
-separate DOM containers for each product. The joined Overmorrow trial has not yet
-run and core-to-client delivery remains unproved. Even a successful joined trial
-would prove a prior cold core transfer followed by UI use of those publications,
-not that opening the browser initiated the first cold fetch. The retained
-synthetic browser result and historical origin results keep their original scope.
-The earlier frozen core bundle is unchanged and contains the prior verifier;
-a future joined trial must use a newly captured bundle with this correction.
+The [joined trial](https://github.com/VOLPAROSSA/volparossa/actions/runs/38241212407)
+passes with core `8b795e98739153196603a17c14cf5c6f3b656642` and this consumer at
+`992054c2680e6ef00837b214e7dbd106ba69cc82`. Both public products are retrieved
+cold from peers after removal of the original publisher inputs, with no origin
+body or range transfer during retrieval. Initial display and a real pointer
+refresh match the weather and particulate responses, including native times,
+windows, missing values and attribution. Cleanup passes. These changes are
+integrated through core PR #230 and Weather PR #18.
+
+This proves cold core transfer followed by UI use of those publications, not
+that opening the browser initiated the first cold fetch. It is not mobile
+delivery or a forecast-accuracy claim. The retained synthetic browser result,
+historical origin results and earlier frozen bundles keep their original scope.
 
 ## Data and privacy
 

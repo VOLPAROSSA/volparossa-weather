@@ -14,6 +14,7 @@ on:
       - integrations/overmorrow/test_native_android.py
       - integrations/overmorrow/test-native-android.mjs
       - tests/test_hosted_android*.py
+      - tests/fixtures/hosted-android-repositories/*
 
 permissions:
   contents: read

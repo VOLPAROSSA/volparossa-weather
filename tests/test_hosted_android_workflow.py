@@ -17,6 +17,7 @@ class Workflow(unittest.TestCase):
         trigger = self.text.split("  push:\n", 1)[1].split("\npermissions:", 1)[0]
         self.assertIn("branches: [feature/overmorrow-native-android]", trigger)
         self.assertIn("    paths:\n", trigger)
+        self.assertIn("tests/fixtures/hosted-android-repositories/*", trigger)
         self.assertNotIn("main", trigger)
         self.assertNotIn("**", trigger)
         self.assertNotIn("README", trigger)
