@@ -609,6 +609,10 @@ class EmulatorDiagnostic:
         "skin_not_found": rb'Error: Skin ' + _TOKEN + rb' not found at ' + _TAIL,
         "emulator_package_missing": rb'Error: "emulator" package must be installed!',
         "hardware_properties_unreadable": rb'Error: "hardware-properties[.]ini" could not be read',
+        # Exact sdklib AvdManager.createAvd catch wrapper, not the forwarded
+        # exception's cause. AvdManager.class SHA256:
+        # 8abda0fe084e78f935008b1285899d7e1ac6ff46663d5c5a01946c663f8f6643.
+        "avd_create_exception": rb'Error: An error occurred while creating AVD: ' + _TAIL,
         "parser_global_flag": rb"Error: Flag '" + _QUOTED + rb"' is not a valid global flag[.] Did you mean to specify it after the verb/object name[?]",
         "parser_action_flag": rb"Error: Flag '" + _QUOTED + rb"' is not valid for '" + _TOKEN + rb' ' + _TOKEN + rb"'[.]",
         "parser_expected_verb": rb"Error: Expected verb after global parameters but found '" + _QUOTED + rb"' instead[.]",
@@ -620,26 +624,40 @@ class EmulatorDiagnostic:
         "parser_missing_object": rb"Error: Missing object name for verb '" + _QUOTED + rb"'[.]",
         "parser_required_parameters": rb'Error: The parameters? --' + _FLAG + rb'(?:, --' + _FLAG + rb'){0,15} must be defined for action ' + rb"'" + _TOKEN + rb' ' + _TOKEN + rb"'",
     }
+    HARDWARE_PROMPT = b'Do you wish to create a custom hardware profile? [no] '
     MILESTONES = {
         "cli_usage": rb'Usage:\n  avdmanager \[global options\] (?:\[action\]|[A-Za-z_-]{1,64}(?: [A-Za-z_-]{1,64})?) \[action options\]\n\nGlobal options:',
         "local_repository": rb'(?:\[[= ]{39}\] (?:[0-9]{1,2}|100)% )?Loading local repository[.][.][.] {0,80}',
         "single_abi_selected": rb'Auto-selecting single ABI [A-Za-z0-9_/-]{1,64}',
-        "hardware_question": rb'Do you wish to create a custom hardware profile[?] \[no\] ',
+        "hardware_question": re.escape(HARDWARE_PROMPT),
     }
 
     def fatal_observations(self, raw, complete):
+        # Exact 19.0 promptForHardware emits this complete prompt with printf,
+        # without a newline. The logger's next error may directly follow it.
+        # AvdManagerCli$1.class SHA256:
+        # 5ade58325c100f0cd55c0dfd8786957ae7530aa84e7c0700a5b0e91b2c9943d4.
+        # Observe only the full literal at a real normalized line start.
+        prompt = rb'(?m)^' + re.escape(self.HARDWARE_PROMPT)
+        question_observed = re.search(prompt, raw) is not None
         # A prefix truncated in the middle of a variable must not masquerade
         # as a completed source line. Earlier terminated lines remain useful.
         if not complete:
             end = raw.rfind(b"\n")
             raw = raw[:end + 1] if end >= 0 else b""
-        def observed(pattern):
+        # Interpret only this known renderer boundary, without growing the
+        # prefix or stripping arbitrary spaces/prefixes/ANSI. Original bytes,
+        # completeness and counts in receipt() are untouched.
+        fatal_lines = re.sub(prompt, self.HARDWARE_PROMPT[:-1] + b"\n", raw)
+        def observed(pattern, source=raw):
             # List-bearing templates end at their fixed newline, without
             # interpreting or exporting the following SDK-controlled entries.
             end = b'' if pattern.endswith(rb'\n') else rb'(?=\n|\Z)'
-            return re.search(rb'(?:^|\n)' + pattern + end, raw) is not None
-        return (self.classify([name for name, pattern in self.FATAL_TEMPLATES.items() if observed(pattern)]),
-            {name: observed(pattern) for name, pattern in self.MILESTONES.items()})
+            return re.search(rb'(?:^|\n)' + pattern + end, source) is not None
+        milestones = {name: observed(pattern) for name, pattern in self.MILESTONES.items()}
+        milestones["hardware_question"] = question_observed
+        return (self.classify([name for name, pattern in self.FATAL_TEMPLATES.items()
+            if observed(pattern, fatal_lines)]), milestones)
 
     @staticmethod
     def classify(matches):

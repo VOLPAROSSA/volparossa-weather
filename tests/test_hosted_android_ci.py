@@ -1061,6 +1061,7 @@ class EmulatorDiagnostics(unittest.TestCase):
         "skin_not_found": b"Error: Skin private-canary not found at /private/canary",
         "emulator_package_missing": b'Error: "emulator" package must be installed!',
         "hardware_properties_unreadable": b'Error: "hardware-properties.ini" could not be read',
+        "avd_create_exception": b'Error: An error occurred while creating AVD: /private/canary',
         "parser_global_flag": b"Error: Flag 'private-canary' is not a valid global flag. Did you mean to specify it after the verb/object name?",
         "parser_action_flag": b"Error: Flag 'private-canary' is not valid for 'create avd'.",
         "parser_expected_verb": b"Error: Expected verb after global parameters but found 'private-canary' instead.",
@@ -1074,7 +1075,7 @@ class EmulatorDiagnostics(unittest.TestCase):
     }
 
     def test_all_pinned_fatal_templates_are_closed_and_private_values_never_export(self):
-        self.assertEqual(len(self.FATAL_CASES), 29)
+        self.assertEqual(len(self.FATAL_CASES), 30)
         self.assertEqual(set(self.FATAL_CASES), set(M.EmulatorDiagnostic.FATAL_TEMPLATES))
         for name, message in self.FATAL_CASES.items():
             for separator in (b"\n", b"\r", b"\r\n"):
@@ -1177,6 +1178,80 @@ class EmulatorDiagnostics(unittest.TestCase):
             self.assertFalse(any(result["milestones"].values()))
         self.assertLess(time.monotonic() - started, 5)
 
+    def test_exact_unterminated_prompt_preserves_all_fatal_templates_and_observed_only_scope(self):
+        prompt = M.EmulatorDiagnostic.HARDWARE_PROMPT
+        for name, message in self.FATAL_CASES.items():
+            for boundary in (b"\n", b"\r", b"\r\n"):
+                with self.subTest(name=name, boundary=boundary):
+                    raw = b"Auto-selecting single ABI x86_64" + boundary + prompt + message + b"\nnull\n"
+                    _, _, result = self.observed(raw)
+                    self.assertEqual(result["fatal_template"], name)
+                    self.assertTrue(result["milestones"]["hardware_question"])
+                    self.assertTrue(result["milestones"]["single_abi_selected"])
+                    self.assertEqual(result["output_bytes"], len(raw))
+                    self.assertTrue(result["output_complete"])
+                    self.assertFalse(result["output_truncated"] or result["cause_established"] or result["raw_text_exported"])
+                    encoded = json.dumps(result)
+                    self.assertLessEqual(len(encoded) + 1, 1024)
+                    self.assertNotIn("private-canary", encoded)
+                    self.assertNotIn("/private", encoded)
+        _, _, result = self.observed(prompt + self.FATAL_CASES["emulator_package_missing"] + b"\n"
+            + self.FATAL_CASES["hardware_properties_unreadable"] + b"\n")
+        self.assertEqual(result["fatal_template"], "ambiguous")
+        self.assertTrue(result["milestones"]["hardware_question"])
+
+    def test_prompt_boundary_rejects_partial_prefix_homoglyph_color_and_embedded_cr(self):
+        prompt = M.EmulatorDiagnostic.HARDWARE_PROMPT
+        error = self.FATAL_CASES["emulator_package_missing"] + b"\n"
+        malformed = (b"prefix" + prompt, b" " + prompt, b"\x1b[31m" + prompt,
+            prompt.replace(b"wish", b"Wish"), prompt.replace(b"profile", "pr\u043efile".encode()),
+            prompt.replace(b"custom", b"cus\rtom"), prompt.replace(b"[no] ", b"[no]\t"))
+        for prefix in (*malformed, *(prompt[:n] for n in range(len(prompt)))):
+            with self.subTest(prefix=prefix):
+                _, _, result = self.observed(prefix + error)
+                self.assertFalse(result["milestones"]["hardware_question"])
+                # No prefix at all is already a legitimate ordinary error.
+                self.assertEqual(result["fatal_template"], "unknown" if prefix else "emulator_package_missing")
+        for suffix in (b"arbitrary-forwarded-private-token", b"\x1b[31m" + error,
+                b" " + error, b"prefix" + error, b"\rprefix" + error):
+            _, _, result = self.observed(prompt + suffix + b"\n")
+            self.assertTrue(result["milestones"]["hardware_question"])
+            self.assertEqual(result["fatal_template"], "unknown")
+            self.assertFalse(result["cause_established"])
+            self.assertNotIn("private-token", json.dumps(result))
+
+    def test_prompt_projection_keeps_original_prefix_bound_and_truncated_suffix_unknown(self):
+        prompt = M.EmulatorDiagnostic.HARDWARE_PROMPT
+        error = self.FATAL_CASES["avd_create_exception"]
+        prefix = b"x" * (65536 - len(prompt) - 1) + b"\n"
+        _, _, result = self.observed(prefix + prompt + error + b"\n")
+        self.assertEqual(result["output_bytes"], 65536)
+        self.assertTrue(result["output_truncated"])
+        self.assertFalse(result["output_complete"])
+        self.assertTrue(result["milestones"]["hardware_question"])
+        self.assertEqual(result["fatal_template"], "unknown")
+        longer_prefix = b"x" * (65536 - len(prompt)) + b"\n"
+        _, _, partial = self.observed(longer_prefix + prompt + error + b"\n")
+        self.assertFalse(partial["milestones"]["hardware_question"])
+        self.assertEqual(partial["fatal_template"], "unknown")
+        _, _, result = self.observed(b"\r\n" * 32768 + prompt + error + b"\n")
+        self.assertFalse(result["milestones"]["hardware_question"])
+        self.assertEqual(result["fatal_template"], "unknown")
+        for suffix in (b"/private/token", b"x" * 512):
+            message = b"Error: An error occurred while creating AVD: " + suffix
+            _, _, unfinished = self.observed(prompt + message, complete=False)
+            self.assertTrue(unfinished["milestones"]["hardware_question"])
+            self.assertEqual(unfinished["fatal_template"], "unknown")
+            _, _, finished = self.observed(prompt + message + b"\n")
+            self.assertEqual(finished["fatal_template"], "avd_create_exception")
+        for suffix in (b"", b"x" * 513, "private-\u0430".encode()):
+            _, _, result = self.observed(prompt + b"Error: An error occurred while creating AVD: " + suffix + b"\n")
+            self.assertEqual(result["fatal_template"], "unknown")
+        diagnostic, _, _ = self.observed(prompt + error + b"\n")
+        stale = diagnostic.receipt(ValueError("EMULATOR_BOOT_FAILED"))
+        self.assertFalse(stale["milestones"]["hardware_question"])
+        self.assertEqual(stale["fatal_template"], "unknown")
+
     def guarded_inside(self, proof, popen):
         """Only fake guard observations and an explicit inert Python child.
 
@@ -1256,6 +1331,38 @@ class EmulatorDiagnostics(unittest.TestCase):
             self.assertEqual(result["output_bytes"], 0)
             self.assertFalse(result["output_complete"])
             self.assertTrue(json.loads((proof / "emulator-cleanup.json").read_text())["direct_children_reaped"])
+
+    def test_real_inert_preflight_concatenates_stdout_prompt_stderr_error_before_cleanup(self):
+        children = []
+        prompt = M.EmulatorDiagnostic.HARDWARE_PROMPT
+        error = b'Error: An error occurred while creating AVD: /private/canary\nnull\n'
+        code = ("import os,sys;sys.stdin.read();os.write(1," + repr(prompt) + ");os.write(2,"
+            + repr(error) + ");sys.exit(7)")
+        with tempfile.TemporaryDirectory() as directory:
+            proof = Path(directory)
+            self.guarded_inside(proof, self.inert_popen(code, children))
+            original_drain = M.drain_children
+            def drain(owned):
+                raw = (proof / "emulator-preflight-diagnostic.json").read_bytes()
+                value = json.loads(raw)
+                self.assertEqual(value["schema"], 3)
+                self.assertEqual(value["fatal_template"], "avd_create_exception")
+                self.assertTrue(value["milestones"]["hardware_question"])
+                self.assertEqual(value["output_bytes"], len(prompt + error))
+                self.assertEqual(value["exit_status"], 7)
+                self.assertFalse(value["cause_established"] or value["raw_text_exported"])
+                self.assertNotIn(b"/private", raw)
+                self.assertLessEqual(len(raw), 1024)
+                return original_drain(owned)
+            with patch.object(M, "avd_observations", return_value={}), \
+                    patch.object(M, "drain_children", side_effect=drain), \
+                    self.assertRaises(subprocess.CalledProcessError) as raised:
+                M.inside(avd_only=True)
+            self.assertEqual(raised.exception.returncode, 7)
+            cleanup = json.loads((proof / "emulator-preflight-cleanup.json").read_text())
+            self.assertTrue(cleanup["direct_children_reaped"] and cleanup["private_avd_removed"])
+            self.assertFalse(cleanup["avd_creation_returned"] or cleanup["installed_app_exercised"])
+            self.assertTrue(all(c.poll() is not None and c.stdout.closed and c.stdin.closed for c in children))
 
     def test_output_limit_retains_only_bounded_classification_and_reaps_real_inert_child(self):
         children = []
