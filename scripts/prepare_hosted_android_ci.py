@@ -574,6 +574,72 @@ class EmulatorDiagnostic:
         "missing": rb'\bNo such file or directory\b|\bjava\.nio\.file\.NoSuchFileException\b',
         "access_denied": rb'\bPermission denied\b|\bAccess is denied\b|\bOperation not permitted\b|\bjava\.nio\.file\.AccessDeniedException\b',
     }
+    # Fixed fatal forms from commandlinetools 13114758 / 19.0, inspected as
+    # data, never executed locally. Launcher SHA256 f2b7957ca635bbc1d4cf8def2fd5837153359f49f3043c7c02f020d77fc5cda0;
+    # AvdManagerCli.class d379d9d22c004cbec8354e9930c6a9b518cfef2c1e595b563dd05d9c9a2776b7;
+    # sdklib/util/CommandLineParser.class 434163bca64a5a58aa4c8de8d2ac1d98875e164448625f127ae4ec1541088c7a.
+    # These are observations, not an exhaustive transitive-exception catalogue:
+    # main() forwards Exception.getMessage(), which can legitimately be unknown.
+    # Variables are bounded ASCII. Adjacent fields exclude their separators;
+    # there are no unbounded wildcards or overlapping multi-variable repeats.
+    _TOKEN = rb'[!-~]{1,256}'
+    _FLAG = rb'[A-Za-z0-9_-]{1,64}'
+    _QUOTED = rb"[\x20-\x26\x28-\x7e]{1,512}"
+    _TAIL = rb'[ -~]{1,512}'
+    _JAVA_LOCATION = (rb'\n\nPlease set the JAVA_HOME variable in your environment to match the\n'
+        rb'location of your Java installation[.]')
+    FATAL_TEMPLATES = {
+        "java_home_invalid": rb'ERROR: JAVA_HOME is set to an invalid directory: ' + _TAIL + _JAVA_LOCATION,
+        "java_not_found": rb"ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH[.]" + _JAVA_LOCATION,
+        "jdk_too_old": rb'This tool requires JDK 17 or later[.] Your version was detected as ' + _TOKEN + rb'[.]\nTo override this check, set SKIP_JDK_VERSION_CHECK[.]',
+        "tools_directory_unset": rb'Error: The tools directory property is not set, please make sure you are executing ' + _TOKEN,
+        # The exact upstream format intentionally has no closing apostrophe.
+        "working_directory_invalid": rb"Error: The working directory does not seem to be valid: '" + _QUOTED,
+        "package_argument_missing": rb'Error: Package path \(-k\) not specified[.] Valid system image paths are:\n',
+        "package_unrecognized": rb'Error: Package path is not valid[.] Valid system image paths are:\n',
+        "package_has_no_images": rb'Error: Package [\x20-\x27\x29-\x7e]{1,256} \([\x20-\x28\x2a-\x7e]{1,256}\) contains no system images[.] Valid system image paths are:\n',
+        "avd_name_invalid": rb"Error: AVD name '" + _QUOTED + rb"' contains invalid characters[.]\nAllowed characters are: a-z A-Z 0-9 [.] _ -",
+        "avd_already_exists": rb"Error: Android Virtual Device '" + _QUOTED + rb"' already exists[.]\nUse --force if you want to replace it[.]",
+        "tag_abi_conflict": rb'Error: --' + _FLAG + rb' ' + _TOKEN + rb' conflicts with --' + _FLAG + rb' ' + _TOKEN + rb'[.]',
+        "abi_syntax_invalid": rb'Error: Invalid --' + _FLAG + rb' ' + _TOKEN + rb": expected format 'abi' or 'tag/abi'[.]",
+        "tag_invalid": rb'Error: Invalid --' + _FLAG + rb' ' + _TOKEN + rb' for the selected package[.] Valid tags are:\n',
+        "abi_ambiguous": rb'Error: This package has more than one ABI[.] Please specify one using --' + _FLAG + rb'[.]',
+        "abi_invalid": rb'Error: Invalid --' + _FLAG + rb' ' + _TOKEN + rb' for the selected package[.]',
+        "device_not_found": rb'Error: No device found matching --' + _FLAG + rb' ' + _TOKEN + rb'[.]',
+        "skin_not_found": rb'Error: Skin ' + _TOKEN + rb' not found at ' + _TAIL,
+        "emulator_package_missing": rb'Error: "emulator" package must be installed!',
+        "hardware_properties_unreadable": rb'Error: "hardware-properties[.]ini" could not be read',
+        "parser_global_flag": rb"Error: Flag '" + _QUOTED + rb"' is not a valid global flag[.] Did you mean to specify it after the verb/object name[?]",
+        "parser_action_flag": rb"Error: Flag '" + _QUOTED + rb"' is not valid for '" + _TOKEN + rb' ' + _TOKEN + rb"'[.]",
+        "parser_expected_verb": rb"Error: Expected verb after global parameters but found '" + _QUOTED + rb"' instead[.]",
+        "parser_argument": rb"Error: Argument '" + _QUOTED + rb"' is not recognized[.]",
+        "parser_missing_argument": rb'Error: Missing argument for flag ' + _FLAG + rb'[.]',
+        "parser_argument_is_flag": rb"Error: Oops, it looks like you didn't provide an argument for '" + _QUOTED + rb"'[.]\n'" + _QUOTED + rb"' was found instead[.]",
+        "parser_invalid_usage": rb'Error: Invalid usage for flag ' + _FLAG + rb': ' + _TAIL + rb'[.]',
+        "parser_missing_verb": rb'Error: Missing verb name[.]',
+        "parser_missing_object": rb"Error: Missing object name for verb '" + _QUOTED + rb"'[.]",
+        "parser_required_parameters": rb'Error: The parameters? --' + _FLAG + rb'(?:, --' + _FLAG + rb'){0,15} must be defined for action ' + rb"'" + _TOKEN + rb' ' + _TOKEN + rb"'",
+    }
+    MILESTONES = {
+        "cli_usage": rb'Usage:\n  avdmanager \[global options\] (?:\[action\]|[A-Za-z_-]{1,64}(?: [A-Za-z_-]{1,64})?) \[action options\]\n\nGlobal options:',
+        "local_repository": rb'(?:\[[= ]{39}\] (?:[0-9]{1,2}|100)% )?Loading local repository[.][.][.] {0,80}',
+        "single_abi_selected": rb'Auto-selecting single ABI [A-Za-z0-9_/-]{1,64}',
+        "hardware_question": rb'Do you wish to create a custom hardware profile[?] \[no\] ',
+    }
+
+    def fatal_observations(self, raw, complete):
+        # A prefix truncated in the middle of a variable must not masquerade
+        # as a completed source line. Earlier terminated lines remain useful.
+        if not complete:
+            end = raw.rfind(b"\n")
+            raw = raw[:end + 1] if end >= 0 else b""
+        def observed(pattern):
+            # List-bearing templates end at their fixed newline, without
+            # interpreting or exporting the following SDK-controlled entries.
+            end = b'' if pattern.endswith(rb'\n') else rb'(?=\n|\Z)'
+            return re.search(rb'(?:^|\n)' + pattern + end, raw) is not None
+        return (self.classify([name for name, pattern in self.FATAL_TEMPLATES.items() if observed(pattern)]),
+            {name: observed(pattern) for name, pattern in self.MILESTONES.items()})
 
     @staticmethod
     def classify(matches):
@@ -616,6 +682,7 @@ class EmulatorDiagnostic:
         markers = [name for name, pattern in self.MARKERS.items() if re.search(pattern, lines)]
         classification = self.classify(markers)
         java_family, filesystem = self.startup_markers(lines)
+        fatal_template, milestones = self.fatal_observations(lines, current and self.complete)
         check = str(error) if isinstance(error, ValueError) and str(error) in self.CHECKS else "unknown"
         if isinstance(error, H.Interrupted): kind = "interrupted"
         elif isinstance(error, subprocess.CalledProcessError): kind = "command_exit"
@@ -626,12 +693,13 @@ class EmulatorDiagnostic:
         elif isinstance(error, OSError): kind = "os_error"
         elif check != "unknown": kind = "check_failed"
         else: kind = "unknown"
-        return dict(schema=2, kind="hosted-android-emulator-diagnostic",
+        return dict(schema=3, kind="hosted-android-emulator-diagnostic",
             phase=self.phase if self.phase in self.PHASES else "unknown",
             command_category=self.command if current else "none", failure_kind=kind, check_code=check,
             exit_status=self.status if current else None, output_bytes=len(raw),
             output_complete=current and self.complete, output_truncated=current and self.truncated,
             sdk_error=classification, java_error_family=java_family, filesystem_markers=filesystem,
+            fatal_template=fatal_template, milestones=milestones,
             raw_text_exported=False, cause_established=False)
 
     def publish_failure(self, error, *, avd=False):

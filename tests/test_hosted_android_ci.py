@@ -13,6 +13,7 @@ import subprocess
 import stat
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -855,7 +856,7 @@ class EmulatorDiagnostics(unittest.TestCase):
         self.assertEqual(set(M.EmulatorDiagnostic.JAVA_FAMILIES), expected)
         fields = {"schema", "kind", "phase", "command_category", "failure_kind", "check_code", "exit_status",
             "output_bytes", "output_complete", "output_truncated", "sdk_error", "java_error_family",
-            "filesystem_markers", "raw_text_exported", "cause_established"}
+            "filesystem_markers", "fatal_template", "milestones", "raw_text_exported", "cause_established"}
         for family, names in M.EmulatorDiagnostic.JAVA_FAMILIES.items():
             for name in names:
                 for prefix in (b'', b'Exception in thread "main" ', b'Caused by: ', b'\tSuppressed: '):
@@ -863,7 +864,7 @@ class EmulatorDiagnostics(unittest.TestCase):
                         raw = prefix + name.encode() + b': /private/canary https://private.invalid/?token=secret\n'
                         _, _, result = self.observed(raw)
                         self.assertEqual(set(result), fields)
-                        self.assertEqual(result["schema"], 2)
+                        self.assertEqual(result["schema"], 3)
                         self.assertEqual(result["java_error_family"], family)
                         self.assertEqual(set(result["filesystem_markers"]), {"read_only", "missing", "access_denied"})
                         self.assertTrue(all(type(value) is bool for value in result["filesystem_markers"].values()))
@@ -972,7 +973,7 @@ class EmulatorDiagnostics(unittest.TestCase):
                     _, _, result = self.observed(raw)
                     self.assertEqual(result["sdk_error"], expected)
                     self.assertEqual(result["output_bytes"], len(raw))
-                    self.assertEqual(result["schema"], 2)
+                    self.assertEqual(result["schema"], 3)
                     self.assertTrue(result["output_complete"])
                     self.assertFalse(result["output_truncated"] or result["cause_established"] or result["raw_text_exported"])
                     self.assertLessEqual(len(json.dumps(result)), 1024)
@@ -1038,6 +1039,144 @@ class EmulatorDiagnostics(unittest.TestCase):
         self.assertEqual(later["check_code"], "EMULATOR_BOOT_FAILED")
         self.assertEqual(diagnostic.receipt(ValueError("private exception token"))["check_code"], "unknown")
 
+    # Independent examples of every exact 19.0 launcher/CLI/parser literal.
+    # List suffixes and dynamic values are deliberately private canaries.
+    FATAL_CASES = {
+        "java_home_invalid": b"ERROR: JAVA_HOME is set to an invalid directory: /private/canary\n\nPlease set the JAVA_HOME variable in your environment to match the\nlocation of your Java installation.",
+        "java_not_found": b"ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH.\n\nPlease set the JAVA_HOME variable in your environment to match the\nlocation of your Java installation.",
+        "jdk_too_old": b"This tool requires JDK 17 or later. Your version was detected as 11.0.1.\nTo override this check, set SKIP_JDK_VERSION_CHECK.",
+        "tools_directory_unset": b"Error: The tools directory property is not set, please make sure you are executing avdmanager",
+        "working_directory_invalid": b"Error: The working directory does not seem to be valid: '/private/canary",
+        "package_argument_missing": b"Error: Package path (-k) not specified. Valid system image paths are:\nprivate-canary",
+        "package_unrecognized": b"Error: Package path is not valid. Valid system image paths are:\nprivate-canary",
+        "package_has_no_images": b"Error: Package private-canary (system-images;android-36;default;x86_64) contains no system images. Valid system image paths are:\nprivate-canary",
+        "avd_name_invalid": b"Error: AVD name 'private-canary' contains invalid characters.\nAllowed characters are: a-z A-Z 0-9 . _ -",
+        "avd_already_exists": b"Error: Android Virtual Device 'private-canary' already exists.\nUse --force if you want to replace it.",
+        "tag_abi_conflict": b"Error: --tag private-canary conflicts with --abi default/x86_64.",
+        "abi_syntax_invalid": b"Error: Invalid --abi private-canary: expected format 'abi' or 'tag/abi'.",
+        "tag_invalid": b"Error: Invalid --tag private-canary for the selected package. Valid tags are:\nprivate-canary",
+        "abi_ambiguous": b"Error: This package has more than one ABI. Please specify one using --abi.",
+        "abi_invalid": b"Error: Invalid --abi private-canary for the selected package.",
+        "device_not_found": b"Error: No device found matching --device private-canary.",
+        "skin_not_found": b"Error: Skin private-canary not found at /private/canary",
+        "emulator_package_missing": b'Error: "emulator" package must be installed!',
+        "hardware_properties_unreadable": b'Error: "hardware-properties.ini" could not be read',
+        "parser_global_flag": b"Error: Flag 'private-canary' is not a valid global flag. Did you mean to specify it after the verb/object name?",
+        "parser_action_flag": b"Error: Flag 'private-canary' is not valid for 'create avd'.",
+        "parser_expected_verb": b"Error: Expected verb after global parameters but found 'private-canary' instead.",
+        "parser_argument": b"Error: Argument 'private-canary' is not recognized.",
+        "parser_missing_argument": b"Error: Missing argument for flag package.",
+        "parser_argument_is_flag": b"Error: Oops, it looks like you didn't provide an argument for 'package'.\n'private-canary' was found instead.",
+        "parser_invalid_usage": b"Error: Invalid usage for flag package: private-canary.",
+        "parser_missing_verb": b"Error: Missing verb name.",
+        "parser_missing_object": b"Error: Missing object name for verb 'private-canary'.",
+        "parser_required_parameters": b"Error: The parameters --name, --package must be defined for action 'create avd'",
+    }
+
+    def test_all_pinned_fatal_templates_are_closed_and_private_values_never_export(self):
+        self.assertEqual(len(self.FATAL_CASES), 29)
+        self.assertEqual(set(self.FATAL_CASES), set(M.EmulatorDiagnostic.FATAL_TEMPLATES))
+        for name, message in self.FATAL_CASES.items():
+            for separator in (b"\n", b"\r", b"\r\n"):
+                with self.subTest(name=name, separator=separator):
+                    raw = b"progress" + separator + message.replace(b"\n", separator) + separator
+                    _, _, result = self.observed(raw)
+                    self.assertEqual(result["fatal_template"], name)
+                    self.assertEqual(result["schema"], 3)
+                    self.assertEqual(result["output_bytes"], len(raw))
+                    self.assertFalse(any(result["milestones"].values()))
+                    self.assertFalse(result["cause_established"] or result["raw_text_exported"])
+                    encoded = json.dumps(result, sort_keys=True, separators=(",", ":"))
+                    self.assertLessEqual(len(encoded) + 1, 1024)
+                    for private in ("private-canary", "/private", "system-images;", "create avd"):
+                        self.assertNotIn(private, encoded)
+
+    def test_fatal_templates_require_exact_literal_boundaries_and_bounded_variables(self):
+        for name, message in self.FATAL_CASES.items():
+            for prefix in (b"private-prefix", b"note: ", b" ", b"\x1b[31m"):
+                with self.subTest(name=name, prefix=prefix):
+                    _, _, result = self.observed(prefix + message + b"\n")
+                    self.assertEqual(result["fatal_template"], "unknown")
+            for changed in (message.replace(b"Error", b"error", 1).replace(b"ERROR", b"error", 1)
+                    if message.startswith((b"Error", b"ERROR")) else message.replace(b"This", b"this", 1),
+                    message.replace(b"e", "\u0435".encode(), 1)):
+                with self.subTest(name=name, changed=changed):
+                    _, _, result = self.observed(changed + b"\n")
+                    self.assertEqual(result["fatal_template"], "unknown")
+        for message in (b"Error: The working directory does not seem to be valid: '" + b"x" * 513,
+                b"Error: Skin " + b"x" * 257 + b" not found at /private",
+                b"Error: No device found matching --device " + b"x" * 257 + b".",
+                b"Error: arbitrary forwarded exception message/private-token",
+                b"null", b"Error: Package path is not valid."):
+            _, _, result = self.observed(message + b"\n")
+            self.assertEqual(result["fatal_template"], "unknown")
+
+    def test_fatal_templates_ambiguity_and_truncated_variables_do_not_invent_whole_lines(self):
+        first = self.FATAL_CASES["working_directory_invalid"]
+        second = self.FATAL_CASES["parser_missing_verb"]
+        _, _, result = self.observed(first + b"\n" + second + b"\n")
+        self.assertEqual(result["fatal_template"], "ambiguous")
+        _, _, result = self.observed(second + b"\n" + second + b"\n")
+        self.assertEqual(result["fatal_template"], "parser_missing_verb")
+        for raw, complete in ((first, False),
+                (b"x" * (65536 - len(first) - 1) + b"\n" + first + b"hidden-continuation", True),
+                (b"\r\n" * 32768 + second + b"\n", True)):
+            _, _, result = self.observed(raw, complete)
+            self.assertEqual(result["fatal_template"], "unknown")
+            self.assertFalse(result["output_complete"])
+        diagnostic, _, _ = self.observed(second + b"\n")
+        stale = diagnostic.receipt(ValueError("EMULATOR_BOOT_FAILED"))
+        self.assertEqual(stale["fatal_template"], "unknown")
+        self.assertFalse(any(stale["milestones"].values()))
+
+    def test_four_source_milestones_are_observations_only_including_actual_progress_rendering(self):
+        messages = {
+            "cli_usage": b"Usage:\n  avdmanager [global options] create avd [action options]\n\nGlobal options:",
+            "local_repository": (b"[" + b"=" * 10 + b" " * 29 + b"] 23% Loading local repository...").ljust(80),
+            "single_abi_selected": b"Auto-selecting single ABI x86_64",
+            "hardware_question": b"Do you wish to create a custom hardware profile? [no] ",
+        }
+        for name, message in messages.items():
+            for boundary in (b"\r", b"\r\n", b"\n"):
+                _, _, result = self.observed(message.replace(b"\n", boundary) + boundary)
+                self.assertEqual(result["milestones"], {key: key == name for key in messages})
+                self.assertEqual(result["fatal_template"], "unknown")
+                self.assertFalse(result["cause_established"])
+            for bad in (b"prefix" + message, b" " + message, b"\x1b[31m" + message,
+                    message.replace(b"e", "\u0435".encode(), 1)):
+                _, _, result = self.observed(bad + b"\n")
+                self.assertFalse(any(result["milestones"].values()))
+        all_messages = b"\r".join(messages.values()) + b"\r" + self.FATAL_CASES["package_unrecognized"] + b"\n"
+        _, _, result = self.observed(all_messages)
+        self.assertTrue(all(result["milestones"].values()))
+        self.assertEqual(result["fatal_template"], "package_unrecognized")
+        self.assertLessEqual(len(json.dumps(result)) + 1, 1024)
+        # Exact AvdManagerCli.acceptLackOfVerb() returns true: no-verb help
+        # prints bracketed [action], not an invented execution milestone.
+        _, _, result = self.observed(messages["cli_usage"].replace(b"create avd", b"[action]") + b"\n")
+        self.assertTrue(result["milestones"]["cli_usage"])
+        self.assertFalse(result["cause_established"])
+        _, _, result = self.observed(b"Error: The parameter --name must be defined for action 'create avd'\n")
+        self.assertEqual(result["fatal_template"], "parser_required_parameters")
+
+    def test_maximum_prefix_with_overlapping_template_separators_is_bounded(self):
+        # All are near-matches, including repeated multi-variable separators.
+        # The time limit is deliberately loose; it detects catastrophic regex
+        # backtracking, not machine speed or any SDK performance requirement.
+        cases = (b"Error: --tag " + b"x conflicts with --tag " * 3000,
+            b"Error: Package " + b"x (x) contains no system images. " * 2200,
+            b"Error: Skin " + b"x not found at " * 5000,
+            b"Error: The parameters --" + b"x, --" * 14000 + b" must be defined for action 'x x'",
+            b"Error: Flag '" + b"x' is not valid for 'x x'. " * 3000)
+        started = time.monotonic()
+        for case in cases:
+            raw = case[:65535] + b"\n"
+            self.assertEqual(len(raw), 65536)
+            _, _, result = self.observed(raw)
+            self.assertEqual(result["fatal_template"], "unknown")
+            self.assertFalse(any(result["milestones"].values()))
+        self.assertLess(time.monotonic() - started, 5)
+
     def guarded_inside(self, proof, popen):
         """Only fake guard observations and an explicit inert Python child.
 
@@ -1070,7 +1209,7 @@ class EmulatorDiagnostics(unittest.TestCase):
 
     def test_real_inert_failure_is_recorded_before_original_cleanup_and_exception_survives(self):
         children, order = [], []
-        code = "import sys;sys.stdin.read();sys.stdout.write('Loading local repository...'.ljust(80)+'\\r');print('Error: Package path is not valid.');print('java.io.FileNotFoundException: /private (Permission denied)');print('private-token');sys.exit(7)"
+        code = "import sys;sys.stdin.read();sys.stdout.write('Loading local repository...'.ljust(80)+'\\r');print('Error: Package path is not valid. Valid system image paths are:');print('private-token');print('java.io.FileNotFoundException: /private (Permission denied)');sys.exit(7)"
         with tempfile.TemporaryDirectory() as directory:
             proof = Path(directory)
             self.guarded_inside(proof, self.inert_popen(code, children))
@@ -1079,7 +1218,10 @@ class EmulatorDiagnostics(unittest.TestCase):
                 value = json.loads((proof / "emulator-diagnostic.json").read_text())
                 self.assertEqual(value["exit_status"], 7)
                 self.assertEqual(value["sdk_error"], "sdk_package")
-                self.assertEqual(value["schema"], 2)
+                self.assertEqual(value["schema"], 3)
+                self.assertEqual(value["fatal_template"], "package_unrecognized")
+                self.assertEqual(value["milestones"], dict(cli_usage=False, local_repository=True,
+                    single_abi_selected=False, hardware_question=False))
                 self.assertEqual(value["java_error_family"], "io")
                 self.assertEqual(value["filesystem_markers"], dict(read_only=False, missing=False, access_denied=True))
                 self.assertEqual(owned[0].returncode, 7)
