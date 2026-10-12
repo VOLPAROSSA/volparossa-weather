@@ -40,6 +40,63 @@ Fortran, NetCDF conversion, JPEG2000, PNG and extended downloadable test data
 are deliberately outside this build. A successful build/version probe is not
 an ECMWF download/decode proof; those are separate functional checks.
 
+## Hosted input preparation
+
+The separate [hosted workflow](../../.github/workflows/hosted-inputs.yml) prepares
+inputs for a future joined core/browser trial without using a developer's private
+bundle. It downloads the same three pinned source archives, records the actual
+runner toolchain, and builds through
+[`prepare_hosted_decoder.py`](../../scripts/prepare_hosted_decoder.py).
+The existing builder, historical decoder hash and earlier trial receipts remain
+unchanged. Inspect the workflow result before treating a build as successful.
+
+The new recipe supports Debian 13 and Ubuntu 24.04 amd64. It uses two compiler
+jobs, one thirty-minute build deadline, a network-free namespace, a fixed
+`/build` path and an explicit build date. Success requires the upstream libaec
+tests, the ecCodes version check, and encoding and decoding a nonconstant
+CCSDS fixture at two known grid points. The recipe records effective flags,
+source hashes, tool versions, output hashes and original licenses. Toolchain
+capture describes the runner; it is not independent decoder authorization or a
+fully hermetic, bit-reproducible build claim.
+
+The hosted toolchain includes a canonical `mawk` executable and its version/hash
+record. A private `/build/bin/awk` alias lets upstream tests use it without
+exposing the host's `/etc/alternatives` configuration. All upstream libaec tests
+remain required.
+
+On the disposable Ubuntu GitHub runner, the workflow uses a separate
+[`CI wrapper`](../../scripts/prepare_hosted_decoder_ci.py) for the runner's
+user-namespace restrictions. It records bounded diagnostics, refuses conflicting
+AppArmor profiles, and temporarily adds only the pinned Bubblewrap setup and
+capability-denying child profiles. It verifies the actual decoder sandbox before
+capturing tools or compiling, then removes its own policy after stopping its
+processes. The build stays unprivileged and offline; no system-wide restriction
+is disabled. Unconfirmed process termination or policy cleanup fails the job;
+the wrapper does not remove a policy that surviving processes might still need.
+This wrapper is not for a developer machine or a self-hosted runner.
+Its original policy license and provenance are retained under
+[`third_party/apparmor-ci`](../apparmor-ci/).
+
+Preview the recipe without downloads, compilation or toolchain execution:
+
+```sh
+python3 -B scripts/prepare_hosted_decoder.py plan
+python3 -B -m unittest discover -s tests -p 'test_hosted_*.py'
+```
+
+[`prepare_hosted_runtime.py`](../../scripts/prepare_hosted_runtime.py) separately
+materializes pinned historical Node and Debian Firefox archives into a new
+private directory under `build/`. It requires an explicit `--fetch` or existing
+archives supplied with `--archives`; it checks archive and extracted runtime
+hashes, preserves licenses, and never executes the runtimes or package scripts.
+These historical artifacts are not a current browser-update recommendation.
+
+The workflow installs build tools only on its disposable GitHub runner and
+publishes bounded diagnostics, provenance and successful source-built decoder
+outputs with notices. It does not acquire weather data, run a browser or admit
+the decoder to the core. The new binary still needs separate byte admission,
+actual Debian 13 compatibility checks, a fresh browser proof and joined delivery.
+
 ## Original licenses and notices
 
 - ecCodes: Apache-2.0; original `LICENSE` and `NOTICE` retained. Its `COPYING`

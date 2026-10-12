@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "profile": "historical-weather-linux-x64-2026-09",
+  "purpose": "Explicit preparation of authenticated historical test runtimes, not a current release or automatic update authority",
+  "artifacts": {
+    "node": {
+      "version": "24.19.0",
+      "archive": "node-v24.19.0-linux-x64.tar.xz",
+      "url": "https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-x64.tar.xz",
+      "redirect_url": null,
+      "bytes": 31633904,
+      "sha256": "14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647",
+      "checksum_source": "https://nodejs.org/dist/v24.19.0/SHASUMS256.txt",
+      "prefix": "node-v24.19.0-linux-x64",
+      "expected_files": {
+        "bin/node": {"bytes": 125989464, "sha256": "bc17c508ffeed0ec622934f9b7fa72f8e78da65350e63c3eceb56fa688aa5e12"}
+      },
+      "license_file": "LICENSE",
+      "abi": {"architecture": "x86_64", "glibc_min": "2.28", "glibcxx_min": "3.4.21"}
+    },
+    "firefox": {
+      "version": "140.16.0esr-1~deb13u1",
+      "archive": "firefox-esr_140.16.0esr-1~deb13u1_amd64.deb",
+      "url": "https://snapshot.debian.org/archive/debian-security/20260916T184142Z/pool/updates/main/f/firefox-esr/firefox-esr_140.16.0esr-1~deb13u1_amd64.deb",
+      "redirect_url": "https://snapshot.debian.org/file/15ff34b5e34e83cd1c27448c6eb80226e955168f/firefox-esr_140.16.0esr-1~deb13u1_amd64.deb",
+      "bytes": 71994716,
+      "sha256": "e32aeabcab2e74fe112332fad10f7d9630e14cd6f4564a596a71073018d24508",
+      "checksum_source": "https://snapshot.debian.org/archive/debian-security/20260916T184142Z/dists/trixie-security/main/binary-amd64/Packages.xz",
+      "prefix": "usr/lib/firefox-esr",
+      "expected_files": {
+        "firefox-esr": {"bytes": 572240, "sha256": "22bb2d84f2289622e65fbcde266a30952e6ac64d27a2a1af75cea7229f2e6b14"},
+        "libxul.so": {"bytes": 164140120, "sha256": "62cc326204668a2dae453c9e89d9c200e513c9e3ad0772b164091bf1e5333fb4"},
+        "omni.ja": {"bytes": 37698426, "sha256": "c0d453127f9c1310dad39cc3f6971acfe59cdf561fec6918b129ee0c780c6e70"},
+        "browser/omni.ja": {"bytes": 45948402, "sha256": "757f1f47bfbde5603e08cdb7ddc83bd27e9b26695bf843d640df7984842fffd7"},
+        "application.ini": {"bytes": 707, "sha256": "2eced73ac4341fdf5c812de487d838f45b18d2fbc4712756875c1d48062f36f4"}
+      },
+      "license_file": "usr/share/doc/firefox-esr/copyright",
+      "abi": {"architecture": "x86_64", "glibc_min": "2.39", "glibcxx_min": "3.4.30"}
+    }
+  }
+}

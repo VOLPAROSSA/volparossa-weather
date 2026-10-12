@@ -1,0 +1,115 @@
+name: Prepare hosted Weather inputs
+run-name: Source-built decoder and pinned historical runtime preparation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/hosted-decoder-preparation]
+    paths:
+      - .github/workflows/hosted-inputs.yml
+      - scripts/prepare_hosted_decoder.py
+      - scripts/prepare_hosted_decoder_ci.py
+      - scripts/hosted-decoder-bwrap.apparmor
+      - scripts/prepare_hosted_runtime.py
+      - third_party/apparmor-ci/**
+      - third_party/hosted-runtime-inputs.json
+      - tests/test_hosted_decoder.py
+      - tests/test_hosted_decoder_ci.py
+      - tests/test_hosted_runtime.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weather-hosted-inputs-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test bounded preparation contracts without network access
+        run: python3 -B -m unittest discover -s tests -p 'test_hosted_*.py'
+      - name: Install build tools on the disposable runner only
+        run: |
+          set -euo pipefail
+          test "$(id -u)" != 0
+          sudo -n apt-get update
+          sudo -n apt-get install --yes --no-install-recommends \
+            apparmor bubblewrap build-essential cmake git mawk python3
+          umask 077
+          mkdir -m 0700 build
+          dpkg-query -W apparmor bubblewrap gcc g++ binutils cmake make mawk python3 git \
+            > build/hosted-tool-packages.txt
+      - name: Fetch and verify the three existing source pins without building
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 -B scripts/build_eccodes.py --fetch > build/hosted-sources.json
+      - name: Materialize historical Node and Firefox without executing them
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 -B scripts/prepare_hosted_runtime.py \
+            --output "$GITHUB_WORKSPACE/build/hosted-runtime-ci" --fetch
+      - name: Verify runner isolation, record tools and compile offline
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 -B scripts/prepare_hosted_decoder_ci.py
+      - name: State the scope of this preparation
+        if: always()
+        run: |
+          printf '%s\n' \
+            'Preparation only: inspect the original step outcomes and receipts.' \
+            'No weather-source requests, private bundle upload or browser execution.' \
+            'A successful source build does not authorize this decoder for the core.' \
+            'Independent byte admission, fresh browser proof and joined delivery remain required.' \
+            >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain only build diagnostics and public provenance
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hosted-input-provenance-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/hosted-sources.json
+            build/hosted-tool-packages.txt
+            build/hosted-toolchain-capture.json
+            build/hosted-toolchain-ci/toolchain.json
+            build/hosted-toolchain-ci/*.log
+            build/hosted-sandbox-ci/*.json
+            build/hosted-sandbox-ci/*.log
+            build/hosted-runtime-ci/provenance.json
+            build/hosted-decoder-ci/hosted-build-receipt.json
+            build/hosted-decoder-ci/*.log
+      - name: Retain successful source-built tools and their original notices
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hosted-decoder-unadmitted-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            build/hosted-decoder-ci/hosted-build-receipt.json
+            build/hosted-decoder-ci/eccodes-build/bin/grib_ls
+            build/hosted-decoder-ci/eccodes-build/bin/grib_filter
+            build/hosted-decoder-ci/eccodes-build/bin/codes_info
+            build/hosted-decoder-ci/probe.grib2
+            build/hosted-decoder-ci/ecbuild-source/LICENSE
+            build/hosted-decoder-ci/ecbuild-source/NOTICE
+            build/hosted-decoder-ci/ecbuild-source/COPYING
+            build/hosted-decoder-ci/libaec-source/LICENSE.txt
+            build/hosted-decoder-ci/eccodes-source/LICENSE
+            build/hosted-decoder-ci/eccodes-source/NOTICE
+            build/hosted-decoder-ci/eccodes-source/COPYING
+            build/hosted-decoder-ci/eccodes-source/third_party/expected/COPYING
