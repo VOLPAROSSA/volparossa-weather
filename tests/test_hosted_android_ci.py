@@ -94,13 +94,13 @@ class NativeCI(unittest.TestCase):
         self.assertEqual(value, dict(schema=1, kind="hosted-android-gradle-configured-limits",
             scope="acquisition-and-offline-app-build", max_workers=1,
             jvm_args=["-Xmx1024m", "-XX:MaxMetaspaceSize=512m", "-XX:ReservedCodeCacheSize=128m", "-Dfile.encoding=UTF-8"],
-            child_rss_limit_bytes=3221225472, host_reserve_bytes=2147483648,
+            child_rss_limit_bytes=4294967296, host_reserve_bytes=2147483648, launch_min_available_bytes=6442450944,
             step_timeout_seconds=900, runtime_measurement=False))
         self.assertEqual("-Dorg.gradle.jvmargs=" + " ".join(value["jvm_args"]),
             next(x for x in M.gradle(True) if x.startswith("-Dorg.gradle.jvmargs=")))
         source = (ROOT / "scripts/prepare_hosted_android_ci.py").read_text().split("def execute(", 1)[1]
         self.assertLess(source.index('H.save("gradle-resources.json", app_gradle_resources())'),
-            source.index('H.run("android-acquisition-build"'))
+            source.index('run_app_gradle(True)'))
         self.assertIn('gradle_configured_limits=app_gradle_resources()', source)
         # Neither a smaller configuration nor a forced negative child exit may
         # turn an unconfirmed drain into cleanup success.
@@ -502,8 +502,20 @@ finally:
 
     def test_both_actual_builds_use_scoped_profile(self):
         source = (ROOT / "scripts/prepare_hosted_android_ci.py").read_text().split("def execute(", 1)[1]
-        self.assertIn('H.run("android-acquisition-build", gradle_sandbox(gradle(True), "acquire"), 900', source)
-        self.assertIn('H.run("android-offline-build", gradle_sandbox(gradle(False), "compile"), 900', source)
+        self.assertEqual(source.count('run_app_gradle(True)'), 1)
+        self.assertEqual(source.count('run_app_gradle(False)'), 1)
+        self.assertEqual(M.MEMORY, 3*M.GIB)
+        for acquire, name, mode in ((True, "android-acquisition-build", "acquire"),
+                (False, "android-offline-build", "compile")):
+            with patch.object(M.H, "run", return_value=b"inert") as run:
+                self.assertEqual(M.run_app_gradle(acquire), b"inert")
+            args, kwargs = run.call_args
+            self.assertEqual(args, (name, M.gradle_sandbox(M.gradle(acquire), mode), 900))
+            self.assertEqual(kwargs, dict(env=M.environment(), cwd=M.STAGE/"android", memory=4*M.GIB, memory_categories=True))
+        for value in (None, "acquire", 1, [], ["unadmitted"]):
+            with patch.object(M.H, "run") as run, self.assertRaisesRegex(ValueError, "NATIVE_APP_BUILD_SCOPE"):
+                M.run_app_gradle(value)
+            run.assert_not_called()
 
 
 if __name__ == "__main__":

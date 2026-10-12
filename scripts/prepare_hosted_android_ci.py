@@ -45,6 +45,7 @@ APK = STAGE / "build/app/outputs/flutter-apk/app-debug.apk"
 GRADLE_STATE = (".gradle", "build", ".kotlin")
 GIB = 1024**3
 MEMORY = 3 * GIB
+APP_MEMORY = 4 * GIB
 # The app Gradle JVM remains resident while Flutter starts its own compiler.
 # Lower only the two app-build commands, not the shared aggregate RSS guard.
 # Gradle 8.13 gives these CLI properties precedence over staged properties.
@@ -83,7 +84,7 @@ def guards(env):
             and not info.st_mode & 0o022, "OWNED_INPUT_REQUIRED")
     kvm = Path("/dev/kvm").stat()
     require(stat.S_ISCHR(kvm.st_mode) and os.access("/dev/kvm", os.R_OK | os.W_OK), "KVM_REQUIRED_NO_TCG")
-    require(H.available_memory() >= MEMORY + 2 * GIB, "HOST_MEMORY_RESERVE")
+    require(H.available_memory() >= APP_MEMORY + 2 * GIB, "HOST_MEMORY_RESERVE")
     return helper, platform
 
 
@@ -146,8 +147,9 @@ def app_gradle_resources():
     """Configured command limits, not observations of JVM or build success."""
     return dict(schema=1, kind="hosted-android-gradle-configured-limits",
         scope="acquisition-and-offline-app-build", max_workers=APP_GRADLE_WORKERS,
-        jvm_args=list(APP_GRADLE_JVM_ARGS), child_rss_limit_bytes=MEMORY,
-        host_reserve_bytes=2 * GIB, step_timeout_seconds=900, runtime_measurement=False)
+        jvm_args=list(APP_GRADLE_JVM_ARGS), child_rss_limit_bytes=APP_MEMORY,
+        host_reserve_bytes=2 * GIB, launch_min_available_bytes=APP_MEMORY + 2 * GIB,
+        step_timeout_seconds=900, runtime_measurement=False)
 
 
 def gradle(acquire):
@@ -168,6 +170,14 @@ def repository_fixture_command():
     return ["/state/repository-fixture/gradlew", "-p", "/state/repository-fixture", "--offline", "--no-daemon",
         "--max-workers=2", "--console=plain", "--init-script", str(ROOT / "scripts/hosted-android-repositories.gradle"),
         "verifyRepositoryContract"]
+
+
+def run_app_gradle(acquire):
+    """The larger finite RSS profile applies only to these two fixed steps."""
+    require(type(acquire) is bool, "NATIVE_APP_BUILD_SCOPE")
+    name, mode = ("android-acquisition-build", "acquire") if acquire else ("android-offline-build", "compile")
+    return H.run(name, gradle_sandbox(gradle(acquire), mode), 900,
+        env=environment(), cwd=STAGE / "android", memory=APP_MEMORY, memory_categories=True)
 
 
 def gradle_sandbox(command, mode):
@@ -420,7 +430,7 @@ def execute(helper, platform):
         require(H.digest(STAGE / "android/gradle/wrapper/gradle-wrapper.jar") ==
             H.digest(SDK / "bin/cache/artifacts/gradle_wrapper/gradle/wrapper/gradle-wrapper.jar"), "WRAPPER_CHANGED")
         H.save("gradle-resources.json", app_gradle_resources())
-        H.run("android-acquisition-build", gradle_sandbox(gradle(True), "acquire"), 900, env=environment(), cwd=STAGE / "android", memory=MEMORY)
+        run_app_gradle(True)
         metadata = verification_metadata()
         H.save("dependency-capture.json", metadata)
         H.save("acquisition-apk.json", dict(schema=1, artifact=H.digest(APK), network_enabled_build=True, production_authority=False))
@@ -430,7 +440,7 @@ def execute(helper, platform):
         H.run("pub-offline-lock", sandbox(flutter("pub", "get", "--offline", "--enforce-lockfile"), "compile"), 180, env=environment(), memory=MEMORY)
         # Gradle clean deletes only its configured disposable staged build tree.
         # Original acquisition hashes/logs remain outside it in OUTPUT.
-        H.run("android-offline-build", gradle_sandbox(gradle(False), "compile"), 900, env=environment(), cwd=STAGE / "android", memory=MEMORY)
+        run_app_gradle(False)
         require(verification_metadata() == metadata, "DEPENDENCY_METADATA_CHANGED")
         native_sources(native)
         W.verify_phase_inputs(helper, pin)

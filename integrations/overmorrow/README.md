@@ -127,12 +127,24 @@ confirmed, so the sandbox policy and staging are retained rather than reporting
 successful cleanup. The original KVM access is restored and the host network
 namespace is unchanged. No APK, offline rebuild or emulator result is produced.
 
-The corrected candidate reduces only the two app-build commands to one Gradle
-worker and a 1,024 MiB JVM heap. The aggregate 3 GiB limit, 2 GiB host reserve,
-deadlines and conservative cleanup checks remain unchanged. Its resource receipt
-records configuration, not observed memory use. All 51 hosted-preparation tests
-and 11 native preparer tests pass locally; actual build fit, the offline rebuild
-and installed-app trial still require successful hosted execution.
+The [seventh attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38254164363)
+uses one Gradle worker and a 1,024 MiB JVM heap, but Flutter compilation again
+exceeds the 3 GiB aggregate limit. Cleanup remains unconfirmed after the stop;
+the Gradle fixture, original KVM access restoration and unchanged host network
+namespace pass separately. The aggregate measurement alone does not identify
+which tool dominates memory use.
+
+The next candidate gives only the two fixed app builds a finite 4 GiB process
+RSS budget. They require at least 6 GiB available before launch and retain the
+2 GiB host reserve throughout execution. Other Android steps keep their 3 GiB
+budgets; workers, JVM heap, deadlines and conservative cleanup are unchanged.
+An optional measurement records Java/Dart/other process counts and RSS from the
+same total-peak sample, without paths, process IDs or command lines. Shared RSS
+can be counted more than once; this is a conservative process-tree measurement,
+not unique physical memory. The separate resource receipt remains configuration
+only. All 51 Android preparation, 35 shared-helper and 11 native preparer tests
+pass locally; build fit, the offline rebuild and installed-app trial still need
+successful hosted execution.
 
 The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only

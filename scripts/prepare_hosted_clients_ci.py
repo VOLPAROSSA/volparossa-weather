@@ -113,7 +113,20 @@ def available_memory():
                     if line.startswith("MemAvailable:"))) * 1024
 
 
-def owned_rss(pid):
+def rss_category(base):
+    """Diagnostic name classification only; never executable trust or logging."""
+    try:
+        name = Path(os.readlink(base / "exe")).name
+    except OSError:
+        # A disappeared/inaccessible executable must not discard RSS already
+        # read from status. Unknown names and unreadable names share 'other'.
+        return "other"
+    if name == "java":
+        return "java"
+    return "dart" if name in ("dart", "dartvm", "dartaotruntime") else "other"
+
+
+def owned_rss(pid, *, categories=None):
     """Bound the whole descendant tree, including subprocesses with new sessions.
 
     RSS counts shared pages more than once: conservative pressure cancellation,
@@ -130,7 +143,12 @@ def owned_rss(pid):
             base = Path("/proc") / str(current)
             status = (base / "status").read_text()
             require(len(status) <= 65536, "CHILD_STATUS_BOUND")
-            total += sum(int(line.split()[1]) * 1024 for line in status.splitlines() if line.startswith("VmRSS:"))
+            rss = sum(int(line.split()[1]) * 1024 for line in status.splitlines() if line.startswith("VmRSS:"))
+            total += rss
+            if categories is not None:
+                value = categories[rss_category(base)]
+                value["processes"] += 1
+                value["rss_bytes"] += rss
             for task in (base / "task").iterdir():
                 children = (task / "children").read_text()
                 require(len(children) <= 65536, "CHILD_PROCESS_BOUND")
@@ -153,14 +171,25 @@ def group_drained(pid, seconds=2):
         time.sleep(0.02)
 
 
-def run(name, argv, seconds, *, env=None, cwd=None, memory=2 * GIB, reserve=True):
+def run(name, argv, seconds, *, env=None, cwd=None, memory=2 * GIB, reserve=True, memory_categories=False):
     """Retain bounded original logs; never remove policy before owned children drain."""
     global DRAIN_CONFIRMED
     require(re.fullmatch(r"[a-z0-9-]+", name), "STEP_NAME")
+    require(type(memory_categories) is bool and (not memory_categories or reserve), "MEMORY_DIAGNOSTIC_SCOPE")
     raw = bytearray()
     child = None
     returned = False
     peak = 0
+    peak_categories = None
+    def observe_memory(pid):
+        nonlocal peak, peak_categories
+        categories = {name: dict(processes=0, rss_bytes=0) for name in ("java", "dart", "other")} if memory_categories else None
+        # Exactly one traversal supplies both admission/cancellation accounting
+        # and optional peak attribution; never combine independent samples.
+        rss = owned_rss(pid, categories=categories) if memory_categories else owned_rss(pid)
+        if rss > peak or (memory_categories and peak_categories is None):
+            peak, peak_categories = rss, categories
+        require(peak <= memory, "CHILD_MEMORY_BOUND")
     host_reserve = 2 * GIB if reserve else 0
     launch_minimum = max(3 * GIB, memory + host_reserve) if reserve else 0
     started = time.monotonic()
@@ -188,8 +217,7 @@ def run(name, argv, seconds, *, env=None, cwd=None, memory=2 * GIB, reserve=True
                 require(time.monotonic() < deadline, "PHASE_DEADLINE")
                 if reserve:
                     require(available_memory() >= 2 * GIB, "HOST_MEMORY_RESERVE")
-                    peak = max(peak, owned_rss(child.pid))
-                    require(peak <= memory, "CHILD_MEMORY_BOUND")
+                    observe_memory(child.pid)
                 for key, _ in selector.select(0.2):
                     part = os.read(key.fd, 65536)
                     if not part:
@@ -201,8 +229,7 @@ def run(name, argv, seconds, *, env=None, cwd=None, memory=2 * GIB, reserve=True
                 require(time.monotonic() < deadline, "PHASE_DEADLINE")
                 if reserve:
                     require(available_memory() >= 2 * GIB, "HOST_MEMORY_RESERVE")
-                    peak = max(peak, owned_rss(child.pid))
-                    require(peak <= memory, "CHILD_MEMORY_BOUND")
+                    observe_memory(child.pid)
                 try:
                     child.wait(timeout=min(0.2, max(0.01, deadline - time.monotonic())))
                 except subprocess.TimeoutExpired:
@@ -251,7 +278,9 @@ def run(name, argv, seconds, *, env=None, cwd=None, memory=2 * GIB, reserve=True
                 peak_descendant_rss=peak, elapsed_ms=int((time.monotonic()-started)*1000),
                 memory_monitor_enabled=reserve, memory_limit_bytes=memory,
                 host_reserve_bytes=host_reserve, launch_min_available_bytes=launch_minimum,
-                process_drain_confirmed=DRAIN_CONFIRMED))
+                process_drain_confirmed=DRAIN_CONFIRMED,
+                **(dict(peak_memory_categories=peak_categories,
+                    memory_category_method="executable-name-allowlist-unknown-as-other") if memory_categories else {})))
     return bytes(raw)
 
 
