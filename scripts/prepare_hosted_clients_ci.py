@@ -359,8 +359,11 @@ def sandbox(command, *, mode, writable=None):
         "--ro-bind", str(OUTPUT / "passwd"), "/etc/passwd",
         "--ro-bind", str(OUTPUT / "group"), "/etc/group",
         "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
-        "--ro-bind", str(ROOT), str(ROOT), "--tmpfs", str(OUTPUT),
-        "--dir", "/home", "--dir", "/home/runner"]
+        # A separate private mount is needed for --remount-ro below. Create it
+        # BEFORE the reviewed source bind: hosted checkout paths live beneath
+        # /home/runner/work, and a later home mount would hide that source.
+        "--dir", "/home", "--tmpfs", "/home/runner",
+        "--ro-bind", str(ROOT), str(ROOT), "--tmpfs", str(OUTPUT)]
     if mode == "acquire":
         argv += ["--ro-bind", str(Path("/etc/resolv.conf").resolve()), "/etc/resolv.conf",
                  "--ro-bind", "/etc/ssl/certs", "/etc/ssl/certs"]

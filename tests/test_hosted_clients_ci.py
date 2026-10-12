@@ -85,7 +85,7 @@ class HostedClients(unittest.TestCase):
                             if arg in ("--bind", "--ro-bind")]
             for host_home in (str(Path.home()), "/home/runner"):
                 self.assertNotIn(host_home, host_sources)
-            self.assertIn(["--dir", "/home/runner"], [command[i:i+2] for i in range(len(command))])
+            self.assertIn(["--tmpfs", "/home/runner"], [command[i:i+2] for i in range(len(command))])
             self.assertIn(["--remount-ro", "/"], [command[i:i+2] for i in range(len(command))])
 
     def test_browser_only_writable_host_mount_is_private_proof(self):
@@ -96,6 +96,22 @@ class HostedClients(unittest.TestCase):
         self.assertNotIn("/state", command)
         with self.assertRaisesRegex(ValueError, "BROWSER_OUTPUT"):
             H["sandbox"]([], mode="browser", writable=Path("/unknown"))
+
+    def test_private_home_is_a_mount_created_before_nested_hosted_checkout(self):
+        hosted = Path("/home/runner/work/volparossa-weather/volparossa-weather")
+        for mode in ("acquire", "compile", "browser"):
+            with self.subTest(mode=mode), patch.dict(G, ROOT=hosted):
+                command = H["sandbox"]([], mode=mode,
+                    writable=H["PROOF"] if mode == "browser" else H["STAGE"])
+            pairs = [command[i:i+2] for i in range(len(command))]
+            triples = [command[i:i+3] for i in range(len(command))]
+            mounted = pairs.index(["--tmpfs", "/home/runner"])
+            source = triples.index(["--ro-bind", str(hosted), str(hosted)])
+            readonly = pairs.index(["--remount-ro", "/home/runner"])
+            self.assertLess(mounted, source)
+            self.assertLess(source, readonly)
+            self.assertNotIn(["--dir", "/home/runner"], pairs)
+            self.assertNotIn(["--ro-bind", "/home/runner", "/home/runner"], triples)
 
     def test_compilation_uses_only_fixed_clis_without_upstream_prehook(self):
         commands = H["compile_commands"]()
