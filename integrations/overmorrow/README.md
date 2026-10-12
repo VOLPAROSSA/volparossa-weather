@@ -77,9 +77,15 @@ source requests and do not prove core delivery or native Android/iOS operation.
 
 ## Android trial candidate
 
-The [Android hosted workflow](../../.github/workflows/hosted-android.yml) is ready
-for its first debug APK build and installed-app emulator trial; neither has yet
-run. The [native preparer](prepare_native_android.py) modifies only a disposable
+The [Android hosted workflow](../../.github/workflows/hosted-android.yml) prepares
+a debug APK build and installed-app emulator trial; neither has yet run. The
+[first attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38242345261)
+stopped during input preparation because two nested process alarms conflicted.
+The correction keeps the total and per-step deadlines without nesting alarms;
+31 hosted-preparation tests pass, including the original failure and actual
+preparation with inert inputs. A corrected hosted trial is still required.
+
+The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only
 `lib/volparossa_native_trial.dart` entrypoint starts the real app with
 `VOLPAROSSA_WEATHER=true` and

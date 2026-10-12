@@ -16,6 +16,7 @@ import posixpath
 import re
 import runpy
 import stat
+import time
 import urllib.parse
 import urllib.request
 import zipfile
@@ -79,13 +80,20 @@ class Redirects(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(request, fp, code, message, headers, url)
 
 
-def download(pin, target):
+def phase_budget(end, maximum):
+    remaining = end - time.monotonic()
+    require(remaining > 0, "MATERIALIZATION_DEADLINE")
+    return min(maximum, remaining)
+
+
+def download(pin, target, *, seconds=600):
     sha = hashlib.sha256()
     published = hashlib.new(pin["algorithm"])
     size = 0
     # One request chain only: no mirror, rotation or automatic retry.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), Redirects(pin["url"]))
-    with deadline(600), opener.open(pin["url"], timeout=30) as response, target.open("xb") as out:
+    require(0 < seconds <= 600, "DOWNLOAD_DEADLINE_BOUND")
+    with deadline(seconds), opener.open(pin["url"], timeout=30) as response, target.open("xb") as out:
         os.chmod(target, 0o600)
         require(response.status == 200, "ARCHIVE_HTTP_STATUS")
         length = response.headers.get("Content-Length")
@@ -222,6 +230,38 @@ def verify(output):
         inventory_sha256=value["inventory_sha256"], files=len(expected), runtime_executed=False)
 
 
+def materialize(output):
+    # One monotonic whole-operation budget; each sequential blocking phase
+    # installs exactly ONE process alarm, clipped to the same absolute end.
+    # The shared alarm helper deliberately rejects nesting and stays unchanged.
+    end = time.monotonic() + 2400
+    inputs, records = {}, {}
+    for name, pin in pins().items():
+        archive = output / ("gradle-8.13-all.zip" if name == "gradle" else "." + name + ".zip")
+        inputs[name] = download(pin, archive, seconds=phase_budget(end, 600))
+        if name == "gradle":
+            records[archive.name] = dict(kind="file", bytes=pin["bytes"], sha256=pin["digest"], mode=0o600)
+            continue
+        with deadline(phase_budget(end, 240)):
+            with regular(archive) as stream:
+                entries = extract(stream, output / pin["destination"])
+            source = output / pin["destination"] / "source.properties"
+            with regular(source) as stream:
+                properties = stream.read(65537).decode("utf-8")
+            require(len(properties) <= 65536 and re.search(r"(?m)^Pkg.Revision\s*=\s*" + re.escape(pin["revision"]) + r"\s*$", properties), "PACKAGE_REVISION")
+            records.update({pin["destination"] + "/" + k: v for k, v in entries.items()})
+            require(len(records) <= MAX_MEMBERS, "TOTAL_FILE_BOUND")
+            require(sum(v.get("bytes", 0) for v in records.values()) <= MAX_EXPANDED, "TOTAL_EXPANSION_BOUND")
+            archive.unlink()
+    with deadline(phase_budget(end, 2400)):
+        inventory = canonical(records)
+        (output / "inventory.json").write_bytes(inventory)
+        (output / "provenance.json").write_bytes(canonical(dict(schema=1, kind="hosted-android-materialization",
+            inputs=inputs, inventory_sha256=hashlib.sha256(inventory).hexdigest(), files=len(records),
+            runtime_executed=False, independent_sha256_authority=False)))
+        return verify(output)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fetch", action="store_true")
@@ -234,30 +274,7 @@ def main():
         and info.st_uid == os.getuid() and not info.st_mode & 0o022, "PRIVATE_OUTPUT_PARENT")
     os.umask(0o077)
     args.output.mkdir(mode=0o700)
-    inputs, records = {}, {}
-    with deadline(2400):
-        for name, pin in pins().items():
-            archive = args.output / ("gradle-8.13-all.zip" if name == "gradle" else "." + name + ".zip")
-            inputs[name] = download(pin, archive)
-            if name == "gradle":
-                records[archive.name] = dict(kind="file", bytes=pin["bytes"], sha256=pin["digest"], mode=0o600)
-                continue
-            with regular(archive) as stream, deadline(240):
-                entries = extract(stream, args.output / pin["destination"])
-            source = args.output / pin["destination"] / "source.properties"
-            with regular(source) as stream:
-                properties = stream.read(65537).decode("utf-8")
-            require(len(properties) <= 65536 and re.search(r"(?m)^Pkg.Revision\s*=\s*" + re.escape(pin["revision"]) + r"\s*$", properties), "PACKAGE_REVISION")
-            records.update({pin["destination"] + "/" + k: v for k, v in entries.items()})
-            require(len(records) <= MAX_MEMBERS, "TOTAL_FILE_BOUND")
-            require(sum(v.get("bytes", 0) for v in records.values()) <= MAX_EXPANDED, "TOTAL_EXPANSION_BOUND")
-            archive.unlink()
-    inventory = canonical(records)
-    (args.output / "inventory.json").write_bytes(inventory)
-    (args.output / "provenance.json").write_bytes(canonical(dict(schema=1, kind="hosted-android-materialization",
-        inputs=inputs, inventory_sha256=hashlib.sha256(inventory).hexdigest(), files=len(records),
-        runtime_executed=False, independent_sha256_authority=False)))
-    print(json.dumps(verify(args.output)))
+    print(json.dumps(materialize(args.output)))
 
 
 if __name__ == "__main__":

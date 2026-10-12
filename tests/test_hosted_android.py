@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Inert archive/contract tests: no Android/Java/Flutter process is executed."""
 import hashlib
+from contextlib import contextmanager, redirect_stdout
 import io
 import json
 import os
 from pathlib import Path
 import runpy
+import signal
 import stat
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -107,6 +110,90 @@ class AndroidInputs(unittest.TestCase):
                 (root / "extra").write_bytes(b"x")
                 with self.assertRaisesRegex(ValueError, "TREE_CLOSURE"):
                     M["verify"](root)
+
+    def test_actual_orchestration_uses_sequential_clipped_alarms(self):
+        # Tiny inert bytes through the REAL download/extract/verify flow; the
+        # opener is fake, no Android archive or executable is acquired/run.
+        data = archive([("fixture/source.properties", b"Pkg.Revision=1\n", 0o100644),
+                        ("fixture/LICENSE", b"unchanged fixture notice", 0o100644)]).getvalue()
+        gradle = b"inert distribution fixture"
+        pin = dict(url="https://dl.google.com/android/repository/inert.zip", bytes=len(data),
+            algorithm="sha1", digest=hashlib.sha1(data).hexdigest(), destination="sdk/inert", revision="1", checksum_source="fixture")
+        gp = dict(url="https://services.gradle.org/distributions/inert.zip", bytes=len(gradle),
+            algorithm="sha256", digest=hashlib.sha256(gradle).hexdigest(), checksum_source="fixture")
+        observed = []
+        original_deadline = M["deadline"]
+        @contextmanager
+        def measured(seconds):
+            self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+            observed.append(seconds)
+            with original_deadline(seconds):
+                yield
+        class Response(io.BytesIO):
+            status = 200
+            def __init__(self, raw):
+                super().__init__(raw)
+                self.headers = {"Content-Length": str(len(raw))}
+        class Opener:
+            def open(self, url, timeout):
+                self_timer = signal.getitimer(signal.ITIMER_REAL)[0]
+                if not 0 < self_timer <= 600:
+                    raise AssertionError("real download alarm not armed")
+                return Response(data if url == pin["url"] else gradle)
+        handler = signal.getsignal(signal.SIGALRM)
+        globals_ = M["materialize"].__globals__
+        with tempfile.TemporaryDirectory() as parent:
+            root = Path(parent)
+            (root / "build").mkdir(mode=0o700)
+            out = root / "build/output"
+            old_umask = os.umask(0o077)
+            try:
+                with patch.dict(globals_, ROOT=root, pins=lambda: {"fixture": pin, "gradle": gp}, deadline=measured), \
+                        patch.object(M["urllib"].request, "build_opener", return_value=Opener()), \
+                        patch.object(M["time"], "monotonic", side_effect=[100, 200, 400, 2490, 2499]), \
+                        patch("sys.argv", ["prepare", "--fetch", "--output", str(out)]), redirect_stdout(io.StringIO()) as printed:
+                    M["main"]()
+                self.assertFalse(json.loads(printed.getvalue())["runtime_executed"])
+                self.assertEqual(observed, [600, 240, 10, 1])
+                self.assertEqual((out / "sdk/inert/LICENSE").read_bytes(), b"unchanged fixture notice")
+                self.assertFalse((out / ".fixture.zip").exists())
+            finally:
+                os.umask(old_umask)
+        self.assertEqual(signal.getsignal(signal.SIGALRM), handler)
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+
+    def test_old_nested_alarm_reproduces_actual_hosted_failure(self):
+        with tempfile.TemporaryDirectory() as parent, M["deadline"](2400):
+            with self.assertRaisesRegex(ValueError, "outer process alarm is already active"):
+                # Guard fails before any opener request, precisely as hosted.
+                M["download"](M["GRADLE"], Path(parent) / "inert.zip")
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+
+    def test_expired_whole_budget_prevents_next_phase(self):
+        with patch.object(M["time"], "monotonic", return_value=100):
+            for end in (99, 100):
+                with self.subTest(end=end), self.assertRaisesRegex(ValueError, "MATERIALIZATION_DEADLINE"):
+                    M["phase_budget"](end, 600)
+            self.assertEqual(M["phase_budget"](105, 600), 5)
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+
+    def test_real_alarm_expiration_restores_original_handler(self):
+        handler = signal.getsignal(signal.SIGALRM)
+        with self.assertRaises(TimeoutError), M["deadline"](0.01):
+            time.sleep(0.03)
+        self.assertEqual(signal.getsignal(signal.SIGALRM), handler)
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+
+    def test_download_failure_also_restores_alarm(self):
+        handler = signal.getsignal(signal.SIGALRM)
+        class Failing:
+            def open(self, *args, **kwargs):
+                raise OSError("inert network failure")
+        with tempfile.TemporaryDirectory() as parent, patch.object(M["urllib"].request, "build_opener", return_value=Failing()), \
+                self.assertRaises(OSError):
+            M["download"](M["GRADLE"], Path(parent) / "inert.zip", seconds=1)
+        self.assertEqual(signal.getsignal(signal.SIGALRM), handler)
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
 
 
 if __name__ == "__main__":
