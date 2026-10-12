@@ -9,6 +9,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -80,7 +81,7 @@ class HostedOvermorrow(unittest.TestCase):
         self.assertEqual(env["HOME"], "/home/runner")
         self.assertEqual(env["PUB_CACHE"], "/state/pub-cache")
         self.assertEqual(env["PUB_HOSTED_URL"], "https://pub.dev")
-        self.assertEqual(env["PATH"], f'{W["SDK"]}/bin:/usr/bin:/bin')
+        self.assertEqual(env["PATH"], f'{W["SDK"]}/bin:/tools:/usr/bin:/bin')
         self.assertEqual(env["FLUTTER_SUPPRESS_ANALYTICS"], "true")
         self.assertEqual(env["DART_SUPPRESS_ANALYTICS"], "true")
         self.assertEqual(env["GIT_OPTIONAL_LOCKS"], "0")
@@ -118,8 +119,39 @@ class HostedOvermorrow(unittest.TestCase):
             self.assertIn(["--remount-ro", "/home/runner"], [argv[i:i+2] for i in range(len(argv))])
             self.assertIn(["--ro-bind", "/etc/fonts", "/etc/fonts"], [argv[i:i+3] for i in range(len(argv))])
             self.assertNotIn("/state", argv)
+            self.assertNotIn("/tools/which", argv)
         with self.assertRaisesRegex(ValueError, "BROWSER_OUTPUT_REQUIRED"):
             W["sandbox"]([], mode="browser", proof=Path("/arbitrary"))
+
+    def test_build_which_alias_is_exact_readonly_and_never_mounts_alternatives(self):
+        for mode in ("acquire", "compile"):
+            argv = W["sandbox"](["/usr/bin/true"], mode=mode)
+            self.assertIn(["--symlink", "/usr/bin/which.debianutils", "/tools/which"],
+                [argv[i:i+3] for i in range(len(argv))])
+            self.assertLess(argv.index("/tools/which"), argv.index("--remount-ro"))
+            self.assertNotIn("/etc/alternatives", argv)
+        self.assertIn("os.statvfs('/tools').f_flag & os.ST_RDONLY", W["PROBE"])
+
+    def test_system_which_record_rejects_changed_origin_ownership_or_permissions(self):
+        raw = b"#!/bin/sh\n# inert test script\n"
+        good = dict(st_mode=stat.S_IFREG | 0o755, st_uid=0, st_nlink=1)
+        with patch.object(Path, "resolve", return_value=W["WHICH"]), \
+                patch.object(Path, "lstat", return_value=SimpleNamespace(**good)), \
+                patch.object(H, "read", return_value=raw) as read:
+            value = W["system_tools"]()
+        read.assert_called_once_with(W["WHICH"], 32768)
+        self.assertEqual(value["which"], dict(path="/usr/bin/which.debianutils", bytes=len(raw),
+            sha256=hashlib.sha256(raw).hexdigest(), sandbox_alias="/tools/which"))
+        for change in (dict(st_uid=1000), dict(st_nlink=2), dict(st_mode=stat.S_IFREG | 0o777),
+                       dict(st_mode=stat.S_IFREG | 0o644), dict(st_mode=stat.S_IFLNK | 0o755)):
+            with patch.object(Path, "resolve", return_value=W["WHICH"]), \
+                    patch.object(Path, "lstat", return_value=SimpleNamespace(**(good | change))), \
+                    patch.object(H, "read") as read, self.assertRaisesRegex(ValueError, "UNSAFE_WHICH"):
+                W["system_tools"]()
+            read.assert_not_called()
+        with patch.object(Path, "resolve", return_value=Path("/unreviewed/which")), \
+                self.assertRaisesRegex(ValueError, "CANONICAL_WHICH_REQUIRED"):
+            W["system_tools"]()
 
     def test_flutter_actions_are_exact_existing_contract_not_arbitrary_shell(self):
         actions = W["build_contract"]()["ACTIONS"]

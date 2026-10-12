@@ -63,12 +63,12 @@ jobs:
           test "$(id -u)" != 0
           timeout 180s sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update
           timeout 300s sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
-            apparmor bubblewrap git python3 util-linux iproute2 ca-certificates curl unzip xz-utils zip libglu1-mesa \
+            apparmor bubblewrap git python3 util-linux iproute2 ca-certificates curl unzip xz-utils zip libglu1-mesa debianutils \
             libgtk-3-0t64 libdbus-glib-1-2 libasound2t64 libx11-xcb1 libxt6t64 libpci3 fonts-dejavu-core \
             libnspr4 libevent-2.1-7t64 libvpx9
           umask 077
           dpkg-query -W apparmor bubblewrap git python3 util-linux iproute2 ca-certificates curl unzip xz-utils zip \
-            libglu1-mesa libc6 libstdc++6 libgtk-3-0t64 libdbus-glib-1-2 libasound2t64 libx11-xcb1 \
+            libglu1-mesa debianutils libc6 libstdc++6 libgtk-3-0t64 libdbus-glib-1-2 libasound2t64 libx11-xcb1 \
             libxt6t64 libpci3 fonts-dejavu-core libnspr4 libevent-2.1-7t64 libvpx9 \
             > build/hosted-overmorrow-packages.txt
       - name: Prepare the pinned public Flutter SDK without executing it

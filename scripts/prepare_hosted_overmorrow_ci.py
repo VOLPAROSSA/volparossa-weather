@@ -31,6 +31,7 @@ TABLE_PROOF = BUILD / "overmorrow-hosted-table-ci"
 WORKFLOW = "Build hosted Overmorrow client"
 GIB = 1024**3
 FLUTTER_MEMORY = 3 * GIB
+WHICH = Path("/usr/bin/which.debianutils")
 PROFILE_DIRS = ("profile", "config", "cache", "runtime", "tmp", "appdata")
 
 # Private module: reuse the independently reviewed process drain, AppArmor,
@@ -67,7 +68,7 @@ def guards(environment):
 
 def environment():
     # No inherited HOME/config, Dart options, proxy, registry or authentication.
-    return dict(H.BASE_ENV, PATH=f"{SDK}/bin:/usr/bin:/bin", HOME="/home/runner",
+    return dict(H.BASE_ENV, PATH=f"{SDK}/bin:/tools:/usr/bin:/bin", HOME="/home/runner",
         USER="runner", LOGNAME="runner", CI="true", BOT="true", TZ="UTC",
         FLUTTER_SUPPRESS_ANALYTICS="true", DART_SUPPRESS_ANALYTICS="true",
         PUB_CACHE="/state/pub-cache", PUB_HOSTED_URL="https://pub.dev",
@@ -93,6 +94,10 @@ def sandbox(command, *, mode, proof=None):
     index = argv.index("--remount-ro")
     require(argv[index:index+2] == ["--remount-ro", "/home/runner"], "SANDBOX_TEMPLATE_CHANGED")
     argv[index:index+2] = ["--bind", str(SDK / "bin/cache"), str(SDK / "bin/cache")]
+    # Ubuntu's /usr/bin/which is an alternatives link through the deliberately
+    # absent /etc/alternatives. Expose only the recorded canonical implementation
+    # through an alias in the new root, not the runner's alternatives directory.
+    argv[index:index] = ["--dir", "/tools", "--symlink", str(WHICH), "/tools/which"]
     argv[argv.index("--cpu=300")] = "--cpu=900"
     return argv
 
@@ -119,6 +124,9 @@ if browser:
  assert os.stat('/home/runner/.mozilla').st_ino==os.stat(Path(sys.argv[4])/'appdata').st_ino
  assert os.statvfs('/home/runner').f_flag & os.ST_RDONLY
 else:
+ assert Path('/tools/which').is_symlink() and os.readlink('/tools/which')=='/usr/bin/which.debianutils'
+ assert Path('/tools/which').resolve(strict=True)==Path('/usr/bin/which.debianutils')
+ assert os.access('/tools/which',os.X_OK) and os.statvfs('/tools').f_flag & os.ST_RDONLY
  for p in ['/state',sys.argv[6]+'/bin/cache','/home/runner']:
   assert not os.statvfs(p).f_flag & os.ST_RDONLY
 for line in Path('/proc/self/mountinfo').read_text().splitlines():
@@ -198,6 +206,16 @@ def sdk_inventory(allow_build_state=False):
     return preparer["verify_materialized"](SDK, allow_build_state=allow_build_state)
 
 
+def system_tools():
+    require(WHICH.resolve(strict=True) == WHICH, "CANONICAL_WHICH_REQUIRED")
+    info = WHICH.lstat()
+    require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1
+            and not info.st_mode & 0o022 and info.st_mode & 0o111, "UNSAFE_WHICH")
+    raw = H.read(WHICH, 32768)
+    return dict(schema=1, kind="hosted-overmorrow-system-tools", which=dict(
+        path=str(WHICH), bytes=len(raw), sha256=H.sha(raw), sandbox_alias="/tools/which"))
+
+
 def browser_command(proof, netns):
     require(proof in (PROOF, TABLE_PROOF), "BROWSER_OUTPUT_REQUIRED")
     driver = "smoke_browser.py" if proof == PROOF else "smoke_table_browser.py"
@@ -259,8 +277,10 @@ def execute(helper, platform):
         H.save("baseline.json", baseline)
         runtime = H.runtime_inventory()
         sdk = sdk_inventory()
+        tools = system_tools()
         H.save("runtime-binding.json", runtime)
         H.save("sdk-binding.json", sdk)
+        H.save("system-tools.json", tools)
         H.private_directory(PRIVATE)
         for name in ("config", "cache", "pub-cache"):
             H.private_directory(PRIVATE / name)
@@ -278,6 +298,7 @@ def execute(helper, platform):
         H.run("source-stage", ["/usr/bin/python3", "-B", str(HERE / "stage.py"), "--execute", "--destination", str(STAGE)], 270)
         pin = H.document(HERE / "upstream.json")
         verify_phase_inputs(helper, pin)
+        require(system_tools() == tools, "SYSTEM_TOOLS_CHANGED")
         preflight("acquire")
         H.run("pub-acquisition", sandbox(flutter_command("dependencies"), mode="acquire"), 600,
               env=environment(), memory=FLUTTER_MEMORY)
@@ -331,9 +352,11 @@ def execute(helper, platform):
         require(H.runtime_inventory() == runtime, "RUNTIME_CHANGED_DURING_BUILD")
         H.verify_firefox_copy(files)
         sdk_after = verify_phase_inputs(helper, pin)
+        require(system_tools() == tools, "SYSTEM_TOOLS_CHANGED")
         H.save("build.json", dict(schema=1, kind="hosted-overmorrow-build", weather_commit=os.environ["GITHUB_SHA"],
             browser_commit=H.BROWSER_COMMIT, upstream_commit=pin["commit"], lock_sha256=pin["pubspec_lock_sha256"],
             flutter_commit=pin["flutter_commit"], sdk_materialization=sdk, sdk_final_binding=sdk_after,
+            system_tools=tools,
             sdk_executed_in_disposable_sandbox=True, runtime=runtime, reports=reports,
             deployment_sha256=H.sha(H.read(OUTPUT / "deployment.json")), flutter_tests=23,
             compiled_networkless=True, locked_dependencies=True, actual_synthetic_ui=True,
