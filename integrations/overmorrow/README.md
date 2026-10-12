@@ -53,6 +53,28 @@ unverified. This synthetic browser proof establishes neither forecast accuracy
 nor mobile execution; background lifecycle and native home-screen widgets remain
 open.
 
+## Hosted build and browser trials
+
+The [hosted workflow](../../.github/workflows/hosted-overmorrow.yml) prepares a
+public, source-bound Overmorrow build for the next core integration trial. It
+keeps the existing local results above unchanged. The new hosted sequence is not
+verified until its build, both browser trials and cleanup have passed.
+
+The workflow uses the same pinned Flutter 3.38.5 archive and upstream dependency
+lock. SDK acquisition is explicit and verifies the official archive before
+extracting it; it does not install a global SDK. Dependency acquisition is
+separate from offline compilation and tests. The existing real CanvasKit UI is
+then exercised in Firefox with synthetic products, followed by the separate
+ordered-table trial. Both are needed: the first checks refresh, independent
+failures, expiry and navigation; the second checks exact rows, cells and source
+time windows.
+
+Only successful public web assets, the reviewed browser/fixture runtimes and
+their notices are exported for later admission into the core trial. Original
+build and browser reports remain separate. SDKs, dependency caches, browser
+profiles and Git data are not uploaded. These synthetic trials make no weather
+source requests and do not prove core delivery or native Android/iOS operation.
+
 ## Joined core delivery trial
 
 The core's version-three Weather bundle selects this actual Overmorrow client,
