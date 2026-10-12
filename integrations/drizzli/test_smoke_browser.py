@@ -3,11 +3,13 @@
 """Inert fixture-boundary tests; no Firefox, namespace or network launch."""
 import importlib.util
 import copy
+import base64
 import json
 import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -18,6 +20,52 @@ spec.loader.exec_module(SMOKE)
 
 
 class Boundaries(unittest.TestCase):
+    def stderr_pipe(self):
+        reader, writer = os.pipe()
+        stream = os.fdopen(reader, "rb", buffering=0)
+        return SMOKE.StartupStderr(stream), writer
+
+    def test_startup_stderr_is_bounded_exact_and_binds_exit_status(self):
+        capture, writer = self.stderr_pipe()
+        original = b"error loading library: libexample.so\n" + b"x" * 3000
+        os.write(writer, original)
+        os.close(writer)
+        self.assertTrue(capture.finish())
+        value = capture.diagnostic(127, 127)
+        self.assertEqual(value["exit_code"], 127)
+        self.assertEqual(value["exit_code_before_cleanup"], 127)
+        self.assertGreaterEqual(value["observed_elapsed_ms"], 0)
+        self.assertEqual(base64.b64decode(value["stderr_prefix"]), original[:SMOKE.MAX_STARTUP_STDERR])
+        self.assertEqual(value["observed_bytes"], len(original))
+        self.assertEqual(value["captured_bytes"], SMOKE.MAX_STARTUP_STDERR)
+        self.assertTrue(value["truncated"])
+        self.assertEqual(value["prefix_sha256"], SMOKE.hashlib.sha256(original[:SMOKE.MAX_STARTUP_STDERR]).hexdigest())
+        self.assertFalse(value["read_failed"])
+
+    def test_startup_capture_freezes_before_navigation_but_still_drains(self):
+        capture, writer = self.stderr_pipe()
+        os.write(writer, b"startup only")
+        deadline = time.monotonic() + 1
+        while capture.observed != 12 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        self.assertEqual(capture.observed, 12)
+        capture.freeze()
+        os.write(writer, b"later page URL and private page contents must not be retained")
+        os.close(writer)
+        self.assertTrue(capture.finish())
+        value = capture.diagnostic(0)
+        self.assertEqual(base64.b64decode(value["stderr_prefix"]), b"startup only")
+        self.assertEqual(value["observed_bytes"], 12)
+
+    def test_stderr_cleanup_does_not_claim_eof_while_a_writer_remains(self):
+        capture, writer = self.stderr_pipe()
+        try:
+            self.assertFalse(capture.finish())
+            self.assertFalse(capture.thread.is_alive())
+            self.assertFalse(capture.diagnostic(None)["stream_eof"])
+        finally:
+            os.close(writer)
+
     def test_refresh_waits_for_weather_and_air_quality_to_finish(self):
         client = Mock()
         client.script.side_effect = [False, False, True]

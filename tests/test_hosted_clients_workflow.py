@@ -2,6 +2,7 @@
 """Inert checks for the hosted client workflow's source and export boundary."""
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import unittest
 
@@ -48,6 +49,20 @@ class HostedClientWorkflowTests(unittest.TestCase):
         self.assertNotRegex(self.source, r"(?m)^\s+build/?\s*$")
         self.assertIn("build/drizzli-hosted-browser-ci/report.json", self.source)
         self.assertIn("core input profile before joined execution", self.source)
+
+    def test_firefox_external_libraries_are_installed_and_recorded(self):
+        # The exact admitted Debian Firefox libxul has these DT_NEEDED libraries;
+        # do not rely on their incidental presence in a hosted runner image.
+        block = self.source.split("- name: Install dependencies only on this disposable runner\n", 1)[1]
+        block = block.split("- name: Prepare authenticated public Node npm and Firefox inputs", 1)[0]
+        commands = block.replace("\\\n", " ")
+        install = re.search(r"apt-get install ([^\n]+)", commands).group(1)
+        inventory = re.search(r"dpkg-query -W ([^\n]+)", commands).group(1)
+        for package in ("libnspr4", "libevent-2.1-7t64", "libvpx9"):
+            with self.subTest(package=package):
+                self.assertEqual(shlex.split(install).count(package), 1)
+                self.assertEqual(shlex.split(inventory).count(package), 1)
+        self.assertIn("> build/hosted-client-packages.txt", inventory)
 
     def test_embedded_shell_syntax(self):
         blocks = re.findall(r"(?m)^        run: \|\n((?:          .*\n|\n)+)", self.source)

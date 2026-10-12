@@ -61,11 +61,13 @@ jobs:
           timeout 180s sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update
           timeout 300s sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
             apparmor bubblewrap git python3 util-linux iproute2 ca-certificates \
-            libgtk-3-0t64 libdbus-glib-1-2 libasound2t64 libx11-xcb1 libxt6t64 libpci3 fonts-dejavu-core
+            libgtk-3-0t64 libdbus-glib-1-2 libasound2t64 libx11-xcb1 libxt6t64 libpci3 fonts-dejavu-core \
+            libnspr4 libevent-2.1-7t64 libvpx9
           umask 077
           dpkg-query -W apparmor bubblewrap git python3 util-linux iproute2 ca-certificates \
             libc6 libstdc++6 libgtk-3-0t64 libdbus-glib-1-2 libasound2t64 libx11-xcb1 \
-            libxt6t64 libpci3 fonts-dejavu-core > build/hosted-client-packages.txt
+            libxt6t64 libpci3 fonts-dejavu-core libnspr4 libevent-2.1-7t64 libvpx9 \
+            > build/hosted-client-packages.txt
       - name: Prepare authenticated public Node npm and Firefox inputs
         run: |
           set -euo pipefail
