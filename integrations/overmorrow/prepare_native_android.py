@@ -53,7 +53,17 @@ NETWORK = '''<?xml version="1.0" encoding="utf-8"?>
     </domain-config>
 </network-security-config>
 '''
-GRADLE_PROPERTIES = '''org.gradle.jvmargs=-Xmx1536m -XX:MaxMetaspaceSize=512m -XX:ReservedCodeCacheSize=128m -Dfile.encoding=UTF-8
+# Flutter f6ff1529's android_jar target/create_flutter_jar.py puts only native
+# libraries in this separate artifact, not the Java embedding. AGP 8.11.1
+# matches ignore expressions against the absolute input path. Do not generalize
+# this to other engine versions, ABIs, embedding JARs or plugin dependencies.
+ENGINE_VERSION = "1.0.0-1527ae0ec577a4ef50e65f6fefcfc1326707d9bf"
+JETIFIER_NATIVE_JAR = (r"\A/state/gradle-home/caches/modules-2/files-2[.]1/io[.]flutter/x86_64_debug/"
+    + ENGINE_VERSION.replace(".", "[.]") + r"/[0-9a-f]{40}/x86_64_debug-"
+    + ENGINE_VERSION.replace(".", "[.]") + r"[.]jar\z")
+# Properties.load removes one escaping level before Java Pattern sees \A/\z.
+JETIFIER_NATIVE_PROPERTY = JETIFIER_NATIVE_JAR.replace("\\", "\\\\")
+GRADLE_PROPERTIES = f'''org.gradle.jvmargs=-Xmx1536m -XX:MaxMetaspaceSize=512m -XX:ReservedCodeCacheSize=128m -Dfile.encoding=UTF-8
 org.gradle.workers.max=2
 org.gradle.daemon=false
 org.gradle.parallel=false
@@ -61,6 +71,7 @@ org.gradle.caching=false
 kotlin.compiler.execution.strategy=in-process
 android.useAndroidX=true
 android.enableJetifier=true
+android.jetifier.ignorelist={JETIFIER_NATIVE_PROPERTY}
 android.experimental.lint.version=8.13.2
 '''
 REPLACED = ("android/app/build.gradle.kts", "android/settings.gradle.kts",

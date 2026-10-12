@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -26,6 +27,57 @@ def original():
 
 
 class ProfileTests(unittest.TestCase):
+    def jetifier_pattern(self):
+        properties = P.planned(original(), b'entrypoint')[P.REPLACED[3]].decode()
+        values = [line.split('=', 1)[1] for line in properties.splitlines()
+                  if line.startswith('android.jetifier.ignorelist=')]
+        self.assertEqual(len(values), 1)
+        stored = values[0]
+        # java.util.Properties.load consumes one level of backslash escaping.
+        # This fixed value admits only doubled backslashes, never other escapes
+        # or a comma that AGP would interpret as a second ignore expression.
+        self.assertNotIn('\\', stored.replace('\\\\', ''))
+        self.assertNotIn(',', stored)
+        decoded = stored.replace('\\\\', '\\')
+        self.assertTrue(decoded.startswith('\\A') and decoded.endswith('\\z'))
+        self.assertEqual(stored, decoded.replace('\\', '\\\\'))
+        # Python's strict end anchor is \Z; Java Pattern uses \z.
+        return re.compile(decoded[:-2] + r'\Z')
+
+    def test_jetifier_exact_native_engine_cache_jar(self):
+        pattern = self.jetifier_pattern()
+        version = '1.0.0-1527ae0ec577a4ef50e65f6fefcfc1326707d9bf'
+        actual = ('/state/gradle-home/caches/modules-2/files-2.1/io.flutter/x86_64_debug/'
+                  f'{version}/84cf36d999dbaf1d1922e01ac48b9b05d64a1b88/x86_64_debug-{version}.jar')
+        self.assertIsNotNone(pattern.search(actual))
+        # The cache content key is not build authority; the exact coordinates
+        # and version remain fixed while Gradle verifies dependency bytes.
+        self.assertIsNotNone(pattern.search(actual.replace('84cf36d999dbaf1d1922e01ac48b9b05d64a1b88', 'a' * 40)))
+        for changed in (
+            actual.lstrip('/'), '/other' + actual, actual + '\n', actual + '.backup',
+            actual.replace('/state/', '/tmp/'), actual.replace('io.flutter/', 'other.vendor/'),
+            actual.replace('x86_64_debug', 'flutter_embedding_debug'),
+            actual.replace('x86_64_debug', 'arm64_v8a_debug'),
+            actual.replace('x86_64_debug', 'x86_64_release'),
+            actual.replace(version, '1.0.0-' + '0' * 40),
+            actual.replace('files-2.1', 'files-2x1'),
+            actual.replace('84cf36d999dbaf1d1922e01ac48b9b05d64a1b88', 'a' * 39),
+            actual.replace('84cf36d999dbaf1d1922e01ac48b9b05d64a1b88', 'g' * 40),
+            actual.replace('/x86_64_debug/', '/x86_64_debug/../x86_64_debug/'),
+        ):
+            with self.subTest(path=changed):
+                self.assertIsNone(pattern.search(changed))
+
+    def test_jetifier_remains_enabled_for_embedding_and_plugins(self):
+        properties = P.planned(original(), b'entrypoint')[P.REPLACED[3]].decode().splitlines()
+        self.assertEqual([line for line in properties if line.startswith('android.enableJetifier=')],
+                         ['android.enableJetifier=true'])
+        self.assertIn('android.useAndroidX=true', properties)
+        pattern = self.jetifier_pattern()
+        for name in ('flutter_embedding_debug-1.0.0-1527ae0ec577a4ef50e65f6fefcfc1326707d9bf.jar',
+                     'plugin.jar', 'support-compat-28.0.0.aar'):
+            self.assertIsNone(pattern.search('/state/gradle-home/caches/modules-2/files-2.1/' + name))
+
     def test_only_android_and_new_target_changed(self):
         before = original()
         after = P.planned(before, b'// test entrypoint\n')

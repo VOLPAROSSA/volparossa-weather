@@ -134,7 +134,8 @@ the Gradle fixture, original KVM access restoration and unchanged host network
 namespace pass separately. The aggregate measurement alone does not identify
 which tool dominates memory use.
 
-The next candidate gives only the two fixed app builds a finite 4 GiB process
+The [eighth attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38256253721)
+gives only the two fixed app builds a finite 4 GiB process
 RSS budget. They require at least 6 GiB available before launch and retain the
 2 GiB host reserve throughout execution. Other Android steps keep their 3 GiB
 budgets; workers, JVM heap, deadlines and conservative cleanup are unchanged.
@@ -142,9 +143,29 @@ An optional measurement records Java/Dart/other process counts and RSS from the
 same total-peak sample, without paths, process IDs or command lines. Shared RSS
 can be counted more than once; this is a conservative process-tree measurement,
 not unique physical memory. The separate resource receipt remains configuration
-only. All 51 Android preparation, 35 shared-helper and 11 native preparer tests
-pass locally; build fit, the offline rebuild and installed-app trial still need
-successful hosted execution.
+only. The build reaches `:app:compileDebugKotlin` after Flutter compilation,
+then exits 1 because Jetifier exhausts its Java heap while transforming the
+exact Flutter `x86_64_debug` native-library JAR. The 533-second step peaks at
+4,012,879,872 bytes, below the aggregate limit; that sample contains
+2,615,971,840 bytes of Java RSS, 1,393,250,304 bytes of Dart RSS and 3,657,728
+bytes from other processes. Process drain, policy/staging removal, KVM access
+restoration and unchanged host network namespace are confirmed. All nine
+retained step-log hashes match. No APK, offline rebuild or installed-app result
+is produced.
+
+The next candidate skips only that exact engine-version/native-JAR cache path
+in Jetifier, with strict absolute-path anchors and Java-properties escaping.
+Flutter's pinned [Android target](https://github.com/flutter/flutter/blob/f6ff1529fd6d8af5f706051d9251ac9231c83407/engine/src/flutter/shell/platform/android/BUILD.gn#L501)
+and [JAR writer](https://github.com/flutter/flutter/blob/f6ff1529fd6d8af5f706051d9251ac9231c83407/engine/src/build/android/gyp/create_flutter_jar.py#L51)
+show that this separate artifact contains native libraries only; the Java
+embedding is separate. The official [AGP 8.11.1 source archive](https://dl.google.com/dl/android/maven2/com/android/tools/build/gradle/8.11.1/gradle-8.11.1-sources.jar)
+(`65bc5d04cc52655664894e196f274da781091602a219126b67fd13bd2621ddd6`)
+defines `android.jetifier.ignorelist` and passes a matched input through
+unchanged before transformation. Jetifier remains enabled for embedding and
+plugins. The one-worker/1,024 MiB heap, 4 GiB RSS cap, 2 GiB host reserve and
+deadlines are unchanged. Inert tests check the exact match, escaping and
+rejection of other coordinates, versions, ABIs and paths; they do not establish
+that a real build or installed-app trial succeeds.
 
 The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only
