@@ -62,11 +62,50 @@ class NativeCI(unittest.TestCase):
         self.assertEqual(offline[offline.index("--dependency-verification") + 1], "strict")
         self.assertLess(offline.index("clean"), offline.index("assembleDebug"))
         self.assertIn("--no-daemon", offline)
-        self.assertIn("--max-workers=2", offline)
+        self.assertIn("--max-workers=1", offline)
         self.assertIn("-Ptarget-platform=android-x64", offline)
         defines = next(x for x in offline if x.startswith("-Pdart-defines=")).split("=", 1)[1]
         self.assertEqual([base64.b64decode(x).decode() for x in defines.split(",")],
             ["VOLPAROSSA_WEATHER=true", "VOLPAROSSA_CORE_ORIGIN=http://127.0.0.1:43210"])
+
+    def test_only_app_builds_override_staged_heap_and_workers(self):
+        expected = "-Dorg.gradle.jvmargs=-Xmx1024m -XX:MaxMetaspaceSize=512m -XX:ReservedCodeCacheSize=128m -Dfile.encoding=UTF-8"
+        for acquire in (True, False):
+            argv = M.gradle(acquire)
+            self.assertEqual([x for x in argv if x.startswith("-Dorg.gradle.jvmargs=")], [expected])
+            self.assertEqual([x for x in argv if x.startswith("--max-workers=")], ["--max-workers=1"])
+            self.assertIn("--no-daemon", argv)
+            # The exact-command sandbox still rejects restoring the old heap
+            # or worker count, additional overrides and task changes.
+            mode = "acquire" if acquire else "compile"
+            for changed in ([x.replace("-Xmx1024m", "-Xmx1536m") for x in argv],
+                    ["--max-workers=2" if x == "--max-workers=1" else x for x in argv],
+                    argv + ["-Dorg.gradle.jvmargs=-Xmx2048m"]):
+                with self.assertRaisesRegex(ValueError, "NATIVE_GRADLE_RESOURCE_SCOPE"):
+                    M.gradle_sandbox(changed, mode)
+        self.assertIn("--max-workers=2", M.repository_fixture_command())
+        self.assertFalse(any(x.startswith("-Dorg.gradle.jvmargs=") for x in M.repository_fixture_command()))
+        self.assertIn("-Xmx256m", (ROOT / "tests/fixtures/hosted-android-repositories/gradle.properties").read_text())
+        self.assertNotIn("JAVA_OPTS", M.environment())
+        self.assertEqual(M.environment()["GRADLE_OPTS"], "-Dorg.gradle.daemon=false")
+
+    def test_configured_limits_receipt_is_not_runtime_or_cleanup_evidence(self):
+        value = M.app_gradle_resources()
+        self.assertEqual(value, dict(schema=1, kind="hosted-android-gradle-configured-limits",
+            scope="acquisition-and-offline-app-build", max_workers=1,
+            jvm_args=["-Xmx1024m", "-XX:MaxMetaspaceSize=512m", "-XX:ReservedCodeCacheSize=128m", "-Dfile.encoding=UTF-8"],
+            child_rss_limit_bytes=3221225472, host_reserve_bytes=2147483648,
+            step_timeout_seconds=900, runtime_measurement=False))
+        self.assertEqual("-Dorg.gradle.jvmargs=" + " ".join(value["jvm_args"]),
+            next(x for x in M.gradle(True) if x.startswith("-Dorg.gradle.jvmargs=")))
+        source = (ROOT / "scripts/prepare_hosted_android_ci.py").read_text().split("def execute(", 1)[1]
+        self.assertLess(source.index('H.save("gradle-resources.json", app_gradle_resources())'),
+            source.index('H.run("android-acquisition-build"'))
+        self.assertIn('gradle_configured_limits=app_gradle_resources()', source)
+        # Neither a smaller configuration nor a forced negative child exit may
+        # turn an unconfirmed drain into cleanup success.
+        self.assertIn('helper.DRAIN_CONFIRMED = helper.DRAIN_CONFIRMED and H.DRAIN_CONFIRMED', source)
+        self.assertIn('require(cleanup["complete"], "CLEANUP_UNCONFIRMED")', source)
 
     def test_sandbox_network_and_kvm_separation(self):
         for mode in ("acquire", "compile", "emulator"):

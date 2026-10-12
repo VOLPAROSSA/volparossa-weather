@@ -119,11 +119,20 @@ app build because a locked plugin requires the missing Android 34 platform.
 Other locked plugins require Android 35. Process drain, policy cleanup and KVM
 access restoration pass; no APK or emulator result is produced.
 
-The next candidate adds exactly those two official platform archives to the
-read-only SDK preparation, preserving plugin source and dependency locks. It
-does not enable SDK auto-installation or change build resource limits. The APK
-build, offline rebuild and installed-app trial still require successful hosted
-execution.
+The [sixth attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38251506516)
+adds those two official platform archives to the read-only SDK preparation and
+passes the same Gradle fixture. Flutter debug compilation then exceeds the
+3 GiB aggregate process-memory limit and is stopped. Process drain cannot be
+confirmed, so the sandbox policy and staging are retained rather than reporting
+successful cleanup. The original KVM access is restored and the host network
+namespace is unchanged. No APK, offline rebuild or emulator result is produced.
+
+The corrected candidate reduces only the two app-build commands to one Gradle
+worker and a 1,024 MiB JVM heap. The aggregate 3 GiB limit, 2 GiB host reserve,
+deadlines and conservative cleanup checks remain unchanged. Its resource receipt
+records configuration, not observed memory use. All 51 hosted-preparation tests
+and 11 native preparer tests pass locally; actual build fit, the offline rebuild
+and installed-app trial still require successful hosted execution.
 
 The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only

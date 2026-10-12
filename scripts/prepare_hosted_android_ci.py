@@ -45,6 +45,12 @@ APK = STAGE / "build/app/outputs/flutter-apk/app-debug.apk"
 GRADLE_STATE = (".gradle", "build", ".kotlin")
 GIB = 1024**3
 MEMORY = 3 * GIB
+# The app Gradle JVM remains resident while Flutter starts its own compiler.
+# Lower only the two app-build commands, not the shared aggregate RSS guard.
+# Gradle 8.13 gives these CLI properties precedence over staged properties.
+APP_GRADLE_WORKERS = 1
+APP_GRADLE_JVM_ARGS = ("-Xmx1024m", "-XX:MaxMetaspaceSize=512m",
+    "-XX:ReservedCodeCacheSize=128m", "-Dfile.encoding=UTF-8")
 H.OUTPUT, H.PRIVATE, H.STAGE, H.PROOF = OUTPUT, PRIVATE, STAGE, PROOF
 W.OUTPUT, W.PRIVATE, W.STAGE = OUTPUT, PRIVATE, STAGE
 W.SDK_TOOL_STATE = PRIVATE / "flutter-tool-state"
@@ -136,12 +142,21 @@ def flutter(*args):
     return [str(SDK / "bin/flutter"), "--no-version-check", "--suppress-analytics", *args]
 
 
+def app_gradle_resources():
+    """Configured command limits, not observations of JVM or build success."""
+    return dict(schema=1, kind="hosted-android-gradle-configured-limits",
+        scope="acquisition-and-offline-app-build", max_workers=APP_GRADLE_WORKERS,
+        jvm_args=list(APP_GRADLE_JVM_ARGS), child_rss_limit_bytes=MEMORY,
+        host_reserve_bytes=2 * GIB, step_timeout_seconds=900, runtime_measurement=False)
+
+
 def gradle(acquire):
     # Equivalent properties emitted by pinned Flutter's Gradle builder. Config
     # generation itself is done first by maintained flutter --config-only.
     defines = ",".join(base64.b64encode(s.encode()).decode() for s in
         ("VOLPAROSSA_WEATHER=true", "VOLPAROSSA_CORE_ORIGIN=http://127.0.0.1:43210"))
-    return [str(STAGE / "android/gradlew"), "-p", str(STAGE / "android"), "--no-daemon", "--max-workers=2", "--console=plain",
+    return [str(STAGE / "android/gradlew"), "-p", str(STAGE / "android"), "--no-daemon",
+        f"--max-workers={APP_GRADLE_WORKERS}", "-Dorg.gradle.jvmargs=" + " ".join(APP_GRADLE_JVM_ARGS), "--console=plain",
         "--init-script", str(ROOT / "scripts/hosted-android-repositories.gradle"),
         *( ["--write-verification-metadata", "sha256"] if acquire else ["--offline", "--dependency-verification", "strict", "clean"]),
         "assembleDebug", "-Ptarget-platform=android-x64", "-Ptarget=" + str(STAGE / "lib/volparossa_native_trial.dart"),
@@ -404,6 +419,7 @@ def execute(helper, platform):
         # by Gradle. Properties were separately pinned by the native preparer.
         require(H.digest(STAGE / "android/gradle/wrapper/gradle-wrapper.jar") ==
             H.digest(SDK / "bin/cache/artifacts/gradle_wrapper/gradle/wrapper/gradle-wrapper.jar"), "WRAPPER_CHANGED")
+        H.save("gradle-resources.json", app_gradle_resources())
         H.run("android-acquisition-build", gradle_sandbox(gradle(True), "acquire"), 900, env=environment(), cwd=STAGE / "android", memory=MEMORY)
         metadata = verification_metadata()
         H.save("dependency-capture.json", metadata)
@@ -430,6 +446,7 @@ def execute(helper, platform):
         validate_report(original)
         H.save("build.json", dict(schema=1, kind="hosted-android-debug-trial", source_commit=os.environ["GITHUB_SHA"],
             apk=apk, runtime=runtime, sdk=sdk, android=android, native_sources=native, dependencies=metadata,
+            gradle_configured_limits=app_gradle_resources(),
             installed_report_sha256=H.sha(H.read(PROOF / "report.json")), actual_installed_app=True,
             acquisition_build_network_enabled=True, final_build_networkless=True, emulator_networkless=True,
             core_delivery=False, weather_origin=False, release_authority=False))
