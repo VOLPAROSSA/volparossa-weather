@@ -38,6 +38,9 @@ GOOGLE_INPUTS = {
     "platform-35": ("platform-35_r02.zip", 64273788, "0bb560a90a7a2cbd0dd8348224d518b638fe7949", "sdk/platforms/android-35", "2"),
     "build-tools": ("build-tools_r35_linux.zip", 61958799, "2cfaa0bbb2336e9ec18ed3ecea84fa2e2af607bc", "sdk/build-tools/35.0.0", "35.0.0"),
     "ndk": ("android-ndk-r28c-linux.zip", 722261334, "a7b54a5de87fecd125a17d54f73c446199e72a64", "sdk/ndk/28.2.13676358", "28.2.13676358"),
+    # AGP 8.11.1 defaults native CMake tasks to 3.22.1. Its official archive
+    # includes CMake, Ninja and their notices directly, without a wrapper root.
+    "cmake": ("cmake-3.22.1-linux.zip", 22308647, "fd0a48b4a758310df8c7aa51f59840ed48fe7ed8", "sdk/cmake/3.22.1", "3.22.1"),
     "command-line": ("commandlinetools-linux-13114758_latest.zip", 164760899, "5fdcc763663eefb86a5b8879697aa6088b041e70", "sdk/cmdline-tools/19.0", "19.0"),
     "platform-tools": ("platform-tools_r37.0.1-linux.zip", 9054187, "477254aa5f903c15cf51001717bdf347fb6b53e0", "sdk/platform-tools", "37.0.1"),
     "emulator": ("emulator-linux_x64-16428233.zip", 349654171, "cd7362ea55dfb86a418958138dc396e74165dd01", "sdk/emulator", "37.2.12"),
@@ -56,6 +59,7 @@ def pins():
     result = {name: dict(url=GOOGLE + row[0], bytes=row[1], algorithm="sha1", digest=row[2],
         destination=row[3], revision=row[4], checksum_source=SYSTEM_IMAGES if name == "system-image" else REPOSITORY)
         for name, row in GOOGLE_INPUTS.items()}
+    result["cmake"]["archive_layout"] = "cmake-3.22.1"
     return dict(result, gradle=GRADLE)
 
 
@@ -147,8 +151,9 @@ def download(pin, target, *, seconds=600):
     return dict(pin, observed_sha256=sha.hexdigest())
 
 
-def extract(stream, output):
-    """Strip exactly one archive root; retain safe internal links without following them."""
+def extract(stream, output, *, layout="single-root"):
+    """Use the pinned package layout; retain internal links without following them."""
+    require(layout in ("single-root", "cmake-3.22.1"), "ARCHIVE_LAYOUT")
     with zipfile.ZipFile(stream) as archive:
         entries = archive.infolist()
         require(1 <= len(entries) <= MAX_MEMBERS, "ARCHIVE_ENTRIES")
@@ -156,7 +161,7 @@ def extract(stream, output):
         for item in entries:
             name = safe(item.filename.rstrip("/"))
             roots.add(name.split("/")[0])
-            relative = name.partition("/")[2]
+            relative = name.partition("/")[2] if layout == "single-root" else name
             if not relative:
                 require(item.is_dir(), "ARCHIVE_ROOT")
                 continue
@@ -169,7 +174,8 @@ def extract(stream, output):
             total += item.file_size
             require(total <= MAX_EXPANDED, "ARCHIVE_EXPANSION")
             records[relative] = (kind, item, mode)
-        require(len(roots) == 1, "ARCHIVE_ROOTS")
+        require(len(roots) == 1 if layout == "single-root"
+            else roots == {"bin", "doc", "share", "source.properties"}, "ARCHIVE_ROOTS")
         for name in records:
             for parent in PurePosixPath(name).parents:
                 if str(parent) != "." and str(parent) in records:
@@ -292,7 +298,8 @@ def materialize(output):
             continue
         with deadline(phase_budget(end, 240)):
             with regular(archive) as stream:
-                entries = extract(stream, output / pin["destination"])
+                entries = extract(stream, output / pin["destination"],
+                    layout=pin.get("archive_layout", "single-root"))
             source = output / pin["destination"] / "source.properties"
             with regular(source) as stream:
                 properties = stream.read(65537).decode("utf-8")

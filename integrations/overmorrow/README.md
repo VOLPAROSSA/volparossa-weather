@@ -287,7 +287,27 @@ expected and received byte counts, and expected and observed digests. Rejection
 still stops before extraction or execution; there is no automatic retry or
 checksum fallback. The receipt excludes URLs, response bodies and headers.
 All 79 targeted lightweight checks and independent review pass; actual preparation
-and native execution on the corrected source remain required.
+and native execution are assessed by the next trial below.
+
+The [fifteenth attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38291836603)
+on `68059b02` passes input preparation and the real Gradle repository fixture,
+then reaches `:app:configureCMakeDebug[arm64-v8a]`. It fails because CMake 3.22.1
+is missing from the read-only SDK. The build exits 1 after 705.209 seconds;
+peak aggregate RSS is 3,539,718,144 bytes, below 4 GiB. No heap-exhaustion marker
+is observed in this run. All nine original step-log hashes match, and process
+drain, policy/staging removal, KVM access restoration and unchanged host network
+namespace pass. No completed APK, offline rebuild or installed-app proof exists.
+
+The correction adds the exact official CMake 3.22.1 Linux archive, including
+Ninja and the original notices. Its size and checksum are pinned from Google's
+[repository metadata](https://dl.google.com/android/repository/repository2-3.xml).
+Only this package uses the verified rootless layout with `bin`, `doc`, `share`
+and `source.properties`; all other archives retain the single-root rule.
+Extraction and inventory checks still reject unsafe paths, links, file types,
+excessive expansion and changed bytes. There is no SDK auto-installation,
+blanket license acceptance or ABI filtering. All 82 inert Android tests and
+independent review pass; actual full-archive verification and native execution
+remain required. Resource limits and the upstream dependency lock are unchanged.
 
 The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only
@@ -309,7 +329,7 @@ iOS operation, home-screen widgets or release readiness.
 The [official Android and Gradle input pins](../../scripts/prepare_hosted_android.py)
 record exact archive URLs, sizes and published checksums. The native stage uses
 Android API 36, additional compile platforms 34/35 for locked plugins,
-build-tools 35.0.0, NDK 28.2.13676358 and Gradle 8.13; its
+build-tools 35.0.0, NDK 28.2.13676358, CMake 3.22.1 and Gradle 8.13; its
 Android-only plugin change selects AGP 8.11.1. Java 17 comes from the disposable
 runner's recorded system packages. Google archive pins use the published SHA1;
 an observed SHA256 is additional provenance, not independent authorization.

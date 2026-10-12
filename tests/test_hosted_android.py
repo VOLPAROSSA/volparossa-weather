@@ -37,12 +37,78 @@ class AndroidInputs(unittest.TestCase):
 
     def test_exact_official_pins(self):
         p = M["pins"]()
-        self.assertEqual(len(p), 10)
+        self.assertEqual(len(p), 11)
         self.assertEqual(p["gradle"]["algorithm"], "sha256")
         self.assertEqual(p["system-image"]["destination"], "sdk/system-images/android-36/default/x86_64")
         self.assertTrue(all(v["algorithm"] == "sha1" and v["url"].startswith(M["GOOGLE"])
             for k, v in p.items() if k != "gradle"))
         self.assertEqual(p["ndk"]["revision"], "28.2.13676358")
+
+    def test_cmake_is_one_exact_official_rootless_input(self):
+        pins = M["pins"]()
+        self.assertEqual(pins["cmake"], dict(url=M["GOOGLE"] + "cmake-3.22.1-linux.zip",
+            bytes=22308647, algorithm="sha1", digest="fd0a48b4a758310df8c7aa51f59840ed48fe7ed8",
+            destination="sdk/cmake/3.22.1", revision="3.22.1", checksum_source=M["REPOSITORY"],
+            archive_layout="cmake-3.22.1"))
+        self.assertEqual([name for name, pin in pins.items() if "archive_layout" in pin], ["cmake"])
+
+    def test_cmake_real_materialization_preserves_tools_notices_and_readonly_inventory(self):
+        # Model the observed official ZIP's rootless layout with inert bytes.
+        # The real download/hash/extract/revision/inventory path runs, no tool does.
+        data = archive([
+            ("source.properties", b"Pkg.Revision = 3.22.1\nPkg.Path = cmake;3.22.1\nPkg.Desc = CMake 3.22.1\n", 0o600),
+            ("bin/cmake", b"inert CMake", 0o100755),
+            ("bin/ninja", b"inert Ninja", 0o100755),
+            ("doc/ninja/LICENSE", b"original Ninja notice", 0o100644),
+            ("share/cmake-3.22/Modules/fixture.cmake", b"inert module", 0o100644),
+        ]).getvalue()
+        pin = dict(M["pins"]()["cmake"], bytes=len(data), digest=hashlib.sha1(data).hexdigest())
+        class Response(io.BytesIO):
+            status = 200
+            headers = {"Content-Length": str(len(data))}
+        class Opener:
+            def open(self, url, timeout):
+                return Response(data)
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root)
+            old_umask = os.umask(0o077)
+            try:
+                with patch.dict(M["materialize"].__globals__, pins=lambda: {"cmake": pin}), \
+                        patch.object(M["urllib"].request, "build_opener", return_value=Opener()):
+                    report = M["materialize"](output)
+                    self.assertEqual(report["files"], 5)
+                    self.assertFalse(report["runtime_executed"])
+                    sdk = output / pin["destination"]
+                    self.assertEqual((sdk / "bin/cmake").read_bytes(), b"inert CMake")
+                    self.assertEqual(stat.S_IMODE((sdk / "bin/ninja").stat().st_mode), 0o700)
+                    self.assertEqual((sdk / "doc/ninja/LICENSE").read_bytes(), b"original Ninja notice")
+                    provenance = json.loads((output / "provenance.json").read_bytes())
+                    self.assertEqual(provenance["inputs"]["cmake"],
+                        dict(pin, observed_sha256=hashlib.sha256(data).hexdigest()))
+                    self.assertFalse((output / ".cmake.zip").exists())
+                    (sdk / "bin/cmake").write_bytes(b"changed")
+                    with self.assertRaisesRegex(ValueError, "TREE_BYTES"):
+                        M["verify"](output)
+            finally:
+                os.umask(old_umask)
+
+    def test_cmake_layout_is_not_an_unrestricted_rootless_archive_policy(self):
+        items = [("source.properties", b"Pkg.Revision=3.22.1\n", 0o600),
+            ("bin/cmake", b"inert", 0o100755), ("doc/LICENSE", b"notice", 0o100644),
+            ("share/module", b"inert", 0o100644)]
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root) / "sdk"
+            with self.assertRaisesRegex(ValueError, "ARCHIVE_ROOT"):
+                M["extract"](archive(items), output)
+            for extra in (("unexpected/file", b"inert", 0o100644),
+                    ("bin/../../escape", b"inert", 0o100644),
+                    ("bin/fifo", b"", 0o010600),
+                    ("bin/escape", b"../../outside", 0o120777)):
+                with self.subTest(extra=extra), self.assertRaises(ValueError):
+                    M["extract"](archive(items + [extra]), output, layout="cmake-3.22.1")
+                self.assertFalse(output.exists())
+            with self.assertRaisesRegex(ValueError, "ARCHIVE_LAYOUT"):
+                M["extract"](archive(items), output, layout="arbitrary-rootless")
 
     def test_digest_failure_records_actual_short_or_wrong_bytes_without_extracting(self):
         expected = b"original inert bytes"
