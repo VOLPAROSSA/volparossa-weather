@@ -40,6 +40,12 @@ export function prepareExpected(bytes, receiptBytes, aqBytes, aqReceiptBytes, co
   return value;
 }
 
+export function prepareExpectedV5(...args) {
+  // Identical source-native numbers, windows and cold-receipt checks. Only the
+  // explicitly selected public-input profile/schema changes, never formatting.
+  return { ...prepareExpected(...args), schema: 5 };
+}
+
 async function readPrivate(path, maximum) {
   requireThat(typeof path === 'string' && isAbsolute(path) && resolve(path) === path
     && await realpath(path) === path, 'CORE_BROWSER_PATH_INVALID');
@@ -58,8 +64,10 @@ async function readPrivate(path, maximum) {
 
 async function main() {
   const { values } = parseArgs({ options: Object.fromEntries(
-    ['forecast', 'receipt', 'air-quality', 'air-quality-receipt', 'config', 'core-sha256', 'output']
+    ['forecast', 'receipt', 'air-quality', 'air-quality-receipt', 'config', 'core-sha256', 'output', 'bundle-version']
       .map(name => [name, { type: 'string' }])) });
+  const version = values['bundle-version'] ?? '3';
+  requireThat(version === '3' || version === '5', 'CORE_BROWSER_BUNDLE_VERSION_INVALID');
   const decode = bytes => JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
   const weather = await readPrivate(values.forecast, 131072), receipt = await readPrivate(values.receipt, 16384);
   const aq = await readPrivate(values['air-quality'], 131072);
@@ -67,7 +75,8 @@ async function main() {
   requireThat(decode(receipt).local_output === values.forecast
     && decode(aqReceipt).local_output === values['air-quality'], 'COLD_CORE_OUTPUT_MISMATCH');
   const config = decode(await readPrivate(values.config, 16384));
-  const expected = prepareExpected(weather, receipt, aq, aqReceipt, config, values['core-sha256']);
+  const expected = (version === '5' ? prepareExpectedV5 : prepareExpected)(
+    weather, receipt, aq, aqReceipt, config, values['core-sha256']);
   const raw = Buffer.from(JSON.stringify(expected, null, 2) + '\n');
   requireThat(raw.length <= 384 * 1024 && typeof values.output === 'string'
     && isAbsolute(values.output) && resolve(values.output) === values.output

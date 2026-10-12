@@ -9,6 +9,7 @@ Tables are typed by their exact static headers; product metadata is grouped by
 actual titles. This does not claim separate DOM-container ownership per product.
 """
 import argparse
+import ast
 import copy
 from decimal import Decimal, InvalidOperation
 import hashlib
@@ -36,6 +37,11 @@ HEADERS = {
     "air_quality": ["Native valid time (UTC)", "PM2.5 (µg/m³)", "PM10 (µg/m³)"],
 }
 SOURCE_FIELDS = ("attribution", "license", "license_url", "changes")
+HOSTED_UI_PROOF = "integrations/overmorrow/hosted-browser-proof.json"
+HOSTED_TABLE_PROOF = "integrations/overmorrow/hosted-table-proof.json"
+HISTORICAL_VERIFIER = "integrations/overmorrow/hosted-proof/historical-smoke_core_browser_v3.py"
+TABLE_CONTRACT_FIELDS = ("HEADERS", "SOURCE_FIELDS", "TABLES_JS", "require", "canonical", "digest",
+                         "number_equal", "snapshot", "observed_products")
 _CORE = None
 
 
@@ -91,10 +97,11 @@ def number_equal(left, right):
         return False
 
 
-def validate_expected(value, config):
+def validate_expected(value, config, bundle_version=3):
     core = core_helpers()
-    require(type(value) is dict and set(value) == {"schema", "core_sha256", "products", "display_sha256"}
-            and type(value["schema"]) is int and value["schema"] == 3
+    require(type(bundle_version) is int and bundle_version in (3, 5)
+            and type(value) is dict and set(value) == {"schema", "core_sha256", "products", "display_sha256"}
+            and type(value["schema"]) is int and value["schema"] == bundle_version
             and type(value["products"]) is dict and set(value["products"]) == set(HEADERS))
     legacy = copy.deepcopy(value)
     legacy["schema"] = 2
@@ -261,15 +268,65 @@ def wait_products(client, connection, expected, requests):
     raise TimeoutError("native_tables_deadline")
 
 
-def validate_bundle(root, expected):
+def table_contract(raw):
+    """Compare historical extraction semantics as inert syntax, never import it."""
+    require(type(raw) is bytes and 0 < len(raw) <= 65536)
+    tree = ast.parse(raw.decode("utf-8"))
+    result = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names = [node.name]
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = [alias.asname or alias.name.split(".")[0] for alias in node.names]
+        else:
+            names = [child.id for child in ast.walk(node) if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store)]
+        for name in names:
+            if name in TABLE_CONTRACT_FIELDS:
+                require(name not in result)
+                result[name] = ast.dump(node, include_attributes=False)
+    require(set(result) == set(TABLE_CONTRACT_FIELDS))
+    return result
+
+
+def validate_hosted_proofs(files, hashes, retained, table):
+    """Bind original synthetic evidence separately from the current core driver."""
+    def bound(name):
+        return files["volparossa-weather/" + name]["sha256"]
+    scope = dict(actual_overmorrow_ui=True, actual_http_bridge=True, synthetic_weather=True,
+        synthetic_air_quality=True, core_executed=False, overlay_proven=False,
+        upstream_origin_proven=False, native_mobile_proven=False)
+    for proof, wanted_scope in ((retained, scope), (table, dict(scope, ordered_table_contract=True,
+            joined_delivery_proven=False, cold_transfer_proven=False, origin_acquisition_proven=False))):
+        require(proof.get("passed") is True and proof.get("phase") == "complete"
+                and proof.get("schema") == 1 and proof.get("scope") == wanted_scope
+                and type(proof.get("cleanup")) is dict and set(proof["cleanup"]) == {
+                    "browser_exited", "fixture_exited", "private_profile_removed", "normal_browser_stop", "normal_fixture_stop"}
+                and all(flag is True for flag in proof["cleanup"].values())
+                and proof["source"]["deployed_tree_sha256"] == digest(hashes)
+                and proof["source"]["driver_sha256"] == bound("integrations/overmorrow/smoke_browser.py"))
+    require(table.get("kind") == "overmorrow-synthetic-native-table-contract"
+            and table["source"]["table_wrapper_sha256"] == bound("integrations/overmorrow/smoke_table_browser.py")
+            and table["source"]["table_fixture_sha256"] == bound("integrations/overmorrow/table-fixture.mjs")
+            and table["source"]["exact_v3_verifier_sha256"] == bound(HISTORICAL_VERIFIER)
+            and table["source"]["extra_synthetic_modules"] == {
+                "tests/precipitation-fixtures.mjs": bound("tests/precipitation-fixtures.mjs")})
+    return dict(synthetic_ui_proof=dict(sha256=bound(HOSTED_UI_PROOF),
+            driver_sha256=retained["source"]["driver_sha256"], core_executed=False, overlay_proven=False),
+        synthetic_table_proof=dict(sha256=bound(HOSTED_TABLE_PROOF),
+            driver_sha256=table["source"]["table_wrapper_sha256"], verifier_sha256=bound(HISTORICAL_VERIFIER),
+            core_executed=False, overlay_proven=False))
+
+
+def validate_bundle(root, expected, bundle_version=3):
     core = core_helpers()
-    require(root.resolve(strict=True) == root and ROOT == root / "volparossa-weather" and core.hex64(expected)
+    require(type(bundle_version) is int and bundle_version in (3, 5)
+            and root.resolve(strict=True) == root and ROOT == root / "volparossa-weather" and core.hex64(expected)
             and root.stat().st_uid == os.getuid() and stat.S_IMODE(root.stat().st_mode) == 0o500)
     raw = core.raw_file(root / "INPUTS.json", 131072, 0o400)
     require(hashlib.sha256(raw).hexdigest() == expected)
     manifest = json.loads(raw, object_pairs_hook=core.pairs)
     require(type(manifest) is dict and set(manifest) == {"version", "kind", "files"}
-            and type(manifest["version"]) is int and manifest["version"] == 3
+            and type(manifest["version"]) is int and manifest["version"] == bundle_version
             and manifest["kind"] == "volparossa-weather-client-inputs" and raw.isascii()
             and raw == canonical(manifest) + b"\n" and type(manifest["files"]) is dict
             and 1 <= len(manifest["files"]) <= 512)
@@ -302,7 +359,7 @@ def validate_bundle(root, expected):
     require(all("volparossa-weather/" + name in files for name in required)
             and files["runtime/node"]["sha256"] == core.shared.NODE_SHA256)
     hashes = {name[len(STATIC_PREFIX):]: record["sha256"] for name, record in files.items() if name.startswith(STATIC_PREFIX)}
-    retained = core.read_json(ROOT / "integrations/overmorrow/browser-proof.json", 16384)
+    retained = core.read_json(ROOT / (HOSTED_UI_PROOF if bundle_version == 5 else "integrations/overmorrow/browser-proof.json"), 16384)
     require(retained["passed"] is True and retained["phase"] == "complete"
             and retained["scope"]["actual_overmorrow_ui"] is True
             and retained["scope"]["synthetic_weather"] is True and retained["scope"]["synthetic_air_quality"] is True
@@ -314,12 +371,21 @@ def validate_bundle(root, expected):
         preparer_sha256=files["volparossa-weather/" + required[1]]["sha256"],
         built_tree_sha256=digest(hashes), node_sha256=core.shared.NODE_SHA256,
         bridge_modules={name: files["volparossa-weather/" + name]["sha256"] for name in BRIDGE_MODULES})
+    if bundle_version == 5:
+        require(all("volparossa-weather/" + name in files for name in (HOSTED_UI_PROOF, HOSTED_TABLE_PROOF,
+            HISTORICAL_VERIFIER, "integrations/overmorrow/smoke_table_browser.py",
+            "integrations/overmorrow/table-fixture.mjs", "tests/precipitation-fixtures.mjs")))
+        table = core.read_json(ROOT / HOSTED_TABLE_PROOF, 16384)
+        source.update(validate_hosted_proofs(files, hashes, retained, table))
+        require(table_contract(core.raw_file(ROOT / HISTORICAL_VERIFIER, 65536, 0o400))
+                == table_contract(core.raw_file(Path(__file__), 65536, 0o400)))
     return root / STATIC_PREFIX.rstrip("/"), browser, metadata, source
 
 
 def report_base(source, expected):
+    require(type(expected["schema"]) is int and expected["schema"] in (3, 5))
     report = core_helpers().report_base(source, {**expected, "schema": 2})
-    report["schema"] = 3
+    report["schema"] = expected["schema"]
     report["scope"]["actual_overmorrow_ui"] = report["scope"].pop("actual_drizzli_ui")
     return report
 
@@ -443,6 +509,7 @@ def main():
     signal.setitimer(signal.ITIMER_REAL, 240)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execute", action="store_true", required=True)
+    parser.add_argument("--bundle-version", type=int, choices=(3, 5), default=3)
     for name in ("bundle-root", "config", "expected", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     for name in ("bundle-manifest-sha256", "parent-netns", "client-netns"):
@@ -458,8 +525,8 @@ def main():
     core.boundary(args, args.inside)
     config = core.read_json(args.config, 16384, 0o600)
     raw = core.raw_file(args.expected, 384 * 1024, 0o400)
-    expected = validate_expected(json.loads(raw, object_pairs_hook=core.pairs), config)
-    built, browser, metadata, source = validate_bundle(args.bundle_root, args.bundle_manifest_sha256)
+    expected = validate_expected(json.loads(raw, object_pairs_hook=core.pairs), config, args.bundle_version)
+    built, browser, metadata, source = validate_bundle(args.bundle_root, args.bundle_manifest_sha256, args.bundle_version)
     require(config["core"]["scratchParent"] == str(args.output / "scratch"))
     binary = Path(config["core"]["executable"])
     core.verify_core_binary(binary, expected["core_sha256"], args)
@@ -494,7 +561,8 @@ def main():
         if (args.output / "report.json").exists():
             try:
                 candidate = core.read_json(args.output / "report.json", 16384, 0o600)
-                require(candidate["schema"] == 3 and candidate["phase"] in core.PHASES and candidate["source"] == source)
+                require(type(candidate["schema"]) is int and candidate["schema"] == args.bundle_version
+                        and candidate["phase"] in core.PHASES and candidate["source"] == source)
                 report = candidate
             except (OSError, ValueError, KeyError):
                 pass
