@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { precipitationForecast } from '../../tests/precipitation-fixtures.mjs';
 import { aqForecast } from '../../tests/air-quality-fixtures.mjs';
-import { prepareExpected, canonical } from './prepare_core_browser.mjs';
+import { prepareExpected, prepareExpectedV5, canonical } from './prepare_core_browser.mjs';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const bytes = value => Buffer.from(JSON.stringify(value));
@@ -84,7 +84,16 @@ if (process.argv.includes('--fixture')) {
       f => { f.config.airQuality.core.controlSocket = '/inert/other'; },
       f => { f.config.core.query.includePrecipitation = false; }]) {
       const f = fixture(); change(f); assert.throws(() => prepare(f));
+      assert.throws(() => prepareExpectedV5(f.raw, bytes(f.receipt), f.aqRaw, bytes(f.aqReceipt), f.config, 'd'.repeat(64)));
     }
+  });
+
+  test('explicit v5 preserves every v3 product, native value, window and display hash', () => {
+    const f = fixture(), old = prepare(f);
+    const current = prepareExpectedV5(f.raw, bytes(f.receipt), f.aqRaw, bytes(f.aqReceipt), f.config, 'd'.repeat(64));
+    assert.equal(current.schema, 5);
+    assert.deepEqual(current, { ...old, schema: 5 });
+    assert.equal(prepare(f).schema, 3); // No inferred migration of default consumers.
   });
 
   test('CLI requires both private cold outputs, preserves source bytes and exclusively creates read-only expected', async () => {
@@ -119,6 +128,16 @@ if (process.argv.includes('--fixture')) {
         assert.equal(JSON.parse(saved).schema, 3);
         assert.equal(invoke(more).status, 1);
       } finally { await handle.close(); }
+      for (const version of ['3', '5', '4', '05', 'auto']) {
+        args[args.indexOf('--output') + 1] = join(work, `expected-${version}.json`);
+        const result = invoke([...more, '--bundle-version', version]);
+        assert.equal(result.status, ['3', '5'].includes(version) ? 0 : 1, result.stderr);
+        if (result.status === 0) {
+          const handle = await open(args[args.indexOf('--output') + 1], constants.O_RDONLY | constants.O_NOFOLLOW);
+          try { assert.equal(JSON.parse(await handle.readFile()).schema, Number(version)); }
+          finally { await handle.close(); }
+        }
+      }
     } finally { await rm(work, { recursive: true }); }
   });
 }

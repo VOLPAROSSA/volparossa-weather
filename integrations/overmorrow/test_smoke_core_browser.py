@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Inert joined-proof checks; no browser, server, SDK, core or weather requests."""
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -10,7 +11,7 @@ import shutil
 import subprocess
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("overmorrow_core_smoke", HERE / "smoke_core_browser.py")
@@ -64,6 +65,24 @@ class CoreBrowserTests(unittest.TestCase):
         self.assertEqual(len(products["air_quality"]["native"]), 5)
         self.assertNotEqual(products["weather"]["model_run"], products["air_quality"]["model_run"])
         self.assertNotEqual(products["weather"]["expires_at"], products["air_quality"]["expires_at"])
+
+    def test_v5_is_explicit_and_preserves_exact_v3_product_checks(self):
+        current = {**copy.deepcopy(self.expected), "schema": 5}
+        self.assertIs(driver.validate_expected(current, self.config, 5), current)
+        self.assertEqual(driver.observed_products(projected(current), current, 1),
+                         driver.observed_products(projected(self.expected), self.expected, 1))
+        for expected, version in ((current, 3), (self.expected, 5), (current, 4), (current, True)):
+            with self.subTest(version=version, schema=expected["schema"]), self.assertRaises(ValueError):
+                driver.validate_expected(expected, self.config, version)
+        with self.assertRaises(ValueError):
+            driver.validate_expected(current, self.config)
+        changed = copy.deepcopy(current)
+        changed["products"]["weather"]["display"]["values"][0][0] = "11"
+        for product in changed["products"].values():
+            product["display_sha256"] = driver.digest(product["display"])
+        changed["display_sha256"] = driver.digest({name: product["display"] for name, product in changed["products"].items()})
+        with self.assertRaises(ValueError):
+            driver.validate_expected(changed, self.config, 5)
 
     def test_dart_redundant_decimal_zero_is_normalized_without_rounding(self):
         value = projected(self.expected)
@@ -134,6 +153,14 @@ class CoreBrowserTests(unittest.TestCase):
         # The retained report contains hashes/closed flags, never table/raw data.
         self.assertNotIn("Native valid time", json.dumps(report))
         self.assertLess(len(driver.canonical(report)) + 2048, 16384)
+        source_v5 = dict(source, synthetic_ui_proof=dict(sha256="1" * 64, driver_sha256="2" * 64,
+            core_executed=False, overlay_proven=False), synthetic_table_proof=dict(sha256="3" * 64,
+            driver_sha256="4" * 64, verifier_sha256="5" * 64, core_executed=False, overlay_proven=False))
+        current = driver.report_base(source_v5, {**self.expected, "schema": 5})
+        self.assertEqual(current["schema"], 5)
+        self.assertEqual(current["source"], source_v5)
+        self.assertEqual(current["scope"], report["scope"])
+        self.assertLess(len(driver.canonical(current)) + 2048, 16384)
 
     def test_actual_semantic_table_extractor_preserves_rows_cell_ownership_and_repeated_values(self):
         observed = projected(self.expected)
@@ -194,6 +221,103 @@ process.stdout.write(JSON.stringify(result));
         self.assertIn('ui.pointer_activate(client', source)
         self.assertIn('core.boundary(args, args.inside)', source)
         self.assertIn('core.verify_core_binary(binary, expected["core_sha256"], args)', source)
+
+
+class PublicV5BindingTests(unittest.TestCase):
+    """Pure source/proof contracts; available even without a local Node binary."""
+    def setUp(self):
+        names = (driver.HOSTED_UI_PROOF, driver.HOSTED_TABLE_PROOF, driver.HISTORICAL_VERIFIER,
+            "integrations/overmorrow/smoke_browser.py", "integrations/overmorrow/smoke_table_browser.py",
+            "integrations/overmorrow/table-fixture.mjs", "tests/precipitation-fixtures.mjs")
+        self.files = {"volparossa-weather/" + name: {"sha256": hashlib.sha256(name.encode()).hexdigest()} for name in names}
+        self.hashes = {"index.html": "a" * 64, "main.dart.js": "b" * 64}
+        self.scope = dict(actual_overmorrow_ui=True, actual_http_bridge=True, synthetic_weather=True,
+            synthetic_air_quality=True, core_executed=False, overlay_proven=False, upstream_origin_proven=False,
+            native_mobile_proven=False)
+        source = dict(deployed_tree_sha256=driver.digest(self.hashes),
+            driver_sha256=self.bound("integrations/overmorrow/smoke_browser.py"))
+        self.ui = dict(schema=1, passed=True, phase="complete", scope=self.scope, source=source,
+            cleanup={key: True for key in ("browser_exited", "fixture_exited", "private_profile_removed",
+                                          "normal_browser_stop", "normal_fixture_stop")})
+        self.table = copy.deepcopy(self.ui)
+        self.table.update(kind="overmorrow-synthetic-native-table-contract")
+        self.table["scope"].update(ordered_table_contract=True, joined_delivery_proven=False,
+            cold_transfer_proven=False, origin_acquisition_proven=False)
+        self.table["source"].update(table_wrapper_sha256=self.bound("integrations/overmorrow/smoke_table_browser.py"),
+            table_fixture_sha256=self.bound("integrations/overmorrow/table-fixture.mjs"),
+            exact_v3_verifier_sha256=self.bound(driver.HISTORICAL_VERIFIER),
+            extra_synthetic_modules={"tests/precipitation-fixtures.mjs": self.bound("tests/precipitation-fixtures.mjs")})
+
+    def bound(self, name):
+        return self.files["volparossa-weather/" + name]["sha256"]
+
+    def test_original_ui_and_table_proofs_have_distinct_closed_source_bindings(self):
+        original_ui, original_table = copy.deepcopy(self.ui), copy.deepcopy(self.table)
+        source = driver.validate_hosted_proofs(self.files, self.hashes, self.ui, self.table)
+        self.assertEqual(source, dict(synthetic_ui_proof=dict(sha256=self.bound(driver.HOSTED_UI_PROOF),
+            driver_sha256=self.bound("integrations/overmorrow/smoke_browser.py"), core_executed=False, overlay_proven=False),
+            synthetic_table_proof=dict(sha256=self.bound(driver.HOSTED_TABLE_PROOF),
+                driver_sha256=self.bound("integrations/overmorrow/smoke_table_browser.py"),
+                verifier_sha256=self.bound(driver.HISTORICAL_VERIFIER), core_executed=False, overlay_proven=False)))
+        self.assertEqual(self.ui, original_ui)
+        self.assertEqual(self.table, original_table)
+
+    def test_historical_proof_cannot_be_rebound_to_current_driver_or_another_build(self):
+        for key in ("deployed_tree_sha256", "driver_sha256", "table_wrapper_sha256", "table_fixture_sha256",
+                    "exact_v3_verifier_sha256"):
+            table = copy.deepcopy(self.table)
+            table["source"][key] = "f" * 64
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                driver.validate_hosted_proofs(self.files, self.hashes, self.ui, table)
+        table = copy.deepcopy(self.table)
+        table["source"]["extra_synthetic_modules"] = {}
+        with self.assertRaises(ValueError):
+            driver.validate_hosted_proofs(self.files, self.hashes, self.ui, table)
+
+    def test_failed_or_relabelled_historical_proofs_are_rejected(self):
+        for name in ("ui", "table"):
+            for change in (lambda p: p.update(passed=False), lambda p: p.update(phase="failed"),
+                           lambda p: p["cleanup"].update(private_profile_removed=False),
+                           lambda p: p.update(cleanup={}), lambda p: p["scope"].update(core_executed=True),
+                           lambda p: p["scope"].update(native_mobile_proven=True)):
+                ui, table = copy.deepcopy(self.ui), copy.deepcopy(self.table)
+                change(ui if name == "ui" else table)
+                with self.subTest(name=name), self.assertRaises(ValueError):
+                    driver.validate_hosted_proofs(self.files, self.hashes, ui, table)
+
+    def test_historical_contract_is_parsed_not_executed_and_preserves_verifier_closure(self):
+        raw = (HERE / "smoke_core_browser.py").read_bytes()
+        expected = driver.table_contract(raw)
+        self.assertEqual(set(expected), set(driver.TABLE_CONTRACT_FIELDS))
+        self.assertEqual(driver.table_contract(raw + b'\nraise RuntimeError("must not execute")\n'), expected)
+        self.assertNotEqual(driver.table_contract(raw.replace(b'row[0] == when', b'row[0] != when')), expected)
+        self.assertNotEqual(driver.table_contract(raw.replace(b'return Decimal(left) == Decimal(right)',
+            b'return True')), expected)
+        self.assertNotEqual(driver.table_contract(raw.replace(b'ui.NODES_JS + TABLES_JS', b'TABLES_JS')), expected)
+
+    def test_historical_duplicate_or_rebound_contract_names_rejected(self):
+        raw = (HERE / "smoke_core_browser.py").read_bytes()
+        for extra in (b'\nHEADERS = {}\n', b'\nTABLES_JS += "changed"\n',
+                      b'\nobserved_products: object = None\n', b'\nimport os as snapshot\n',
+                      b'\ndef number_equal(left, right): return True\n'):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                driver.table_contract(raw + extra)
+
+    def test_only_explicit_three_or_five_expected_versions_are_accepted(self):
+        value = dict(schema=5, core_sha256="a" * 64, products={}, display_sha256="b" * 64)
+        with patch.object(driver, "core_helpers", return_value=Mock()):
+            for version in (3, 4, "5", True, None):
+                with self.subTest(version=version), self.assertRaises(ValueError):
+                    driver.validate_expected(value, {}, version)
+            with self.assertRaises(ValueError):
+                driver.validate_expected(value, {})
+
+    def test_cli_forwards_explicit_version_to_manifest_and_expected_checks(self):
+        source = (HERE / "smoke_core_browser.py").read_text()
+        self.assertIn('parser.add_argument("--bundle-version", type=int, choices=(3, 5), default=3)', source)
+        self.assertIn('validate_expected(json.loads(raw, object_pairs_hook=core.pairs), config, args.bundle_version)', source)
+        self.assertIn('validate_bundle(args.bundle_root, args.bundle_manifest_sha256, args.bundle_version)', source)
+        self.assertIn('candidate["schema"] == args.bundle_version', source)
 
 
 if __name__ == "__main__":
