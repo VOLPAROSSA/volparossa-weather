@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "profile": "historical-weather-linux-x64-2026-09-with-npm",
+  "version": "11.17.0",
+  "node_archive_sha256": "14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647",
+  "prefix": "lib/node_modules/npm",
+  "files": 1921,
+  "bytes": 12079734,
+  "inventory_sha256": "494138da2a69cdc67f79fdafbf330e4ca53506a745c3769e84a87f76aa787d9f",
+  "expected_files": {
+    "bin/npm-cli.js": {
+      "bytes": 54,
+      "sha256": "8e5f6f3429f8cdbe693cdc29904e9d5a7b127a494bd15c804bd54c7403bfcbe7",
+      "mode": 448
+    },
+    "package.json": {
+      "bytes": 6597,
+      "sha256": "a4f04ad50219f82e0e8f262d3e1acbdbd678040198ea36fca10fe7bbb38da726",
+      "mode": 384
+    },
+    "LICENSE": {
+      "bytes": 9742,
+      "sha256": "7610d223851f421d315df5e77974f1c68a04b97e02060e5bbbcf13d95e3ca257",
+      "mode": 384
+    }
+  }
+}

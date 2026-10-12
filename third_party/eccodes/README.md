@@ -94,8 +94,22 @@ These historical artifacts are not a current browser-update recommendation.
 The workflow installs build tools only on its disposable GitHub runner and
 publishes bounded diagnostics, provenance and successful source-built decoder
 outputs with notices. It does not acquire weather data, run a browser or admit
-the decoder to the core. The new binary still needs separate byte admission,
-actual Debian 13 compatibility checks, a fresh browser proof and joined delivery.
+the decoder to the core.
+
+The [source build](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38214736539)
+passes all seven libaec tests and the nonconstant CCSDS encode/decode probe.
+A separate [Debian 13 trial](https://github.com/VOLPAROSSA/volparossa/actions/runs/38216142236)
+executes that exact decoder, with its input bytes admitted by a reviewed source
+record. The unprivileged, offline probe successfully decodes both known grid
+points after relocation without sibling libraries or external definitions.
+This proves the tested binary's compatibility, not production admission or
+Weather delivery. A fresh client build/browser proof and joined core delivery
+remain required.
+
+The explicit `--with-npm` runtime-preparation option includes npm 11.17.0 from
+the same authenticated Node archive. Its separate profile verifies the complete
+npm file inventory and original licenses. The default runtime profile is unchanged;
+neither profile executes npm or installs dependencies during preparation.
 
 ## Original licenses and notices
 

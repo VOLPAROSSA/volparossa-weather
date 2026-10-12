@@ -131,6 +131,18 @@ unchanged upstream `package-lock.json`; installation scripts are not run.
 
 ## Stage and build
 
+The [hosted client workflow](../../.github/workflows/hosted-clients.yml) is the
+next preparation step for joined delivery. It uses public, pinned Node/npm,
+Firefox and source inputs on a disposable runner, preserving the existing
+developer stages and historical receipts. Dependency acquisition is separate
+from offline compilation; the browser exercises synthetic precipitation and
+particulate products through the real client and HTTP bridge.
+
+This workflow is a candidate until its actual build, browser checks and cleanup
+pass. Its public artifacts require a separately reviewed core input profile
+before the joined trial. It does not upload an existing private bundle, contact
+weather origins or prove core delivery.
+
 Run from this repository on a Linux development system with Git, Python 3, and
 an independently verified Node/npm installation. The verified run used Node
 24.19.0 and npm 11.17.0. Keep downloads, dependency cache and generated files

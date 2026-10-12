@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "upstream": "https://gitlab.com/apparmor/apparmor",
+  "commit": "b0eb95457bc2de401920308869d016e696c73664",
+  "version": "4.0.1",
+  "source": "profiles/apparmor/profiles/extras/bwrap-userns-restrict",
+  "license": "GPL-2.0-only",
+  "license_sha256": "a7e0cdcbea5c14927cedfc600d46526bdcbb1eb0a4d951e2ea53c2a6de159cb4",
+  "derived_from_decoder_profile_sha256": "d47872c2ad9a78f54b4cd118016224f111b4f92efae52651eda6ffd44ddc8007",
+  "local_profile": "scripts/hosted-clients-bwrap.apparmor",
+  "local_profile_sha256": "2a0af5d2379bae5d2751599afef96a48567c5f3100308b61fce8028569039705",
+  "changes": [
+    "Separate hosted Weather client profile names",
+    "Retain setup privileges and stacked capability-denied child policy",
+    "Omit host-local policy includes and update provenance comments"
+  ],
+  "scope": "Explicit disposable GitHub Ubuntu 24.04 client-build and synthetic-browser setup only; no development-host installation or production policy"
+}

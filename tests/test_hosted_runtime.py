@@ -130,6 +130,10 @@ class RuntimeTests(unittest.TestCase):
 
     def test_offline_materialization_hashes_licenses_modes_and_scope(self):
         report = self.run_prepare()
+        self.assertEqual(report["schema"], 1)
+        self.assertEqual(report["profile"], "historical-weather-linux-x64-2026-09")
+        self.assertNotIn("npm", report)
+        self.assertFalse((self.output / "node/lib/node_modules/npm").exists())
         self.assertTrue(report["scope"]["expected_runtime_hashes_verified"])
         self.assertTrue(report["scope"]["licenses_preserved"])
         for name in ("runtime_executed", "host_installed", "source_build", "host_abi_verified",
@@ -150,6 +154,131 @@ class RuntimeTests(unittest.TestCase):
             self.assertFalse(path.stat().st_mode & 0o077)
         self.assertEqual(stat.S_IMODE((self.output / "node/bin/node").stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE((self.output / "provenance.json").stat().st_mode), 0o600)
+
+    def npm_fixture(self):
+        pin = json.loads((ROOT / "third_party/hosted-runtime-npm.json").read_text())
+        npm_files = {
+            "bin/npm-cli.js": (b"synthetic npm entrypoint\n", 0o755),
+            "package.json": (b'{"name":"npm","version":"11.17.0"}', 0o644),
+            "LICENSE": (b"Original npm fixture license\n", 0o644),
+            "node_modules/dependency/LICENSE": (b"Original dependency fixture license\n", 0o644),
+            ".npmrc": (b"", 0o644),
+        }
+        prefix = self.pin["artifacts"]["node"]["prefix"] + "/" + R.NPM_PREFIX + "/"
+        self.members["node"] += [(prefix + name, raw, "file", mode) for name, (raw, mode) in npm_files.items()]
+        inventory = {name: dict(bytes=len(raw), sha256=sha(raw), mode=0o700 if mode & 0o111 else 0o600)
+                     for name, (raw, mode) in npm_files.items()}
+        pin.update(files=len(inventory), bytes=sum(item["bytes"] for item in inventory.values()),
+                   inventory_sha256=R.inventory_sha256(inventory),
+                   expected_files={name: inventory[name] for name in pin["expected_files"]})
+        return pin
+
+    def run_npm_prepare(self, npm):
+        self.archives()
+        npm["node_archive_sha256"] = self.pin["artifacts"]["node"]["sha256"]
+        R.validate_npm_pin(npm, self.pin["artifacts"]["node"])
+        with patch.object(R, "load_npm_pin", return_value=(npm, "b"*64)), \
+                patch.object(urllib.request, "build_opener", side_effect=AssertionError("network prohibited")):
+            return R.prepare(self.output, self.pin, "a"*64, self.cache, with_npm=True)
+
+    def test_committed_npm_pin_binds_same_archive_and_exact_inventory(self):
+        runtime, _ = R.load_pin()
+        pin, digest = R.load_npm_pin(runtime)
+        self.assertEqual((pin["version"], pin["files"], pin["bytes"]), ("11.17.0", 1921, 12079734))
+        self.assertEqual(pin["node_archive_sha256"], runtime["artifacts"]["node"]["sha256"])
+        self.assertEqual(pin["inventory_sha256"], "494138da2a69cdc67f79fdafbf330e4ca53506a745c3769e84a87f76aa787d9f")
+        self.assertEqual(pin["expected_files"]["bin/npm-cli.js"]["bytes"], 54)
+        self.assertTrue(R.hex64(digest))
+
+    def test_opt_in_npm_profile_preserves_all_files_notices_and_empty_members(self):
+        npm = self.npm_fixture()
+        report = self.run_npm_prepare(npm)
+        self.assertEqual(report["schema"], 2)
+        self.assertEqual(report["profile"], R.NPM_PROFILE)
+        self.assertEqual(report["npm"], dict(pin_sha256="b"*64, version="11.17.0", files=5, bytes=npm["bytes"],
+            inventory_sha256=npm["inventory_sha256"], cli="node/lib/node_modules/npm/bin/npm-cli.js"))
+        prefix = self.output / "node" / R.NPM_PREFIX
+        self.assertEqual((prefix / ".npmrc").read_bytes(), b"")
+        self.assertEqual((prefix / "node_modules/dependency/LICENSE").read_bytes(), b"Original dependency fixture license\n")
+        self.assertEqual(R.inventory_sha256(R.npm_inventory(report["files"])), npm["inventory_sha256"])
+        self.assertFalse((self.output / "node/bin/npm").exists())
+        self.assertFalse((self.output / "node/bin/npx").exists())
+        self.assertFalse(report["scope"]["runtime_executed"])
+        self.assertTrue(all(not path.is_symlink() for path in self.output.rglob("*")))
+
+    def test_default_still_ignores_npm_even_when_archive_contains_it(self):
+        self.npm_fixture()
+        with patch.object(R, "load_npm_pin", side_effect=AssertionError("must not select npm")):
+            report = self.run_prepare()
+        self.assertEqual(report["schema"], 1); self.assertNotIn("npm", report)
+        self.assertFalse(any(name.startswith("node/lib/") for name in report["files"]))
+
+    def test_npm_pin_rejects_other_archive_profile_prefix_and_unbounded_inventory(self):
+        runtime, _ = R.load_pin(); pin, _ = R.load_npm_pin(runtime)
+        mutations = [lambda p: p.update(node_archive_sha256="0"*64), lambda p: p.update(profile="default"),
+            lambda p: p.update(prefix="bin"), lambda p: p.update(schema=True), lambda p: p.update(files=2049),
+            lambda p: p.update(bytes=16*1024**2+1), lambda p: p.update(command="npm"),
+            lambda p: p["expected_files"].pop("LICENSE"), lambda p: p["expected_files"]["bin/npm-cli.js"].update(mode=0o777)]
+        for mutate in mutations:
+            changed = deepcopy(pin); mutate(changed)
+            with self.assertRaises(ValueError): R.validate_npm_pin(changed, runtime["artifacts"]["node"])
+        with self.assertRaisesRegex(ValueError, "explicitly selected"):
+            R.prepare(self.output, self.pin, "a"*64, self.cache, with_npm="yes")
+
+    def test_npm_missing_modified_extra_or_changed_mode_never_becomes_executable(self):
+        npm = self.npm_fixture()
+        original = deepcopy(self.members["node"])
+        prefix = self.pin["artifacts"]["node"]["prefix"] + "/" + R.NPM_PREFIX + "/"
+        for number, mutation in enumerate(("missing", "modified", "extra", "mode")):
+            with self.subTest(mutation=mutation):
+                members = deepcopy(original)
+                if mutation == "missing": members = [row for row in members if row[0] != prefix + "LICENSE"]
+                elif mutation == "modified": members = [(name, b"X"*len(raw), kind, mode) if name == prefix+"LICENSE"
+                                                         else (name, raw, kind, mode) for name, raw, kind, mode in members]
+                elif mutation == "extra": members.append((prefix+"extra", b"", "file", 0o644))
+                else: members = [(name, raw, kind, 0o755) if name == prefix+"LICENSE" else (name, raw, kind, mode)
+                                 for name, raw, kind, mode in members]
+                output = self.output / str(number); output.mkdir(mode=0o700)
+                with self.assertRaisesRegex(ValueError, "npm inventory"):
+                    R.extract(io.BytesIO(lzma.compress(tar_bytes(members))), output, "node", self.pin["artifacts"]["node"], npm)
+                self.assertFalse((output/"node/bin/node").stat().st_mode & 0o111)
+
+    def test_npm_links_are_rejected_even_if_internal_or_point_to_a_pinned_member(self):
+        npm = self.npm_fixture()
+        prefix = self.pin["artifacts"]["node"]["prefix"] + "/" + R.NPM_PREFIX + "/"
+        for number, kind in enumerate(("symlink", "hardlink")):
+            output = self.output / str(number); output.mkdir(mode=0o700)
+            members = [(name, "LICENSE", kind, 0o777) if name == prefix + ".npmrc" else (name, raw, typ, mode)
+                       for name, raw, typ, mode in self.members["node"]]
+            with self.assertRaisesRegex(ValueError, "npm tree may not contain links"):
+                R.extract(io.BytesIO(lzma.compress(tar_bytes(members))), output, "node", self.pin["artifacts"]["node"], npm)
+
+    def test_npm_inventory_cannot_substitute_required_entrypoint_or_package_version(self):
+        npm = self.npm_fixture()
+        self.archives()
+        records = R.extract(io.BytesIO(lzma.compress(tar_bytes(self.members["node"]))), self.output,
+                            "node", self.pin["artifacts"]["node"], npm)
+        bad = deepcopy(npm); bad["expected_files"]["bin/npm-cli.js"]["sha256"] = "0"*64
+        with self.assertRaisesRegex(ValueError, "entrypoint/package/license"):
+            R.verify_npm(self.output, records, bad)
+        path = self.output / "node" / R.NPM_PREFIX / "package.json"
+        raw = b'{"name":"npm","version":"11.16.0"}'
+        path.write_bytes(raw)
+        records["node/" + R.NPM_PREFIX + "/package.json"].update(bytes=len(raw), sha256=sha(raw))
+        inventory = R.npm_inventory(records)
+        bad = deepcopy(npm)
+        bad.update(bytes=sum(item["bytes"] for item in inventory.values()), inventory_sha256=R.inventory_sha256(inventory))
+        bad["expected_files"]["package.json"] = inventory["package.json"]
+        with self.assertRaisesRegex(ValueError, "package version"):
+            R.verify_npm(self.output, records, bad)
+
+    def test_cli_npm_flag_is_explicit_and_default_is_preserved(self):
+        for arguments, expected in (([], False), (["--with-npm"], True)):
+            report = dict(schema=2 if expected else 1, profile=R.NPM_PROFILE if expected else self.pin["profile"], files={})
+            with patch.object(R, "load_pin", return_value=(self.pin, "a"*64)), patch.object(R, "new_output", return_value=self.output), \
+                    patch.object(R, "prepare", return_value=report) as prepare, patch("builtins.print"):
+                R.main(["--output", "build/test", *arguments])
+                self.assertIs(prepare.call_args.kwargs["with_npm"], expected)
 
     def test_no_fetch_by_default(self):
         opener = Mock(side_effect=AssertionError("must not contact network"))
