@@ -115,6 +115,7 @@ jobs:
             build/overmorrow-hosted-android-proof/emulator-cleanup.json
             build/overmorrow-hosted-android-proof/emulator-boundary.json
             build/overmorrow-hosted-android-proof/emulator-diagnostic.json
+            build/overmorrow-hosted-android-proof/guest-network-diagnostic.json
             build/overmorrow-hosted-android-proof/emulator-preflight-inputs.json
             build/overmorrow-hosted-android-proof/emulator-preflight-diagnostic.json
             build/overmorrow-hosted-android-proof/emulator-preflight-cleanup.json

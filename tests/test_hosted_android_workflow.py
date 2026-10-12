@@ -63,6 +63,8 @@ class Workflow(unittest.TestCase):
         self.assertIn("            build/hosted-android-inputs/download-failure.json\n", self.text)
         self.assertEqual(self.text.count("            build/overmorrow-hosted-android-proof/emulator-diagnostic.json\n"), 1)
         self.assertNotIn("emulator-diagnostic.part", self.text)
+        self.assertEqual(self.text.count("            build/overmorrow-hosted-android-proof/guest-network-diagnostic.json\n"), 1)
+        self.assertNotIn("guest-network-diagnostic.part", self.text)
         for name in ("inputs", "diagnostic", "cleanup"):
             self.assertEqual(self.text.count("            build/overmorrow-hosted-android-proof/emulator-preflight-" + name + ".json\n"), 1)
         self.assertNotIn("emulator-preflight-diagnostic.part", self.text)

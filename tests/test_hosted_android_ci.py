@@ -1456,6 +1456,250 @@ class EmulatorDiagnostics(unittest.TestCase):
                         self.assertIsNone(result["exit_status"])
                         self.assertFalse(result["output_complete"])
 
+    def test_guest_network_failure_preserves_real_owned_child_cleanup_and_never_installs(self):
+        # Reach the actual inside() network gate using only tiny Python children
+        # and in-memory AVD config. Never create /state or execute a native tool.
+        real_popen, real_open = subprocess.Popen, open
+        path_open, path_mkdir = Path.open, Path.mkdir
+        enforce, original_drain = M.GuestNetworkDiagnostic.enforce, M.drain_children
+        for failed_write in (False, True):
+            with self.subTest(failed_write=failed_write), tempfile.TemporaryDirectory() as directory:
+                proof, children, calls = Path(directory), [], []
+                def popen(argv, **kwargs):
+                    calls.append(argv)
+                    if argv[0].endswith("/avdmanager"):
+                        code = "import sys;sys.stdin.read()"
+                    elif "server" in argv or "native-android-fixture.mjs" in argv[1] or "-avd" in argv:
+                        code = "import time;time.sleep(30)"
+                    else:
+                        self.assertEqual(argv[:3], [str(M.ANDROID / "platform-tools/adb"), "-s", M.SERIAL])
+                        args = argv[3:]
+                        self.assertEqual(args[0], "shell")  # install/reverse/app must never be reached.
+                        outputs = {("getprop", "sys.boot_completed"): b"1", ("getprop", "ro.build.version.sdk"): b"36",
+                            ("getprop", "ro.product.cpu.abi"): b"x86_64", ("svc", "wifi", "disable"): b"",
+                            ("svc", "data", "disable"): b"",
+                            ("ip", "-4", "route", "show", "table", "all"): GuestNetworkDiagnostics.BAD,
+                            ("ip", "-6", "route", "show", "table", "all"): b"fe80::/64 dev private-canary\n"}
+                        code = "import sys;sys.stdout.buffer.write(" + repr(outputs[tuple(args[1:])]) + ")"
+                    child = real_popen([sys.executable, "-I", "-c", code], **kwargs)
+                    children.append(child)
+                    return child
+                def private_open(path, *args, **kwargs):
+                    self.assertIn(path, ("/state/adb.log", "/state/fixture.log", "/state/emulator.log"))
+                    return real_open(proof / Path(path).name, *args, **kwargs)
+                def config_open(path, *args, **kwargs):
+                    return io.StringIO() if str(path) == "/state/avd/trial.avd/config.ini" else path_open(path, *args, **kwargs)
+                def mkdir(path, *args, **kwargs):
+                    return None if str(path) == "/state/native-fixture" else path_mkdir(path, *args, **kwargs)
+                original_write = M.H.write
+                def write(path, raw):
+                    if failed_write and path.name == "guest-network-diagnostic.part":
+                        raise OSError("private-write-error")
+                    return original_write(path, raw)
+                def drain(owned):
+                    self.assertEqual(owned, children)
+                    self.assertEqual(len(owned), 11)
+                    self.assertEqual((proof / "guest-network-diagnostic.json").exists(), not failed_write)
+                    self.assertEqual(json.loads((proof / "emulator-diagnostic.json").read_text())["check_code"],
+                        "GUEST_NETWORK_STILL_ACTIVE")
+                    return original_drain(owned)
+                with self.guarded_inside(proof, popen), patch.object(M, "open", side_effect=private_open, create=True), \
+                        patch.object(Path, "open", config_open), patch.object(Path, "mkdir", mkdir), \
+                        patch.object(M.GuestNetworkDiagnostic, "enforce", lambda self, adb, _stop: enforce(self, adb, time.monotonic() - 1)), \
+                        patch.object(M.H, "write", side_effect=write), patch.object(M, "drain_children", side_effect=drain), \
+                        self.assertRaisesRegex(ValueError, "GUEST_NETWORK_STILL_ACTIVE"):
+                    M.inside()
+                cleanup = json.loads((proof / "emulator-cleanup.json").read_text())
+                self.assertTrue(cleanup["direct_children_reaped"] and cleanup["private_avd_removed"])
+                self.assertFalse(cleanup["trial_returned"])
+                self.assertTrue(all(c.poll() is not None and c.stdin.closed for c in children))
+                self.assertFalse((proof / "emulator-boundary.json").exists())
+                self.assertFalse((proof / "report.json").exists())
+                self.assertFalse((proof / "guest-network-diagnostic.part").exists())
+
+
+class GuestNetworkDiagnostics(unittest.TestCase):
+    SAFE = b"local 127.0.0.0/8 dev lo table local\nlocal ::1 dev lo table local\n"
+    BAD = b"default via 10.0.2.2 dev private-canary\n10.0.2.0/24 dev private-canary\n"
+
+    def run_gate(self, directory, outputs, clock=(100, 111)):
+        calls = []
+        def adb(*args):
+            calls.append(args)
+            if args[:2] == ("shell", "svc"):
+                return b""
+            value = next(outputs)
+            if isinstance(value, BaseException):
+                raise value
+            return value
+        with patch.object(M, "PROOF", Path(directory)), patch.object(M.time, "monotonic", side_effect=clock), \
+                patch.object(M.time, "sleep"):
+            M.GuestNetworkDiagnostic().enforce(adb, 1000)
+        return calls
+
+    def test_original_predicate_truth_table_and_closed_counts(self):
+        # Compare with the original predicate, including conservative rejection
+        # of unreachable/no-dev entries. This does not change network admission.
+        def old(raw):
+            text = raw.decode("ascii")
+            for line in text.splitlines():
+                words = line.split()
+                if words and (any(w in ("default", "0.0.0.0/0", "::/0", "via", "nexthop") for w in words)
+                        or words.count("dev") != 1 or words.index("dev") + 1 >= len(words)
+                        or words[words.index("dev") + 1] != "lo"):
+                    return False
+            return True
+        prefixes = (b"", b"local ::1", b"default", b"0.0.0.0/0", b"::/0", b"unreachable", b"via x", b"nexthop x")
+        suffixes = (b"", b"dev", b"dev lo", b"dev wlan0", b"dev lo dev lo")
+        for prefix in prefixes:
+            for suffix in suffixes:
+                raw = prefix + b" " + suffix + b"\n" + self.SAFE
+                self.assertEqual(M.no_guest_egress_routes(raw), old(raw), raw)
+        result = M.guest_route_observation(self.BAD + b"unreachable x\nx dev\nx dev lo dev lo\n" + self.SAFE)
+        self.assertEqual(result, dict(outcome="rejected", error="none", routes=7, rejected_routes=5,
+            rejection_counts=dict(default_route=1, gateway=1, device_count=2, device_value=1, non_loopback=2),
+            route_type_counts=dict(unreachable=1, blackhole=0, prohibit=0, throw=0, unicast_or_unspecified=2, other=4),
+            device_category_counts=dict(lo=2, ethernet=0, wifi=0, other=2, missing_or_invalid=3)))
+        self.assertNotIn("private-canary", json.dumps(result))
+        self.assertTrue(M.no_guest_egress_routes(b""))  # Only successful, empty output is empty route state.
+
+    def test_both_families_observed_when_first_rejected_and_privacy_bound(self):
+        calls = []
+        def adb(*args):
+            calls.append(args)
+            return self.BAD if args[1] == "ip" else b""
+        with tempfile.TemporaryDirectory() as directory, patch.object(M, "PROOF", Path(directory)), \
+                patch.object(M.time, "monotonic", side_effect=[100, 111]), self.assertRaisesRegex(ValueError, "GUEST_NETWORK_STILL_ACTIVE"):
+            try:
+                M.GuestNetworkDiagnostic().enforce(adb, 1000)
+            finally:
+                path = Path(directory) / "guest-network-diagnostic.json"
+                raw = path.read_bytes()
+                value = json.loads(raw)
+                self.assertEqual(calls, [("shell", "svc", "wifi", "disable"), ("shell", "svc", "data", "disable"),
+                    ("shell", "ip", "-4", "route", "show", "table", "all"),
+                    ("shell", "ip", "-6", "route", "show", "table", "all")])
+                self.assertEqual(value["schema"], 1)
+                self.assertEqual(value["failure"], "routes_rejected")
+                self.assertEqual(value["polls"], 1)
+                for family in ("ipv4", "ipv6"):
+                    self.assertEqual(value["families"][family], M.guest_route_observation(self.BAD))
+                self.assertFalse(value["gate_passed"] or value["cause_established"] or value["raw_text_exported"])
+                self.assertTrue(value["rejection_counts_overlap"])
+                self.assertLessEqual(len(raw), 2048)
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                for secret in (b"10.0.2", b"private-canary", b"wlan", b"/state", b"emulator-5554"):
+                    self.assertNotIn(secret, raw)
+                self.assertFalse(path.with_suffix(".part").exists())
+
+    def test_second_poll_replaces_both_prior_snapshots_on_unknown(self):
+        error = subprocess.CalledProcessError(7, "private-token")
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(subprocess.CalledProcessError) as raised:
+                self.run_gate(directory, iter((self.BAD, self.SAFE, error)), clock=(100, 101))
+            self.assertIs(raised.exception, error)
+            value = json.loads((Path(directory) / "guest-network-diagnostic.json").read_text())
+            self.assertEqual(value["polls"], 2)
+            self.assertEqual(value["families"]["ipv4"], dict(outcome="unknown", error="command_exit",
+                routes=None, rejected_routes=None, rejection_counts=None, route_type_counts=None, device_category_counts=None))
+            self.assertEqual(value["families"]["ipv6"]["outcome"], "unobserved")
+            self.assertIsNone(value["families"]["ipv6"]["routes"])
+
+    def test_parse_and_command_errors_fail_closed_without_invented_empty_snapshot(self):
+        cases = ((b"\xff", "non_ascii", UnicodeDecodeError), (b"x" * 65537, "parse_bound", ValueError),
+            (subprocess.TimeoutExpired("private-token", 20), "command_timeout", subprocess.TimeoutExpired),
+            (OSError("private-token"), "command_io", OSError),
+            (ValueError("EMULATOR_COMMAND_OUTPUT"), "command_output_bound", ValueError),
+            (ValueError("EMULATOR_COMMAND_DEADLINE"), "command_deadline", ValueError),
+            (M.H.Interrupted("private-token"), "interrupted", M.H.Interrupted))
+        for output, category, error_type in cases:
+            with self.subTest(category=category), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaises(error_type):
+                    self.run_gate(directory, iter((self.SAFE, output)))
+                value = json.loads((Path(directory) / "guest-network-diagnostic.json").read_text())
+                self.assertEqual(value["families"]["ipv4"]["outcome"], "admitted")
+                self.assertEqual(value["families"]["ipv6"], dict(outcome="unknown", error=category,
+                    routes=None, rejected_routes=None, rejection_counts=None, route_type_counts=None, device_category_counts=None))
+                self.assertFalse(value["gate_passed"])
+                self.assertNotIn("private-token", json.dumps(value))
+
+    def test_disable_error_unobserved_and_atomic_write_failure_preserves_primary(self):
+        for failure in ("write", "replace"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(M, "PROOF", Path(directory)):
+                error = OSError("private-command")
+                original_write = M.H.write
+                def write(path, raw):
+                    original_write(path, raw)
+                    if failure == "write":
+                        raise OSError("private-write")
+                with patch.object(M.H, "write", side_effect=write), \
+                        patch.object(M.os, "replace", side_effect=OSError("private-replace")), self.assertRaises(OSError) as raised:
+                    M.GuestNetworkDiagnostic().enforce(Mock(side_effect=error), 1000)
+                self.assertIs(raised.exception, error)
+                self.assertFalse(list(Path(directory).iterdir()))
+        with tempfile.TemporaryDirectory() as directory, patch.object(M, "PROOF", Path(directory)):
+            with self.assertRaises(OSError):
+                M.GuestNetworkDiagnostic().enforce(Mock(side_effect=OSError("private")), 1000)
+            value = json.loads((Path(directory) / "guest-network-diagnostic.json").read_text())
+            self.assertEqual(value["stage"], "wifi_disable")
+            self.assertEqual(value["polls"], 0)
+            self.assertTrue(all(x["outcome"] == "unobserved" for x in value["families"].values()))
+
+    def test_real_inert_cli_both_families_and_success_is_not_an_application_proof(self):
+        calls = []
+        def adb(*args):
+            calls.append(args)
+            output = self.SAFE if args[1] == "ip" else b""
+            # The only actual executable is a bounded Python subprocess; no adb.
+            return subprocess.check_output([sys.executable, "-I", "-c",
+                "import sys;sys.stdout.buffer.write(" + repr(output) + ")"], timeout=3)
+        with tempfile.TemporaryDirectory() as directory, patch.object(M, "PROOF", Path(directory)):
+            M.GuestNetworkDiagnostic().enforce(adb, time.monotonic() + 10)
+            self.assertEqual(len(calls), 4)
+            self.assertEqual(calls[-2][2], "-4")
+            self.assertEqual(calls[-1][2], "-6")
+            self.assertFalse(list(Path(directory).iterdir()))
+
+    def test_route_types_and_device_name_conventions_do_not_relax_rejections(self):
+        cases = ((b"unreachable default", "unreachable", "missing_or_invalid"),
+            (b"blackhole 10.0.0.0/8", "blackhole", "missing_or_invalid"),
+            (b"prohibit 10.0.0.0/8", "prohibit", "missing_or_invalid"),
+            (b"throw 10.0.0.0/8", "throw", "missing_or_invalid"),
+            (b"default via 10.0.2.2 dev eth0", "unicast_or_unspecified", "ethernet"),
+            (b"10.0.2.0/24 dev wlan0", "unicast_or_unspecified", "wifi"),
+            (b"fe80::/64 dev eth0", "unicast_or_unspecified", "ethernet"),
+            (b"unicast 10.0.2.0/24 dev wlan0", "unicast_or_unspecified", "wifi"),
+            (b"local 10.0.2.15 dev eth0", "other", "ethernet"),
+            (b"unrecognized unreachable dev ether-private", "other", "other"),
+            (b"10.0.2.0/24 dev eth0private", "unicast_or_unspecified", "other"),
+            (b"10.0.2.0/24 dev wlan0private", "unicast_or_unspecified", "other"),
+            (b"10.0.2.0/24 dev eth0 dev lo", "unicast_or_unspecified", "missing_or_invalid"))
+        for raw, kind, device in cases:
+            with self.subTest(raw=raw):
+                value = M.guest_route_observation(raw)
+                self.assertEqual(value["outcome"], "rejected")
+                self.assertEqual(value["route_type_counts"][kind], 1)
+                self.assertEqual(sum(value["route_type_counts"].values()), 1)
+                self.assertEqual(value["device_category_counts"][device], 1)
+                self.assertEqual(sum(value["device_category_counts"].values()), 1)
+        self.assertEqual(M.guest_route_observation(self.SAFE)["device_category_counts"]["lo"], 2)
+
+    def test_maximum_route_count_stays_bounded_and_never_exports_raw_tokens(self):
+        raw = b"x\n" * 32768
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "GUEST_NETWORK_STILL_ACTIVE"):
+                self.run_gate(directory, iter((raw, raw)))
+            receipt = (Path(directory) / "guest-network-diagnostic.json").read_bytes()
+            self.assertLessEqual(len(receipt), 2048)
+            value = json.loads(receipt)
+            self.assertEqual(value["device_category_basis"], "fixed_name_convention_only")
+            for family in value["families"].values():
+                self.assertEqual(family["routes"], 32768)
+                self.assertEqual(family["rejected_routes"], 32768)
+                self.assertEqual(family["route_type_counts"]["other"], 32768)
+                self.assertEqual(family["device_category_counts"]["missing_or_invalid"], 32768)
+
 
 class AvdPreflight(unittest.TestCase):
     def observation(self):

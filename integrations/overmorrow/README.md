@@ -342,11 +342,40 @@ confirm descendant drain, so scoped policy/staging cleanup remains unconfirmed;
 KVM access restoration and the unchanged host network namespace do pass. There
 is no inner installation/UI report or full-trial cleanup receipt.
 
-The next candidate permits 4 GiB RSS only for this fixed installed emulator
+Candidate `cdf604e` permits 4 GiB RSS only for this fixed installed emulator
 phase, with at least 6 GiB available at launch and the same continuous 2 GiB
 host reserve. Other preflights stay at 3 GiB. Guest RAM (1536 MiB), two cores,
 graphics, CPU/wall deadlines, sandbox and conservative cleanup gates are
-unchanged. This candidate is not a demonstrated fit or installed-app success.
+unchanged.
+
+The [twenty-fifth attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38316868986)
+on that exact candidate passes AVD creation, boot and guest-identity checks, then
+fails before installation at `guest_network / GUEST_NETWORK_STILL_ACTIVE`.
+The original diagnostic does not identify the rejected route or address family;
+an active Ethernet path or a conservatively rejected route form is not yet an
+established cause. The installed phase runs for 63.209 seconds, with peak aggregate
+RSS 3,652,395,008 bytes below 4 GiB. This is not another memory-bound failure.
+Inner process/AVD/home and outer policy/staging cleanup pass, as do KVM restoration
+and the unchanged host network namespace. No app or final network-boundary report
+exists, so installation and UI operation remain unproved.
+
+Acquisition and the clean strict-offline rebuild also pass in that run, with
+matching 74,366,059-byte APK receipt hash
+`a90742fcb4d92dea29e424826526ecf162e16995b928560e81308df38603142f`.
+No APK binary is exported after failure. The 44 original artifact members,
+all fifteen step-log hashes and input/provenance bindings are checked.
+Separate component CI passes 305 tests on its actual PR merge; it does not
+replace the installed-app trial.
+
+The follow-up observes both IPv4 and IPv6 during each successful route-query
+poll, even when the first family is rejected. A separate, at-most-2-KiB failure
+receipt records only the last poll's fixed rejection, route-type and device-name
+categories; unknown or unobserved results stay explicit. No addresses, interface
+names or raw command text are exported, and a name category is not proof of a
+device's link type. The original admission predicate, deadlines, resource limits
+and cleanup remain unchanged. Diagnostic publication cannot replace the primary
+failure or create an app-success report. All 139 inert Android and 40 shared-helper
+tests pass; actual execution of this diagnostic remains required.
 
 The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only

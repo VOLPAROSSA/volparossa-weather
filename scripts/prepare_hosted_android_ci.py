@@ -10,6 +10,7 @@ No release signing, mobile core, live weather or physical-device proof.
 import base64
 import hashlib
 import importlib.util
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -506,21 +507,140 @@ def drain_children(children):
     return drained
 
 
-def no_guest_egress_routes(raw):
+def guest_route_observation(raw):
     require(len(raw) <= 65536, "GUEST_ROUTE_OUTPUT_BOUND")
     text = raw.decode("ascii")
+    counts = dict(default_route=0, gateway=0, device_count=0, device_value=0, non_loopback=0)
+    types = dict(unreachable=0, blackhole=0, prohibit=0, throw=0, unicast_or_unspecified=0, other=0)
+    devices = dict(lo=0, ethernet=0, wifi=0, other=0, missing_or_invalid=0)
+    routes = rejected = 0
     for line in text.splitlines():
         words = line.split()
         if not words:
             continue
+        routes += 1
+        # Route kinds use only an explicit first token or a valid destination;
+        # a familiar word elsewhere is not a route type. No address is retained.
+        token = words[0]
+        kind = token if token in ("unreachable", "blackhole", "prohibit", "throw") else "other"
+        if token in ("unicast", "default"):
+            kind = "unicast_or_unspecified"
+        elif len(token) <= 64:
+            try:
+                ipaddress.ip_network(token, strict=False)
+                kind = "unicast_or_unspecified"
+            except ValueError:
+                pass
+        types[kind] += 1
         # Connected routes matter too: 10.0.2.2 is reachable without a default
         # route on the emulator's normal 10.0.2.0/24 guest network. Only direct
         # loopback routes are admitted, in every IPv4/IPv6 table.
-        if (any(w in ("default", "0.0.0.0/0", "::/0", "via", "nexthop") for w in words)
-                or words.count("dev") != 1 or words.index("dev") + 1 >= len(words)
-                or words[words.index("dev") + 1] != "lo"):
-            return False
-    return True
+        reasons = dict(default_route=any(w in ("default", "0.0.0.0/0", "::/0") for w in words),
+            gateway=any(w in ("via", "nexthop") for w in words),
+            device_count=words.count("dev") != 1, device_value=False, non_loopback=False)
+        if not reasons["device_count"]:
+            index = words.index("dev") + 1
+            reasons["device_value"] = index >= len(words)
+            reasons["non_loopback"] = index < len(words) and words[index] != "lo"
+        device = "missing_or_invalid"
+        if not reasons["device_count"] and not reasons["device_value"]:
+            # Exact name conventions only, NOT discovered interface/link type.
+            device = {"lo": "lo", "eth0": "ethernet", "wlan0": "wifi"}.get(words[index], "other")
+        devices[device] += 1
+        rejected += any(reasons.values())
+        for name, present in reasons.items():
+            counts[name] += present
+    return dict(outcome="rejected" if rejected else "admitted", error="none", routes=routes,
+        rejected_routes=rejected, rejection_counts=counts, route_type_counts=types, device_category_counts=devices)
+
+
+def no_guest_egress_routes(raw):
+    return guest_route_observation(raw)["outcome"] == "admitted"
+
+
+class GuestNetworkDiagnostic:
+    """Last poll only, with overlapping reason counts; no guest identifiers."""
+    MAX_RECEIPT = 2048
+    FAMILIES = (("ipv4", "-4"), ("ipv6", "-6"))
+
+    def __init__(self):
+        self.stage = "wifi_disable"
+        self.polls = 0
+        self.family = None
+        self.families = self.unobserved()
+
+    @classmethod
+    def unobserved(cls):
+        return {name: dict(outcome="unobserved", error="none", routes=None,
+            rejected_routes=None, rejection_counts=None, route_type_counts=None, device_category_counts=None)
+            for name, _ in cls.FAMILIES}
+
+    @staticmethod
+    def error_category(error):
+        if isinstance(error, (H.Interrupted, KeyboardInterrupt)):
+            return "interrupted"
+        if isinstance(error, UnicodeDecodeError):
+            return "non_ascii"
+        if isinstance(error, subprocess.CalledProcessError):
+            return "command_exit"
+        if isinstance(error, subprocess.TimeoutExpired):
+            return "command_timeout"
+        if isinstance(error, OSError):
+            return "command_io"
+        if type(error) is ValueError:
+            return {"GUEST_ROUTE_OUTPUT_BOUND": "parse_bound", "EMULATOR_COMMAND_OUTPUT": "command_output_bound",
+                "EMULATOR_COMMAND_DEADLINE": "command_deadline", "EMULATOR_DEADLINE": "command_deadline",
+                "GUEST_NETWORK_STILL_ACTIVE": "routes_rejected"}.get(str(error), "unknown")
+        return "unknown"
+
+    def enforce(self, adb_command, stop):
+        try:
+            adb_command("shell", "svc", "wifi", "disable")
+            self.stage = "data_disable"
+            adb_command("shell", "svc", "data", "disable")
+            self.stage = "routes"
+            route_end = min(stop, time.monotonic() + 10)
+            while True:
+                self.polls += 1
+                self.families = self.unobserved()
+                # Evaluate BOTH successful command outputs, even if IPv4 is
+                # rejected. Fatal command/parse errors still propagate at once.
+                for name, flag in self.FAMILIES:
+                    self.family = name
+                    self.families[name] = guest_route_observation(
+                        adb_command("shell", "ip", flag, "route", "show", "table", "all"))
+                self.family = None
+                if all(value["outcome"] == "admitted" for value in self.families.values()):
+                    return
+                require(time.monotonic() < route_end, "GUEST_NETWORK_STILL_ACTIVE")
+                time.sleep(0.25)
+        except BaseException as error:
+            self.publish_failure(error)
+            raise
+
+    def publish_failure(self, error):
+        part = PROOF / "guest-network-diagnostic.part"
+        try:
+            category = self.error_category(error)
+            if self.family is not None:
+                self.families[self.family] = self.unobserved()[self.family]
+                self.families[self.family].update(outcome="unknown", error=category)
+            value = dict(schema=1, kind="hosted-android-guest-network-diagnostic", stage=self.stage,
+                failure=category, polls=self.polls, families=self.families, snapshot="last_poll",
+                rejection_counts_overlap=True, device_category_basis="fixed_name_convention_only",
+                gate_passed=False, cause_established=False, raw_text_exported=False)
+            raw = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+            require(len(raw) <= self.MAX_RECEIPT, "GUEST_NETWORK_DIAGNOSTIC_BOUND")
+            H.write(part, raw)
+            os.replace(part, PROOF / "guest-network-diagnostic.json")
+        except BaseException:
+            # Best effort only: never replace the primary error or its cleanup.
+            pass
+        finally:
+            try:
+                part.unlink(missing_ok=True)
+            except BaseException:
+                pass
 
 
 class EmulatorDiagnostic:
@@ -1051,15 +1171,7 @@ def inside(*, avd_only=False):
         # observer-only fixture control port. Disable guest uplinks, then admit
         # only the explicit adbd reverse to the public fixture API.
         diagnostic.phase = "guest_network"
-        adb_command("shell", "svc", "wifi", "disable")
-        adb_command("shell", "svc", "data", "disable")
-        route_end = min(stop, time.monotonic() + 10)
-        while True:
-            if all(no_guest_egress_routes(adb_command("shell", "ip", family, "route", "show", "table", "all"))
-                   for family in ("-4", "-6")):
-                break
-            require(time.monotonic() < route_end, "GUEST_NETWORK_STILL_ACTIVE")
-            time.sleep(0.25)
+        GuestNetworkDiagnostic().enforce(adb_command, stop)
         H.write(PROOF / "emulator-boundary.json", (json.dumps(dict(schema=1, api=36, architecture="x86_64",
             kvm_required=True, guest_wifi_disabled=True, guest_mobile_data_disabled=True, guest_default_routes_absent=True,
             guest_non_loopback_routes_absent=True,
