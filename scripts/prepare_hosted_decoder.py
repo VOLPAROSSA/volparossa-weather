@@ -49,6 +49,15 @@ NORMAL_FLAGS = "-ffile-prefix-map=/build=/volparossa-decoder -fmacro-prefix-map=
 SCOPE = dict(network_during_build=False, downloaded_executables=False, original_sources_unchanged=True,
              decoder_authorized=False, origin_acquisition_proven=False, browser_proven=False,
              fully_hermetic_toolchain=False, bit_reproducibility_proven=False, debian13_abi_proven=False)
+CLEANUP_UNCONFIRMED_EXIT = 125
+
+
+class CleanupUnconfirmed(ValueError):
+    pass
+
+
+class BuildInterrupted(Exception):
+    """Not OSError: selectors otherwise swallows an InterruptedError handler."""
 
 
 def require(condition, code):
@@ -199,11 +208,14 @@ def run_step(output, tools, name, command, deadline, maximum=MAX_LOG):
             # End the whole private build group even if the command exited but
             # left a descendant; bwrap's PID namespace also dies with its parent.
             try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-            process.stdout.close()
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+                process.stdout.close()
+            except (OSError, subprocess.SubprocessError, BuildInterrupted, KeyboardInterrupt) as error:
+                raise CleanupUnconfirmed("DECODER_CLEANUP_UNCONFIRMED") from error
 
 
 def tool_record(path):
@@ -420,10 +432,30 @@ def main():
             result = build(args.archives, args.output, args.toolchain_manifest, args.toolchain_sha256)
         print(json.dumps(result, sort_keys=True))
         return 0
+    except BuildInterrupted:
+        print("DECODER_BUILD_INTERRUPTED", file=sys.stderr)
+        return 130
+    except CleanupUnconfirmed:
+        print("DECODER_CLEANUP_UNCONFIRMED", file=sys.stderr)
+        return CLEANUP_UNCONFIRMED_EXIT
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         print("HOSTED_DECODER_PREPARATION_FAILED", file=sys.stderr)
         return 1
 
 
+def cli():
+    # CI cancellation must unwind run_step.finally, not kill Python before its
+    # owned bwrap process group is joined. Library imports install no handlers.
+    previous = signal.getsignal(signal.SIGTERM)
+    def interrupted(_signal, _frame):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        raise BuildInterrupted("DECODER_BUILD_INTERRUPTED")
+    signal.signal(signal.SIGTERM, interrupted)
+    try:
+        return main()
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(cli())

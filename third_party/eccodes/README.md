@@ -59,6 +59,19 @@ source hashes, tool versions, output hashes and original licenses. Toolchain
 capture describes the runner; it is not independent decoder authorization or a
 fully hermetic, bit-reproducible build claim.
 
+On the disposable Ubuntu GitHub runner, the workflow uses a separate
+[`CI wrapper`](../../scripts/prepare_hosted_decoder_ci.py) for the runner's
+user-namespace restrictions. It records bounded diagnostics, refuses conflicting
+AppArmor profiles, and temporarily adds only the pinned Bubblewrap setup and
+capability-denying child profiles. It verifies the actual decoder sandbox before
+capturing tools or compiling, then removes its own policy after stopping its
+processes. The build stays unprivileged and offline; no system-wide restriction
+is disabled. Unconfirmed process termination or policy cleanup fails the job;
+the wrapper does not remove a policy that surviving processes might still need.
+This wrapper is not for a developer machine or a self-hosted runner.
+Its original policy license and provenance are retained under
+[`third_party/apparmor-ci`](../apparmor-ci/).
+
 Preview the recipe without downloads, compilation or toolchain execution:
 
 ```sh

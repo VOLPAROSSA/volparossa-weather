@@ -5,12 +5,13 @@ import json
 import os
 from pathlib import Path
 import runpy
+import signal
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 H = runpy.run_path(str(ROOT/"scripts/prepare_hosted_decoder.py"))
@@ -223,6 +224,69 @@ class HostedDecoder(unittest.TestCase):
                 self.run_inert(directory, "import time; time.sleep(10)", seconds=0.05)
             self.assertLess(time.monotonic()-started, 2)
             self.assertFalse((Path(directory)/"hosted-build-receipt.json").exists())
+
+    def test_cli_sigterm_unwinds_actual_inert_child_and_restores_handler(self):
+        # Execute Python only, never bwrap/compiler/decoder. The real CLI signal
+        # handler must reach the real run_step finally and reap its child.
+        code = r'''
+import os, runpy, signal, subprocess, sys, threading, time
+from pathlib import Path
+h = runpy.run_path(sys.argv[1])
+g = h['cli'].__globals__
+real_popen = subprocess.Popen
+children = []
+def popen(*args, **kwargs):
+    child = real_popen(*args, **kwargs)
+    children.append(child)
+    return child
+g['sandbox'] = lambda output, tools, argv: [sys.executable, '-c', 'import time; time.sleep(10)', '--', *argv]
+g['subprocess'].Popen = popen
+def main():
+    timer = threading.Timer(0.1, lambda: os.kill(os.getpid(), signal.SIGTERM))
+    timer.start()
+    try:
+        return h['run_step'](Path(sys.argv[2]), {}, 'inert', ['fixture'], time.monotonic()+5)
+    finally:
+        timer.cancel()
+        timer.join()
+g['main'] = main
+before = signal.getsignal(signal.SIGTERM)
+try:
+    h['cli']()
+except h['BuildInterrupted']:
+    pass
+else:
+    raise AssertionError('signal not propagated')
+assert signal.getsignal(signal.SIGTERM) == before
+assert len(children) == 1 and children[0].poll() is not None
+assert children[0].stdout.closed
+print('owned-child-reaped')
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run([sys.executable, "-c", code, str(ROOT/"scripts/prepare_hosted_decoder.py"), directory],
+                                    capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, b"owned-child-reaped\n")
+
+    def test_cli_reports_cleanup_uncertainty_distinct_from_ordinary_failure(self):
+        with patch.object(sys, "argv", ["recipe", "plan"]), patch.dict(H["main"].__globals__,
+                plan=Mock(side_effect=H["CleanupUnconfirmed"]("unconfirmed"))):
+            self.assertEqual(H["main"](), 125)
+
+    def test_signal_first_arriving_during_join_or_close_is_cleanup_unconfirmed(self):
+        for location in ("wait", "close"):
+            with self.subTest(location=location), tempfile.TemporaryDirectory() as directory:
+                child = Mock(pid=123)
+                child.wait.side_effect = ([0, H["BuildInterrupted"]("during cleanup")] if location == "wait" else [0, 0])
+                if location == "close": child.stdout.close.side_effect = H["BuildInterrupted"]("during close")
+                selector = Mock()
+                selector.__enter__ = Mock(return_value=selector)
+                selector.__exit__ = Mock(return_value=False)
+                selector.get_map.return_value = {}
+                with patch.object(subprocess, "Popen", return_value=child), patch.object(H["selectors"], "DefaultSelector", return_value=selector), \
+                        patch.object(os, "killpg"), patch.dict(H["run_step"].__globals__, sandbox=lambda _out, _tools, argv: ["--", *argv]):
+                    with self.assertRaises(H["CleanupUnconfirmed"]):
+                        H["run_step"](Path(directory), {}, "inert", ["inert"], time.monotonic()+2)
 
 
 if __name__ == "__main__":

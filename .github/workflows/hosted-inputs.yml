@@ -8,9 +8,13 @@ on:
     paths:
       - .github/workflows/hosted-inputs.yml
       - scripts/prepare_hosted_decoder.py
+      - scripts/prepare_hosted_decoder_ci.py
+      - scripts/hosted-decoder-bwrap.apparmor
       - scripts/prepare_hosted_runtime.py
+      - third_party/apparmor-ci/**
       - third_party/hosted-runtime-inputs.json
       - tests/test_hosted_decoder.py
+      - tests/test_hosted_decoder_ci.py
       - tests/test_hosted_runtime.py
 
 permissions:
@@ -40,10 +44,10 @@ jobs:
           test "$(id -u)" != 0
           sudo -n apt-get update
           sudo -n apt-get install --yes --no-install-recommends \
-            bubblewrap build-essential cmake git python3
+            apparmor bubblewrap build-essential cmake git python3
           umask 077
           mkdir -m 0700 build
-          dpkg-query -W bubblewrap gcc g++ binutils cmake make python3 git \
+          dpkg-query -W apparmor bubblewrap gcc g++ binutils cmake make python3 git \
             > build/hosted-tool-packages.txt
       - name: Fetch and verify the three existing source pins without building
         run: |
@@ -56,23 +60,11 @@ jobs:
           umask 077
           python3 -B scripts/prepare_hosted_runtime.py \
             --output "$GITHUB_WORKSPACE/build/hosted-runtime-ci" --fetch
-      - name: Record the actual runner toolchain without granting decoder authority
+      - name: Verify runner isolation, record tools and compile offline
         run: |
           set -euo pipefail
           umask 077
-          python3 -B scripts/prepare_hosted_decoder.py capture-toolchain \
-            --output-dir "$GITHUB_WORKSPACE/build/hosted-toolchain-ci" \
-            > build/hosted-toolchain-capture.json
-      - name: Compile offline and verify nonconstant CCSDS data
-        run: |
-          set -euo pipefail
-          umask 077
-          toolchain_sha=$(sha256sum build/hosted-toolchain-ci/toolchain.json | cut -d ' ' -f 1)
-          python3 -B scripts/prepare_hosted_decoder.py build \
-            --archives "$GITHUB_WORKSPACE/build/eccodes/downloads" \
-            --output "$GITHUB_WORKSPACE/build/hosted-decoder-ci" \
-            --toolchain-manifest "$GITHUB_WORKSPACE/build/hosted-toolchain-ci/toolchain.json" \
-            --toolchain-sha256 "$toolchain_sha"
+          python3 -B scripts/prepare_hosted_decoder_ci.py
       - name: State the scope of this preparation
         if: always()
         run: |
@@ -95,6 +87,8 @@ jobs:
             build/hosted-toolchain-capture.json
             build/hosted-toolchain-ci/toolchain.json
             build/hosted-toolchain-ci/*.log
+            build/hosted-sandbox-ci/*.json
+            build/hosted-sandbox-ci/*.log
             build/hosted-runtime-ci/provenance.json
             build/hosted-decoder-ci/hosted-build-receipt.json
             build/hosted-decoder-ci/*.log

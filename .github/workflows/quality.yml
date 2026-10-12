@@ -36,6 +36,7 @@ jobs:
       - name: Check hosted input preparation without downloads or native builds
         run: |
           test -f tests/test_hosted_decoder.py
+          test -f tests/test_hosted_decoder_ci.py
           test -f tests/test_hosted_runtime.py
           python3 -B -m unittest discover -s tests -p 'test_hosted_*.py'
           python3 -m json.tool third_party/hosted-runtime-inputs.json > /dev/null
