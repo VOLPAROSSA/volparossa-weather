@@ -106,6 +106,33 @@ class HostedClients(unittest.TestCase):
         self.assertNotIn("prebuild", repr(commands))
         self.assertNotIn("npx", repr(commands))
 
+    def test_only_exact_upstream_engine_strict_config_is_admitted_unchanged(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(G, STAGE=Path(directory)):
+            path = Path(directory) / ".npmrc"
+            original = b"engine-strict=true\n"
+            path.write_bytes(original)
+            path.chmod(0o600)
+            self.assertEqual(H["project_npm_config"](), hashlib.sha256(original).hexdigest())
+            self.assertEqual(path.read_bytes(), original)
+            for config in (b"", b"engine-strict=false\n", b"engine-strict=true",
+                    original + b"registry=https://example.invalid/\n",
+                    original + b"//registry.npmjs.org/:_authToken=secret\n",
+                    original + b"ignore-scripts=false\n", original + b"script-shell=/bin/sh\n"):
+                with self.subTest(config=config):
+                    path.write_bytes(config)
+                    with self.assertRaisesRegex(ValueError, "PROJECT_NPM_CONFIG_NOT_ADMITTED"):
+                        H["project_npm_config"]()
+
+    def test_project_config_missing_and_symlinked_are_not_admitted(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(G, STAGE=Path(directory)):
+            root = Path(directory)
+            with self.assertRaises(FileNotFoundError):
+                H["project_npm_config"]()
+            (root / "other").write_bytes(b"engine-strict=true\n")
+            (root / ".npmrc").symlink_to("other")
+            with self.assertRaises(OSError):
+                H["project_npm_config"]()
+
     def test_extensionless_locked_svelte_check_cli_is_accepted_not_arbitrary_target(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(G, STAGE=Path(directory)):
             stage = Path(directory)

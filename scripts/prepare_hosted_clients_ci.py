@@ -27,6 +27,7 @@ BROWSER = BUILD / "hosted-browser-source"
 BROWSER_COMMIT = "08bac388a0abfd06426bebe8f6fabd0157d2e709"
 FIREFOX_VERSION = "140.16.0"
 FIREFOX_SOURCE_STAMP = "d864999404b3032f682d74ccc60d1ce38c9ce609"
+PROJECT_NPMRC_SHA256 = "7151cf397def0c2cb0ab65643701d27d335a72c90f775675b5f826bc7005818a"
 FIREFOX = BROWSER / "build/firefox-hosted-ci"
 STAGE = BUILD / "drizzli-hosted-ci"
 PROOF = BUILD / "drizzli-hosted-browser-ci"
@@ -442,8 +443,18 @@ def locked_dependencies():
                 and isinstance(entry.get("resolved"), str)
                 and entry["resolved"].startswith("https://registry.npmjs.org/")
                 and re.fullmatch(r"sha512-[A-Za-z0-9+/]+={0,2}", entry.get("integrity", "")), "DEPENDENCY_ORIGIN_OR_INTEGRITY")
-    require(not (STAGE / ".npmrc").exists(), "PROJECT_NPM_CONFIG_NOT_ADMITTED")
+    project_npm_config()
     return metadata
+
+
+def project_npm_config():
+    # Exact unchanged upstream d2a6839 configuration, not permission to import
+    # arbitrary npm settings. This only enforces declared engine requirements;
+    # registry/auth/proxy and lifecycle-script overrides remain unadmitted.
+    raw = read(STAGE / ".npmrc", 256)
+    require(raw == b"engine-strict=true\n" and sha(raw) == PROJECT_NPMRC_SHA256,
+            "PROJECT_NPM_CONFIG_NOT_ADMITTED")
+    return PROJECT_NPMRC_SHA256
 
 
 def npm_command():
@@ -540,6 +551,7 @@ def execute(helper, platform):
         run("npm-acquisition", sandbox(npm_command(), mode="acquire", writable=STAGE),
             300, env=environment(True), memory=1536 * 1024**2)
         require(sha(read(STAGE / "package-lock.json")) == metadata["package_lock_sha256"], "LOCK_CHANGED_BY_INSTALL")
+        project_npm_config()
         phase = "offline-compilation"
         preflight("compile")
         cli_bindings = {}
@@ -584,6 +596,7 @@ def execute(helper, platform):
         save("build.json", dict(schema=1, kind="hosted-drizzli-build", weather_commit=os.environ["GITHUB_SHA"],
             browser_commit=BROWSER_COMMIT, upstream_commit=metadata["commit"],
             lock_sha256=metadata["package_lock_sha256"], cli_bindings=cli_bindings,
+            project_npmrc_sha256=project_npm_config(),
             plugin_files={str(p.relative_to(STAGE)): digest(p) for p in sorted((STAGE / "volparossa-build-plugins").iterdir())},
             runtime=runtime, browser_report_sha256=sha(read(PROOF / "report.json")),
             compiled_networkless=True, dependency_lifecycle_scripts=False, mutable_assets_prehook=False,
