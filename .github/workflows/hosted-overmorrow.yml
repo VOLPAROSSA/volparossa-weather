@@ -1,0 +1,132 @@
+name: Build hosted Overmorrow client
+run-name: Pinned Overmorrow build and isolated synthetic Firefox trials
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/hosted-overmorrow]
+    paths:
+      - .github/workflows/hosted-overmorrow.yml
+      - scripts/prepare_hosted_overmorrow_ci.py
+      - scripts/prepare_hosted_flutter.py
+      - scripts/prepare_hosted_clients_ci.py
+      - scripts/prepare_hosted_decoder.py
+      - scripts/prepare_hosted_decoder_ci.py
+      - scripts/hosted-clients-bwrap.apparmor
+      - scripts/prepare_hosted_runtime.py
+      - third_party/hosted-runtime*.json
+      - third_party/apparmor-ci/**
+      - tests/test_hosted_*.py
+      - integrations/overmorrow/**
+      - src/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weather-hosted-overmorrow-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  overmorrow:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check exact source and inert preparation contracts
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --short --untracked-files=all)"
+          test -f tests/test_hosted_flutter.py
+          test -f tests/test_hosted_overmorrow_ci.py
+          test -f tests/test_hosted_overmorrow_workflow.py
+          python3 -B -m unittest discover -s tests -p 'test_hosted_*.py'
+      - name: Retrieve the reviewed public Browser helper sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: VOLPAROSSA/volparossa-browser
+          ref: 08bac388a0abfd06426bebe8f6fabd0157d2e709
+          path: build/hosted-browser-source
+          persist-credentials: false
+      - name: Install dependencies only on this disposable runner
+        run: |
+          set -euo pipefail
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(id -u)" != 0
+          timeout 180s sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update
+          timeout 300s sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+            apparmor bubblewrap git python3 util-linux iproute2 ca-certificates curl unzip xz-utils zip libglu1-mesa \
+            libgtk-3-0t64 libdbus-glib-1-2 libasound2t64 libx11-xcb1 libxt6t64 libpci3 fonts-dejavu-core \
+            libnspr4 libevent-2.1-7t64 libvpx9
+          umask 077
+          dpkg-query -W apparmor bubblewrap git python3 util-linux iproute2 ca-certificates curl unzip xz-utils zip \
+            libglu1-mesa libc6 libstdc++6 libgtk-3-0t64 libdbus-glib-1-2 libasound2t64 libx11-xcb1 \
+            libxt6t64 libpci3 fonts-dejavu-core libnspr4 libevent-2.1-7t64 libvpx9 \
+            > build/hosted-overmorrow-packages.txt
+      - name: Prepare the pinned public Flutter SDK without executing it
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 -B scripts/prepare_hosted_flutter.py --fetch \
+            --output "$GITHUB_WORKSPACE/build/hosted-flutter-sdk"
+      - name: Prepare authenticated public browser and fixture runtimes
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 -B scripts/prepare_hosted_runtime.py --with-npm --fetch \
+            --output "$GITHUB_WORKSPACE/build/hosted-client-runtime"
+      - name: Build offline and exercise the real client and native tables
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 -B scripts/prepare_hosted_overmorrow_ci.py
+      - name: Retain bounded build and browser diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hosted-overmorrow-proof-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/hosted-overmorrow-packages.txt
+            build/hosted-client-runtime/provenance.json
+            build/hosted-flutter-sdk/provenance.json
+            build/hosted-overmorrow-ci/*.json
+            build/hosted-overmorrow-ci/*.log
+            build/overmorrow-hosted-browser-ci/report.json
+            build/overmorrow-hosted-browser-ci/*.log
+            build/overmorrow-hosted-table-ci/report.json
+            build/overmorrow-hosted-table-ci/*.log
+      - name: Retain only successful public assets and original notices
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hosted-overmorrow-assets-unadmitted-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            build/overmorrow-hosted-web-ci
+            build/overmorrow-hosted-ci/LICENSE
+            build/overmorrow-hosted-ci/LICENSE.VOLPAROSSA
+            build/overmorrow-hosted-ci/pubspec.lock
+            build/hosted-browser-source/build/firefox-hosted-ci
+            build/hosted-client-runtime/node/bin/node
+            build/hosted-client-runtime/node/LICENSE
+            build/hosted-client-runtime/licenses/firefox-copyright
+      - name: State the scope of the trial
+        if: always()
+        run: |
+          printf '%s\n' \
+            'Inspect original outcomes: actual Overmorrow build, synthetic UI and ordered native tables.' \
+            'No live Weather source request, core delivery, private bundle upload or native mobile proof.' \
+            'SDK, pub cache, application profiles and Git data are never exported as artifacts.' \
+            'Public assets require a separate reviewed core input profile before joined execution.' \
+            >> "$GITHUB_STEP_SUMMARY"
