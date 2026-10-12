@@ -81,9 +81,18 @@ The [Android hosted workflow](../../.github/workflows/hosted-android.yml) prepar
 a debug APK build and installed-app emulator trial; neither has yet run. The
 [first attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38242345261)
 stopped during input preparation because two nested process alarms conflicted.
-The correction keeps the total and per-step deadlines without nesting alarms;
-31 hosted-preparation tests pass, including the original failure and actual
-preparation with inert inputs. A corrected hosted trial is still required.
+The correction keeps the total and per-step deadlines without nesting alarms.
+The [second attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38243122640)
+verifies and materializes all eight Android/Gradle archives, then stops before
+app staging because the root-owned Java launcher is passed to a runner-owned
+artifact hash check. Cleanup restores the original KVM access.
+
+The Java correction hashes only the fixed apt launcher with root-ownership,
+no-follow, same-descriptor and size checks, and rechecks its bytes after the
+version probe. Generic artifact ownership requirements are unchanged. All 38
+hosted-preparation tests pass, including both reproduced failures; 11 native
+preparer tests also pass. No native runtime was executed locally. A corrected
+hosted APK/emulator trial is still required.
 
 The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only

@@ -8,6 +8,7 @@ review. Only the subsequent networkless rebuild supplies the tested debug APK.
 No release signing, mobile core, live weather or physical-device proof.
 """
 import base64
+import hashlib
 import importlib.util
 import json
 import os
@@ -36,6 +37,7 @@ INPUTS = ROOT / "build/hosted-android-inputs"
 SDK = W.SDK
 WORKFLOW = "Build hosted Android client"
 JAVA = Path("/usr/lib/jvm/java-17-openjdk-amd64")
+JAVA_LAUNCHER_LIMIT = 4 * 1024**2
 ANDROID = Path("/tools/android-inputs/sdk")
 SERIAL = "emulator-5554"
 PACKAGE = "org.volparossa.weather.trial"
@@ -160,13 +162,40 @@ def verification_metadata():
         sha256_entries=len(hashes), captured_after_execution=True, independently_reviewed=False)
 
 
+def apt_java_digest():
+    """Only the fixed distro launcher, not the runner-owned artifact policy."""
+    path = JAVA / "bin/java"
+    require(path.resolve() == path, "JAVA_TOOL_PATH")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        before = os.fstat(fd)
+        require(stat.S_ISREG(before.st_mode) and before.st_uid == 0 and before.st_nlink == 1
+            and before.st_mode & 0o111 and not before.st_mode & 0o7022
+            and 0 < before.st_size <= JAVA_LAUNCHER_LIMIT, "JAVA_TOOL")
+        digest, size = hashlib.sha256(), 0
+        while True:
+            block = os.read(fd, min(65536, JAVA_LAUNCHER_LIMIT + 1 - size))
+            if not block:
+                break
+            size += len(block)
+            require(size <= JAVA_LAUNCHER_LIMIT, "JAVA_TOOL_BOUND")
+            digest.update(block)
+        after = os.fstat(fd)
+        fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink",
+            "st_size", "st_mtime_ns", "st_ctime_ns")
+        require(size == before.st_size and all(getattr(before, k) == getattr(after, k) for k in fields),
+            "JAVA_TOOL_CHANGED")
+        return dict(bytes=size, sha256=digest.hexdigest())
+    finally:
+        os.close(fd)
+
+
 def java_provenance(helper):
-    info = (JAVA / "bin/java").lstat()
-    require(JAVA.resolve() == JAVA and stat.S_ISREG(info.st_mode) and info.st_uid == 0
-        and not info.st_mode & 0o022, "JAVA_TOOL")
+    executable = apt_java_digest()
     _, version = helper.process([str(JAVA / "bin/java"), "-version"], 10)
     require(b'"17.' in version and len(version) < 8192, "JAVA_17_REQUIRED")
-    return dict(path=str(JAVA), executable=H.digest(JAVA / "bin/java"), version=version.decode().strip(),
+    require(apt_java_digest() == executable, "JAVA_TOOL_CHANGED")
+    return dict(path=str(JAVA), executable=executable, version=version.decode().strip(),
         authority="signed-disposable-apt-package-inventory", independently_reproducible=False)
 
 

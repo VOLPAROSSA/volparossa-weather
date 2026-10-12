@@ -1,12 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Pure commands/scope/lifecycle contracts; no native tools or policy execution."""
 import base64
+import hashlib
 import importlib.util
 import os
 import io
 from pathlib import Path
 import subprocess
+import stat
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -14,6 +17,18 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("native_ci_tests", ROOT / "scripts/prepare_hosted_android_ci.py")
 M = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(M)
+FSTAT = os.fstat
+
+
+def root_file_stat(fd, **changes):
+    """Inert ownership simulation; never chown or execute an apt tool."""
+    info = FSTAT(fd)
+    fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink",
+        "st_size", "st_mtime_ns", "st_ctime_ns")
+    values = {k: getattr(info, k) for k in fields}
+    values.update(st_uid=0)
+    values.update(changes)
+    return SimpleNamespace(**values)
 
 
 def report():
@@ -168,6 +183,120 @@ class NativeCI(unittest.TestCase):
                 target.write_bytes(b"modified")
                 with self.assertRaisesRegex(ValueError, "NATIVE_SOURCE_CHANGED"):
                     M.native_sources(binding)
+
+
+class AptJavaProvenance(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.java = Path(temporary.name) / "jdk"
+        self.target = self.java / "bin/java"
+        self.target.parent.mkdir(parents=True)
+        self.raw = b"inert Java launcher fixture; never executed\n"
+        self.target.write_bytes(self.raw)
+        self.target.chmod(0o755)
+        self.addCleanup(patch.stopall)
+        patch.object(M, "JAVA", self.java).start()
+        self.helper = Mock()
+        self.helper.process.return_value = (0, b'openjdk version "17.0.20.1"\n')
+
+    def test_old_runner_digest_rejects_apt_owner_new_fixed_provenance_accepts(self):
+        with patch.object(M.os, "fstat", side_effect=root_file_stat), patch.object(M.os, "getuid", return_value=1001):
+            with self.assertRaisesRegex(ValueError, "UNSAFE_FILE"):
+                M.H.digest(self.target)
+            value = M.java_provenance(self.helper)
+        self.assertEqual(value, dict(path=str(self.java),
+            executable=dict(bytes=len(self.raw), sha256=hashlib.sha256(self.raw).hexdigest()),
+            version='openjdk version "17.0.20.1"', authority="signed-disposable-apt-package-inventory",
+            independently_reproducible=False))
+        self.helper.process.assert_called_once_with([str(self.target), "-version"], 10)
+
+    def test_root_ownership_regular_single_link_executable_and_size_are_required(self):
+        bad = (dict(st_uid=1001), dict(st_uid=65534), dict(st_mode=stat.S_IFDIR | 0o755),
+            dict(st_nlink=2), dict(st_mode=stat.S_IFREG | 0o644), dict(st_size=0),
+            dict(st_size=M.JAVA_LAUNCHER_LIMIT + 1))
+        for changes in bad:
+            with self.subTest(changes=changes), patch.object(M.os, "fstat",
+                    side_effect=lambda fd: root_file_stat(fd, **changes)):
+                with self.assertRaisesRegex(ValueError, "JAVA_TOOL"):
+                    M.java_provenance(self.helper)
+        self.helper.process.assert_not_called()
+
+    def test_writable_and_special_modes_are_rejected(self):
+        for mode in (0o775, 0o757, 0o777, 0o4755, 0o2755, 0o1755):
+            with self.subTest(mode=mode), patch.object(M.os, "fstat",
+                    side_effect=lambda fd: root_file_stat(fd, st_mode=stat.S_IFREG | mode)):
+                with self.assertRaisesRegex(ValueError, "JAVA_TOOL"):
+                    M.apt_java_digest()
+
+    def test_symlink_and_fifo_do_not_follow_or_block(self):
+        self.target.unlink()
+        self.target.symlink_to("../not-a-java-tool")
+        with self.assertRaisesRegex(ValueError, "JAVA_TOOL_PATH"):
+            M.apt_java_digest()
+        self.target.unlink()
+        os.mkfifo(self.target, 0o600)
+        opened = []
+        actual_open = os.open
+        def open_nonblocking(path, flags):
+            self.assertTrue(flags & os.O_NOFOLLOW)
+            self.assertTrue(flags & os.O_NONBLOCK)
+            opened.append(actual_open(path, flags))
+            return opened[-1]
+        with patch.object(M.os, "open", side_effect=open_nonblocking), patch.object(M.os, "fstat", side_effect=root_file_stat):
+            with self.assertRaisesRegex(ValueError, "JAVA_TOOL"):
+                M.apt_java_digest()
+        with self.assertRaises(OSError):
+            FSTAT(opened[0])
+
+    def test_same_descriptor_metadata_change_and_in_place_write_fail_closed(self):
+        actual_read, opened = os.read, []
+        def mutate_after_read(fd, size):
+            result = actual_read(fd, size)
+            if result:
+                opened.append(fd)
+                before = self.target.stat()
+                self.target.write_bytes(b"x" * len(self.raw))
+                # Some temporary filesystems have coarse update timestamps.
+                os.utime(self.target, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+            return result
+        with patch.object(M.os, "read", side_effect=mutate_after_read), patch.object(M.os, "fstat", side_effect=root_file_stat):
+            with self.assertRaisesRegex(ValueError, "JAVA_TOOL_CHANGED"):
+                M.apt_java_digest()
+        with self.assertRaises(OSError):
+            FSTAT(opened[0])
+        for field in ("st_uid", "st_mode", "st_nlink", "st_size", "st_ino", "st_mtime_ns", "st_ctime_ns"):
+            calls = []
+            def changing_stat(fd):
+                info = root_file_stat(fd)
+                if calls:
+                    setattr(info, field, getattr(info, field) + 1)
+                calls.append(fd)
+                return info
+            with self.subTest(field=field), patch.object(M.os, "fstat", side_effect=changing_stat):
+                with self.assertRaisesRegex(ValueError, "JAVA_TOOL_CHANGED"):
+                    M.apt_java_digest()
+            self.assertEqual(calls, [calls[0], calls[0]])
+
+    def test_actual_read_bound_is_enforced_even_if_initial_size_is_stale(self):
+        with patch.object(M, "JAVA_LAUNCHER_LIMIT", 8), patch.object(M.os, "fstat",
+                side_effect=lambda fd: root_file_stat(fd, st_size=8)):
+            with self.assertRaisesRegex(ValueError, "JAVA_TOOL_BOUND"):
+                M.apt_java_digest()
+
+    def test_probe_change_or_wrong_version_never_gets_provenance(self):
+        def replace_during_probe(*args):
+            self.target.write_bytes(b"another inert launcher")
+            return (0, b'openjdk version "17.0.20.1"\n')
+        self.helper.process.side_effect = replace_during_probe
+        with patch.object(M.os, "fstat", side_effect=root_file_stat):
+            with self.assertRaisesRegex(ValueError, "JAVA_TOOL_CHANGED"):
+                M.java_provenance(self.helper)
+        self.helper.process.side_effect = None
+        self.helper.process.return_value = (0, b'openjdk version "21.0.1"\n')
+        with patch.object(M.os, "fstat", side_effect=root_file_stat):
+            with self.assertRaisesRegex(ValueError, "JAVA_17_REQUIRED"):
+                M.java_provenance(self.helper)
 
 
 if __name__ == "__main__":
