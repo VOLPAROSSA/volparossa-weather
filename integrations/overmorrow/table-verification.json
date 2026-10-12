@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "kind": "overmorrow-synthetic-native-table-contract",
+  "passed": true,
+  "report_sha256": "3ed8ceeaf89aa22bb2c9fd656c9b4228dd5f75b12e87424820bd430dc9dc214d",
+  "upstream_commit": "97995e2e00e454389e00e35f1e65654afe3e8bed",
+  "upstream_patch_sha256": "be8cd2a36b3d18dd37ff90bf3282e610133520ce75a12074fa9047271583afa2",
+  "deployed_tree_sha256": "e5476fadd62219f3128faf6e4bfb28838ff4bd2d15b65c228d2340f37dbd3780",
+  "source_sha256": {
+    "smoke_browser.py": "e55854ccfffab2cb09a62ea8a8816865ab082789134c32dfabebe556f73e0842",
+    "smoke_table_browser.py": "f88a6dc2153b09d601da3d28c95733b6c354b7d7d3d925a30075e0c8b5a1902d",
+    "table-fixture.mjs": "0f8e9127f699890c070cab589893348b22f1bfff8f5212271b17f83640fd1ebc",
+    "smoke_core_browser.py": "512a638c5e999d218cdf98dde2ad8677b82b5d49703a425a10fb0b6c3fa5bb5f"
+  },
+  "runtime": {
+    "firefox_version": "140.16.0",
+    "firefox_source_stamp": "d864999404b3032f682d74ccc60d1ce38c9ce609",
+    "node_sha256": "bc17c508ffeed0ec622934f9b7fa72f8e78da65350e63c3eceb56fa688aa5e12"
+  },
+  "table_phases": [
+    {
+      "phase": "initial_tables",
+      "response_sha256": {
+        "weather": "21604fe534fb3c5b0de2e8e470102508bde5baa780eb3545da418d0e7a232094",
+        "air_quality": "d12736d50f8adbf546f3d0f03a8a79acd6fe12d676e3033e32fa002345cbea4a"
+      },
+      "display_sha256": "80072893bcb2df70bf2a971d881df32c8c9c36e5c8ebae1084750074f1bc408f",
+      "row_counts": {"weather": 4, "air_quality": 5},
+      "browser_requests_each": 1,
+      "provider_requests_each": 1,
+      "exact_ordered_rows_and_metadata": true
+    },
+    {
+      "phase": "refreshed_tables",
+      "response_sha256": {
+        "weather": "6b31991f52bdcb266318065b887961152fa53dcce894104c45999b6ebd68f968",
+        "air_quality": "5b397c5dfb1bb70767c2a30fb2257707b85318132505979a7787ecd50d76e372"
+      },
+      "display_sha256": "62ab6f38d4a0a2c371db606cd3322f1edf26f489508f8e21b04ad1dddebed083",
+      "row_counts": {"weather": 4, "air_quality": 5},
+      "browser_requests_each": 2,
+      "provider_requests_each": 2,
+      "exact_ordered_rows_and_metadata": true
+    }
+  ],
+  "same_origin_loaded_resources": true,
+  "actual_pointer_refresh": true,
+  "exact_captured_response_bodies": true,
+  "native_missing_calm_zero_and_precipitation_windows": true,
+  "cleanup": {
+    "browser_exited": true,
+    "fixture_exited": true,
+    "private_profile_removed": true,
+    "normal_browser_stop": true,
+    "normal_fixture_stop": true,
+    "namespace_wrapper_exited": true,
+    "host_netns_unchanged": true
+  },
+  "core_executed": false,
+  "cold_transfer_proven": false,
+  "origin_acquisition_proven": false,
+  "joined_delivery_proven": false,
+  "native_mobile_proven": false,
+  "scope": "Actual isolated CanvasKit UI and local HTTP bridge with synthetic products; exact header-typed tables and title-grouped metadata, not separate product DOM-container ownership. Does not replace the original build/browser proof or establish core, origin or native-mobile delivery."
+}

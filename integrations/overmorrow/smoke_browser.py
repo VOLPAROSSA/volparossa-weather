@@ -395,7 +395,8 @@ def run_ui(client, fixture, ready, support, report):
         air_quality_provider_requests=before["airQualityCalls"], final_semantics_sha256=canonical_hash(final["labels"]))
 
 
-def inside(args, stage, static_root, work, node, browser_stage, metadata, source, support):
+def inside(args, stage, static_root, work, node, browser_stage, metadata, source, support,
+           *, fixture_entry=None, check_ui=None):
     require(args.host_netns and os.readlink("/proc/self/ns/net") != args.host_netns)
     require(all(os.statvfs(path).f_flag & os.ST_RDONLY for path in
                 (Path("/"), ROOT, stage, static_root, browser_stage)))
@@ -422,7 +423,7 @@ def inside(args, stage, static_root, work, node, browser_stage, metadata, source
     fixture = browser = connection = client = None
     normal_browser_stop = normal_fixture_stop = False
     try:
-        fixture = subprocess.Popen([str(node), "--max-old-space-size=256", str(HERE / "browser-fixture.mjs"),
+        fixture = subprocess.Popen([str(node), "--max-old-space-size=256", str(fixture_entry or HERE / "browser-fixture.mjs"),
             str(static_root), str(work)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             env=environment, start_new_session=True)
         ready = support.read_line(fixture)
@@ -453,7 +454,7 @@ def inside(args, stage, static_root, work, node, browser_stage, metadata, source
         require(Path(client.script('return Services.dirsvc.get("GreD", Ci.nsIFile).path;')).resolve() == browser_stage)
         client.command("Marionette:SetContext", {"value": "content"})
         client.command("WebDriver:SetTimeouts", {"pageLoad": 20000, "script": 10000})
-        run_ui(client, fixture, ready, support, report)
+        (check_ui or run_ui)(client, fixture, ready, support, report)
         report["phase"] = "shutdown"
         client.command("Marionette:Quit", {"flags": ["eAttemptQuit"]})
         normal_browser_stop = browser.wait(timeout=15) == 0
@@ -488,7 +489,7 @@ def inside(args, stage, static_root, work, node, browser_stage, metadata, source
         support.save_report(work, report)
 
 
-def main():
+def main(*, entry_path=None, fixture_entry=None, check_ui=None, source_extra=None):
     os.umask(0o077)
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     parser = argparse.ArgumentParser(description=__doc__)
@@ -505,8 +506,14 @@ def main():
     require(browser_stage.is_relative_to(support.BROWSER_ROOT / "build") and support.digest(node) == support.NODE_SHA256)
     metadata = support.validate_stage(browser_stage)
     source = validate_source(stage, static_root, support)
+    # Explicit in-process seams for the separate synthetic table-contract test.
+    # Ordinary smoke invocation and every isolation/cleanup gate are unchanged.
+    if source_extra is not None:
+        require(not set(source).intersection(source_extra))
+        source.update(source_extra)
     if args.inside:
-        inside(args, stage, static_root, work, node, browser_stage, metadata, source, support)
+        inside(args, stage, static_root, work, node, browser_stage, metadata, source, support,
+               fixture_entry=fixture_entry, check_ui=check_ui)
         return
     def memory_available():
         return int(next(line.split()[1] for line in Path("/proc/meminfo").read_text().splitlines()
@@ -521,7 +528,7 @@ def main():
         command = ["/usr/bin/bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--unshare-net",
             "--unshare-pid", "--ro-bind", "/", "/", *support.isolated_browser_home(work),
             "--bind", str(work), str(work), "--tmpfs", "/tmp", "--proc", "/proc", "--dev", "/dev", "--",
-            sys.executable, "-B", str(Path(__file__).resolve()), *sys.argv[1:], "--inside", "--host-netns", host_netns]
+            sys.executable, "-B", str(Path(entry_path or __file__).resolve()), *sys.argv[1:], "--inside", "--host-netns", host_netns]
         wrapper = subprocess.Popen(command, env=support.clean_environment(), start_new_session=True)
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
