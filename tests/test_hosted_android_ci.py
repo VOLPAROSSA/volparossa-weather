@@ -738,6 +738,11 @@ class EmulatorDiagnostics(unittest.TestCase):
             "sdk_root": b'Error: Could not determine SDK root. /private/canary\n',
             "sdk_package": b'Error: Package path is not valid. Valid system image paths are:\nprivate-canary\n',
             "sdk_license": b'com.android.builder.sdk.LicenceNotAcceptedException: private-canary\n',
+            "java_classpath": b'Exception in thread "main" java.lang.NoClassDefFoundError: private-canary\n',
+            "java_initialization": b'Exception in thread "main" java.lang.ExceptionInInitializerError\nprivate-canary\n',
+            "launcher_helper": b'/tools/android-inputs/sdk/cmdline-tools/19.0/bin/avdmanager: 172: awk: not found\nprivate-canary\n',
+            "sdk_image": b'Error: Package private-canary contains no system images.\n',
+            "sdk_avd": b'Error: AVD not created.\nprivate-canary\n',
             "unknown": b'private-canary https://private.invalid/?token=secret\n',
             "ambiguous": b'Error: Could not determine SDK root.\nJava version 17 or higher is required.\n',
         }
@@ -891,6 +896,183 @@ class EmulatorDiagnostics(unittest.TestCase):
                         self.assertEqual(result["failure_kind"], "deadline")
                         self.assertIsNone(result["exit_status"])
                         self.assertFalse(result["output_complete"])
+
+
+class AvdPreflight(unittest.TestCase):
+    def observation(self):
+        return dict(schema=1, kind="hosted-android-avd-preflight-inputs", inputs={"fixed_test_identity": True},
+            posix_helpers={name: True for name in ("sh", "dirname", "basename", "uname", "sed", "awk", "expr", "ls")},
+            sdk_read_only=True, raw_text_exported=False, cause_established=False)
+
+    def cleanup(self):
+        return dict(schema=1, direct_children_reaped=True, private_avd_removed=True,
+            private_android_home_removed=True, avd_creation_returned=True, installed_app_exercised=False,
+            enclosing_namespace_cleanup_required=True)
+
+    def test_exact_original_command_is_shared_and_early_before_any_gradle_or_pub(self):
+        self.assertEqual(M.avd_command(), [str(M.ANDROID / "cmdline-tools/19.0/bin/avdmanager"), "create", "avd",
+            "--name", "volparossa_trial", "--package", "system-images;android-36;default;x86_64", "--path", "/state/avd/trial.avd"])
+        source = (ROOT / "scripts/prepare_hosted_android_ci.py").read_text()
+        execute = source.split("def execute(", 1)[1].split("def inside(", 1)[0]
+        self.assertEqual(execute.count('H.private_directory(PROOF)'), 1)
+        for later in ('repository_fixture()', 'flutter("pub"', 'run_app_gradle(True)', 'run_app_gradle(False)'):
+            self.assertLess(execute.index('avd_preflight(netns)'), execute.index(later))
+        self.assertIn('H.sha(H.read(OUTPUT / "emulator-preflight.json"))', execute)
+        self.assertIn('validate_report(original)', execute)
+        self.assertIn('"--inside"], "emulator")', execute)
+        inside = source.split("def inside(", 1)[1]
+        self.assertEqual(inside.count('command("avdmanager", avd_command(), 30, b"no\\n")'), 1)
+        with self.assertRaises(ValueError):
+            M.validate_report(dict(schema=1, kind="hosted-android-avd-preflight", success=True))
+
+    def test_real_inert_success_stops_after_single_create_and_keeps_separate_receipts(self):
+        children = []
+        with tempfile.TemporaryDirectory() as directory:
+            proof = Path(directory)
+            # Never execute SDK tools: replace only the Popen boundary with a
+            # real tiny Python child consuming the same fixed stdin response.
+            code = "import sys;assert sys.stdin.read()=='no\\n';print('private canary')"
+            spawn = EmulatorDiagnostics.inert_popen(self, code, children)
+            EmulatorDiagnostics.guarded_inside(self, proof, spawn)
+            with patch.object(M, "avd_observations", return_value=self.observation()):
+                M.inside(avd_only=True)
+            self.assertEqual(len(children), 1)
+            self.assertTrue(all(c.returncode == 0 and c.stdout.closed and c.stdin.closed for c in children))
+            self.assertEqual(json.loads((proof / "emulator-preflight-cleanup.json").read_text()), self.cleanup())
+            self.assertEqual(json.loads((proof / "emulator-preflight-inputs.json").read_text()), self.observation())
+            self.assertEqual({p.name for p in proof.iterdir()}, {"emulator-preflight-inputs.json", "emulator-preflight-cleanup.json"})
+            self.assertFalse((proof / "report.json").exists())
+
+    def test_real_inert_preflight_failure_preserves_original_and_never_overwrites_full_trial(self):
+        children = []
+        with tempfile.TemporaryDirectory() as directory:
+            proof = Path(directory)
+            (proof / "emulator-diagnostic.json").write_bytes(b"unchanged")
+            (proof / "emulator-cleanup.json").write_bytes(b"unchanged")
+            spawn = EmulatorDiagnostics.inert_popen(self,
+                "import sys;sys.stdin.read();print('Error: AVD not created.');print('private token');sys.exit(9)", children)
+            EmulatorDiagnostics.guarded_inside(self, proof, spawn)
+            with patch.object(M, "avd_observations", return_value=self.observation()), \
+                    self.assertRaises(subprocess.CalledProcessError) as error:
+                M.inside(avd_only=True)
+            self.assertEqual(error.exception.returncode, 9)
+            raw = (proof / "emulator-preflight-diagnostic.json").read_bytes()
+            diagnostic = json.loads(raw)
+            self.assertEqual((diagnostic["command_category"], diagnostic["sdk_error"], diagnostic["exit_status"]),
+                ("avdmanager", "sdk_avd", 9))
+            self.assertLessEqual(len(raw), 1024)
+            self.assertNotIn(b"private token", raw)
+            self.assertEqual(json.loads((proof / "emulator-preflight-cleanup.json").read_text()),
+                dict(self.cleanup(), avd_creation_returned=False))
+            self.assertEqual((proof / "emulator-diagnostic.json").read_bytes(), b"unchanged")
+            self.assertEqual((proof / "emulator-cleanup.json").read_bytes(), b"unchanged")
+            self.assertTrue(all(c.poll() is not None and c.stdout.closed for c in children))
+
+    def test_preflight_absolute_thirty_seconds_and_inert_child_cleanup(self):
+        children = []
+        with tempfile.TemporaryDirectory() as directory:
+            proof = Path(directory)
+            spawn = EmulatorDiagnostics.inert_popen(self, "import time;time.sleep(30)", children)
+            EmulatorDiagnostics.guarded_inside(self, proof, spawn)
+            with patch.object(M, "avd_observations", return_value=self.observation()), \
+                    patch.object(M.time, "monotonic", side_effect=[0, 29, 29, 30]), \
+                    self.assertRaisesRegex(ValueError, "EMULATOR_COMMAND_DEADLINE"):
+                M.inside(avd_only=True)
+            diagnostic = json.loads((proof / "emulator-preflight-diagnostic.json").read_text())
+            self.assertEqual(diagnostic["failure_kind"], "deadline")
+            self.assertTrue(json.loads((proof / "emulator-preflight-cleanup.json").read_text())["direct_children_reaped"])
+            self.assertTrue(all(c.poll() is not None for c in children))
+
+    def test_outer_binding_cleanup_and_fresh_state_are_mandatory(self):
+        cases = (None, "input", "java", "cleanup", "scope", "unknown", "child")
+        for bad in cases:
+            with self.subTest(bad=bad), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); proof = root / "proof"; proof.mkdir()
+                private = root / "private"; private.mkdir()
+                observed, cleanup = self.observation(), self.cleanup()
+                if bad == "input": observed["inputs"] = {"changed": True}
+                if bad == "cleanup": cleanup["direct_children_reaped"] = False
+                if bad == "scope": cleanup["installed_app_exercised"] = True
+                if bad == "unknown": observed["unclosed"] = "private"
+                for name, value in (("inputs", observed), ("cleanup", cleanup)):
+                    M.H.write(proof / ("emulator-preflight-" + name + ".json"), json.dumps(value).encode())
+                java = dict(bytes=1, sha256="a"*64)
+                with patch.object(M, "PROOF", proof), patch.object(M, "PRIVATE", private), \
+                        patch.object(M, "avd_input_identity", return_value=self.observation()["inputs"]), \
+                        patch.object(M, "apt_java_digest", side_effect=[java, dict(java, sha256="b"*64) if bad == "java" else java]), \
+                        patch.object(M, "preflight") as preflight, patch.object(M.H, "save") as save, \
+                        patch.object(M.H, "run", side_effect=ValueError("original-child-failure") if bad == "child" else None) as run:
+                    if bad is None:
+                        M.avd_preflight("inert-netns")
+                        self.assertEqual({p.name for p in private.iterdir()}, {"avd", "android-home"})
+                        self.assertFalse(save.call_args.args[1]["installed_app_exercised"])
+                        self.assertEqual(save.call_args.args[1]["creation_timeout_seconds"], 30)
+                    else:
+                        with self.assertRaises(ValueError): M.avd_preflight("inert-netns")
+                        save.assert_not_called()
+                        self.assertEqual(list(private.iterdir()), [])
+                    preflight.assert_called_once_with("emulator", "inert-netns", avd=True)
+                    args, kwargs = run.call_args
+                    self.assertEqual(args[0], "avdmanager-preflight")
+                    self.assertEqual(args[2], 40)
+                    self.assertEqual(args[1][-1], "--inside-avd-preflight")
+                    self.assertIn("--unshare-net", args[1])
+                    self.assertEqual(kwargs["memory"], 3*M.GIB)
+                    self.assertEqual(kwargs["env"]["ANDROID_AVD_HOME"], "/state/avd")
+
+    def test_successful_child_return_at_deadline_does_not_publish_creation_success(self):
+        children, clock = [], [0]
+        base_spawn = EmulatorDiagnostics.inert_popen(self, "import sys;sys.stdin.read()", children)
+        def spawn(argv, **kwargs):
+            child = base_spawn(argv, **kwargs)
+            wait = child.wait
+            def finish(*args, **kwargs):
+                result = wait(*args, **kwargs)
+                clock[0] = 30
+                return result
+            child.wait = finish
+            return child
+        with tempfile.TemporaryDirectory() as directory:
+            proof = Path(directory)
+            EmulatorDiagnostics.guarded_inside(self, proof, spawn)
+            with patch.object(M, "avd_observations", return_value=self.observation()), \
+                    patch.object(M.time, "monotonic", side_effect=lambda: clock[0]), \
+                    self.assertRaisesRegex(ValueError, "EMULATOR_DEADLINE"):
+                M.inside(avd_only=True)
+            self.assertEqual(children[0].returncode, 0)
+            self.assertFalse(json.loads((proof / "emulator-preflight-cleanup.json").read_text())["avd_creation_returned"])
+
+    def test_fixed_helper_observations_never_export_resolution_paths_or_execute_them(self):
+        with patch.object(M, "avd_input_identity", return_value={"fixed_test_identity": True}), \
+                patch.object(M.os, "statvfs", return_value=SimpleNamespace(f_flag=os.ST_RDONLY)), \
+                patch.object(M.shutil, "which", side_effect=lambda name: None if name == "awk" else "/private/" + name), \
+                patch.object(M.subprocess, "Popen") as spawn:
+            observed = M.avd_observations()
+        self.assertFalse(observed["posix_helpers"]["awk"])
+        self.assertNotIn("/private", json.dumps(observed))
+        self.assertLess(len(json.dumps(observed)), 4096)
+        spawn.assert_not_called()
+
+    def test_identity_reads_only_exact_runner_owned_inputs_not_unmapped_distro_uid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            names = dict(android_provenance="provenance.json", launcher="sdk/cmdline-tools/19.0/bin/avdmanager",
+                classpath="sdk/cmdline-tools/19.0/lib/avdmanager-classpath.jar",
+                command_line_properties="sdk/cmdline-tools/19.0/source.properties",
+                image_properties="sdk/system-images/android-36/default/x86_64/source.properties")
+            for name in names.values():
+                path = root / name; path.parent.mkdir(parents=True, exist_ok=True)
+                M.H.write(path, b"inert")
+            # Root-owned distro tools need their existing ownership check
+            # outside the user namespace, not its unmapped overflow UID.
+            with patch.object(M, "apt_java_digest", side_effect=AssertionError("outside only")):
+                value = M.avd_input_identity(root)
+            self.assertEqual(value, dict({key: M.H.digest(root / name) for key, name in names.items()}, image_package_xml=None))
+            package = root / "sdk/system-images/android-36/default/x86_64/package.xml"
+            M.H.write(package, b"inert metadata")
+            self.assertEqual(M.avd_input_identity(root)["image_package_xml"], M.H.digest(package))
+            launcher = root / names["launcher"]; launcher.unlink(); launcher.symlink_to(root / "provenance.json")
+            with self.assertRaises(OSError): M.avd_input_identity(root)
 
 
 if __name__ == "__main__":

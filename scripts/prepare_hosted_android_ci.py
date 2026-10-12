@@ -186,14 +186,16 @@ print(json.dumps(dict(schema=1,mode=mode,unprivileged=True,capabilities_zero=Tru
 '''
 
 
-def preflight(mode, netns):
-    raw = H.run("preflight-" + mode, sandbox(["/usr/bin/python3", "-I", "-c", PROBE, mode, netns, str(SDK)], mode),
+def preflight(mode, netns, *, avd=False):
+    require(type(avd) is bool and (not avd or mode == "emulator"), "PREFLIGHT_SCOPE")
+    name = "preflight-avdmanager" if avd else "preflight-" + mode
+    raw = H.run(name, sandbox(["/usr/bin/python3", "-I", "-c", PROBE, mode, netns, str(SDK)], mode),
         20, env=environment(), memory=MEMORY)
     value = json.loads(raw, object_pairs_hook=H.unique)
     require(value == dict(schema=1, mode=mode, unprivileged=True, capabilities_zero=True,
         no_new_privileges=True, source_read_only=True, toolchain_read_only=True,
         isolated_network=mode != "acquire", public_acquisition=mode == "acquire", kvm_only=mode == "emulator"), "PREFLIGHT")
-    H.save("preflight-" + mode + ".json", value)
+    H.save(name + ".json", value)
 
 
 def flutter(*args):
@@ -487,10 +489,15 @@ class EmulatorDiagnostic:
     # These fixed SDK/JVM message forms are indications, not a claimed cause.
     # An unfamiliar message (including a new SDK version's wording) is unknown.
     MARKERS = {
-        "java_version": rb'(?:^|\n)(?:Exception in thread "[A-Za-z0-9_-]{1,32}" )?java\.lang\.UnsupportedClassVersionError\b|(?:^|\n)Java version [0-9]{1,2} or higher is required\.',
+        "java_version": rb'(?:^|\n)(?:Exception in thread "[A-Za-z0-9_-]{1,32}" )?java\.lang\.UnsupportedClassVersionError\b|(?:^|\n)Java version [0-9]{1,2} or higher is required\.|(?:^|\n)This tool requires JDK 17 or later\.',
         "java_home": rb'(?:^|\n)ERROR: JAVA_HOME is set to an invalid directory:',
-        "sdk_root": rb'(?:^|\n)(?:Error: )?Could not determine SDK root\.',
+        "java_classpath": rb'\bjava\.lang\.(?:ClassNotFoundException|NoClassDefFoundError)\b|(?:^|\n)Error: Could not find or load main class ',
+        "java_initialization": rb'\bjava\.lang\.ExceptionInInitializerError\b|(?:^|\n)Error: Could not create the Java Virtual Machine\.',
+        "launcher_helper": rb'(?:^|\n)/tools/android-inputs/sdk/cmdline-tools/19[.]0/bin/avdmanager: [0-9]{1,5}: (?:awk|sed|dirname|basename|uname|expr|ls): not found(?:\n|$)',
+        "sdk_root": rb'(?:^|\n)(?:Error: )?Could not determine SDK root\.|(?:^|\n)Error: The tools directory property is not set,',
         "sdk_package": rb'(?:^|\n)Error: Package path is not valid\.',
+        "sdk_image": rb'(?:^|\n)Error: Package [^\n]{1,512} contains no system images\.',
+        "sdk_avd": rb'(?:^|\n)Error: AVD not created\.',
         "sdk_license": rb'\bcom\.android\.builder\.sdk\.LicenceNotAcceptedException\b',
     }
 
@@ -533,15 +540,16 @@ class EmulatorDiagnostic:
             output_complete=current and self.complete, output_truncated=current and self.truncated,
             sdk_error=classification, raw_text_exported=False, cause_established=False)
 
-    def publish_failure(self, error):
+    def publish_failure(self, error, *, avd=False):
         # Only called while re-raising the original failure. The inside OUTPUT
         # is an unexported tmpfs; PROOF is the existing explicit writable bind.
-        part = PROOF / "emulator-diagnostic.part"
+        name = "emulator-preflight-diagnostic" if avd else "emulator-diagnostic"
+        part = PROOF / (name + ".part")
         try:
             raw = (json.dumps(self.receipt(error), sort_keys=True, separators=(",", ":")) + "\n").encode()
             require(len(raw) <= self.MAX_RECEIPT, "EMULATOR_DIAGNOSTIC_BOUND")
             H.write(part, raw)
-            os.replace(part, PROOF / "emulator-diagnostic.json")
+            os.replace(part, PROOF / (name + ".json"))
         except BaseException:
             # Neither diagnostic IO nor another interruption may replace the
             # failure already being propagated into the existing cleanup.
@@ -551,6 +559,70 @@ class EmulatorDiagnostic:
                 part.unlink(missing_ok=True)
             except BaseException:
                 pass
+
+
+def avd_command():
+    """One shared command for the early check and the complete installed trial."""
+    return [str(ANDROID / "cmdline-tools/19.0/bin/avdmanager"), "create", "avd", "--name", "volparossa_trial",
+        "--package", "system-images;android-36;default;x86_64", "--path", "/state/avd/trial.avd"]
+
+
+def avd_input_identity(root):
+    # This supplements the full materializer inventory verification before the
+    # sandbox; it is not independent authorization of different SDK bytes.
+    tools = root / "sdk/cmdline-tools/19.0"
+    image = root / "sdk/system-images/android-36/default/x86_64"
+    return dict(android_provenance=H.digest(root / "provenance.json"),
+        launcher=H.digest(tools / "bin/avdmanager"), classpath=H.digest(tools / "lib/avdmanager-classpath.jar"),
+        command_line_properties=H.digest(tools / "source.properties"),
+        image_properties=H.digest(image / "source.properties"),
+        image_package_xml=H.digest(image / "package.xml") if (image / "package.xml").exists() else None)
+
+
+def avd_observations():
+    # The exact pinned 13114758 / 19.0 launcher's Linux branch uses these fixed
+    # POSIX helpers (including awk for its JDK check). Read-only archive review:
+    # bin/avdmanager SHA256 f2b7957ca635bbc1d4cf8def2fd5837153359f49f3043c7c02f020d77fc5cda0.
+    # Presence is an observation, not proof of execution or the previous cause.
+    return dict(schema=1, kind="hosted-android-avd-preflight-inputs",
+        inputs=avd_input_identity(Path("/tools/android-inputs")),
+        posix_helpers={name: shutil.which(name) is not None
+            for name in ("sh", "dirname", "basename", "uname", "sed", "awk", "expr", "ls")},
+        sdk_read_only=bool(os.statvfs(ANDROID).f_flag & os.ST_RDONLY),
+        raw_text_exported=False, cause_established=False)
+
+
+def avd_preflight(netns):
+    expected = avd_input_identity(INPUTS)
+    # Check distro ownership outside the user namespace, where its UID remains
+    # meaningful. The existing /usr mount is read-only inside the sandbox.
+    java = apt_java_digest()
+    preflight("emulator", netns, avd=True)
+    # Thirty seconds of work, then only the existing owned-child cleanup.
+    # The outer bound allows that cleanup before namespace teardown.
+    H.run("avdmanager-preflight", sandbox(["/usr/bin/python3", "-B", str(Path(__file__)), "--inside-avd-preflight"], "emulator"),
+        40, env=dict(environment(), VOLPAROSSA_TEST_HOST_NETNS=netns), memory=MEMORY)
+    observed = H.document(PROOF / "emulator-preflight-inputs.json")
+    require(set(observed) == {"schema", "kind", "inputs", "posix_helpers", "sdk_read_only", "raw_text_exported", "cause_established"}
+        and observed["schema"] == 1 and observed["kind"] == "hosted-android-avd-preflight-inputs"
+        and observed["inputs"] == expected == avd_input_identity(INPUTS)
+        and apt_java_digest() == java
+        and set(observed["posix_helpers"]) == {"sh", "dirname", "basename", "uname", "sed", "awk", "expr", "ls"}
+        and all(type(v) is bool for v in observed["posix_helpers"].values())
+        and observed["sdk_read_only"] is True and observed["raw_text_exported"] is False
+        and observed["cause_established"] is False, "AVD_PREFLIGHT_INPUTS")
+    cleanup = H.document(PROOF / "emulator-preflight-cleanup.json")
+    require(cleanup == dict(schema=1, direct_children_reaped=True, private_avd_removed=True,
+        private_android_home_removed=True, avd_creation_returned=True, installed_app_exercised=False,
+        enclosing_namespace_cleanup_required=True), "AVD_PREFLIGHT_CLEANUP")
+    # The complete trial must create a fresh AVD. Never reuse preflight state.
+    for name in ("avd", "android-home"):
+        H.private_directory(PRIVATE / name)
+    H.save("emulator-preflight.json", dict(schema=1, kind="hosted-android-avd-preflight", success=True,
+        inputs_sha256=H.sha(H.read(PROOF / "emulator-preflight-inputs.json")),
+        cleanup_sha256=H.sha(H.read(PROOF / "emulator-preflight-cleanup.json")),
+        java_launcher=java,
+        creation_timeout_seconds=30, installed_app_exercised=False, production_authority=False))
 
 
 def execute(helper, platform):
@@ -594,6 +666,9 @@ def execute(helper, platform):
         preflight("compile", netns)
         H.run("native-contract-tests", sandbox([str(H.NODE), "--test", str(W.HERE / "test-native-android.mjs")], "compile"),
             60, env=environment(), memory=MEMORY)
+        phase = "avdmanager-preflight"
+        H.private_directory(PROOF)
+        avd_preflight(netns)
         phase = "offline-repository-contract"
         repository_fixture()
         phase = "public-acquisition-build"
@@ -624,7 +699,6 @@ def execute(helper, platform):
         H.save("offline-apk.json", dict(schema=1, artifact=apk, compiled_networkless=True,
             dependency_checksums="strict-captured-not-prior-reviewed", debug_signed=True, production_authority=False))
         phase = "installed-emulator-trial"
-        H.private_directory(PROOF)
         preflight("emulator", netns)
         H.run("installed-android-trial", sandbox(["/usr/bin/python3", "-B", str(Path(__file__)), "--inside"], "emulator"),
             520, env=dict(environment(), VOLPAROSSA_TEST_HOST_NETNS=netns), memory=MEMORY)
@@ -633,6 +707,7 @@ def execute(helper, platform):
         H.save("build.json", dict(schema=1, kind="hosted-android-debug-trial", source_commit=os.environ["GITHUB_SHA"],
             apk=apk, runtime=runtime, sdk=sdk, android=android, native_sources=native, dependencies=metadata,
             gradle_configured_limits=app_gradle_resources(),
+            avd_preflight_sha256=H.sha(H.read(OUTPUT / "emulator-preflight.json")),
             installed_report_sha256=H.sha(H.read(PROOF / "report.json")), actual_installed_app=True,
             acquisition_build_network_enabled=True, final_build_networkless=True, emulator_networkless=True,
             core_delivery=False, weather_origin=False, release_authority=False))
@@ -661,7 +736,8 @@ def execute(helper, platform):
                 signal.signal(s, handler)
 
 
-def inside():
+def inside(*, avd_only=False):
+    require(type(avd_only) is bool, "INSIDE_SCOPE")
     require(os.getuid() != 0 and "volparossa_ci_weather_clients_child" in Path("/proc/self/attr/current").read_text()
         and [n for _, n in socket.if_nameindex()] == ["lo"] and not Path("/etc/resolv.conf").exists(), "OFFLINE_SANDBOX_ONLY")
     # Explicitly owned children only. All private raw logs/VM authentication
@@ -673,7 +749,7 @@ def inside():
         raise H.Interrupted("EMULATOR_INTERRUPTED")
     for s in prior:
         signal.signal(s, interrupted)
-    stop = time.monotonic() + 480
+    stop = time.monotonic() + (30 if avd_only else 480)
     adb = str(ANDROID / "platform-tools/adb")
     def spawn(argv, **kwargs):
         pending = []
@@ -745,8 +821,15 @@ def inside():
     complete = False
     try:
         diagnostic.phase = "avd_create"
-        command("avdmanager", [str(ANDROID / "cmdline-tools/19.0/bin/avdmanager"), "create", "avd", "--name", "volparossa_trial",
-            "--package", "system-images;android-36;default;x86_64", "--path", "/state/avd/trial.avd"], 30, b"no\n")
+        if avd_only:
+            raw = (json.dumps(avd_observations(), sort_keys=True, separators=(",", ":")) + "\n").encode()
+            require(len(raw) <= 4096, "AVD_PREFLIGHT_OBSERVATIONS_BOUND")
+            H.write(PROOF / "emulator-preflight-inputs.json", raw)
+        command("avdmanager", avd_command(), 30, b"no\n")
+        if avd_only:
+            require(time.monotonic() < stop, "EMULATOR_DEADLINE")
+            complete = True
+            return
         diagnostic.phase = "avd_configure"
         config = Path("/state/avd/trial.avd/config.ini")
         with config.open("a") as out:
@@ -804,7 +887,7 @@ def inside():
                 H.write(PROOF / "report.json", H.read(original))
         complete = True
     except BaseException as error:
-        diagnostic.publish_failure(error)
+        diagnostic.publish_failure(error, avd=avd_only)
         raise
     finally:
         for s in prior:
@@ -819,9 +902,11 @@ def inside():
                 if path.exists():
                     require(path.resolve() == path and path.is_dir(), "PRIVATE_CLEANUP_PATH")
                     shutil.rmtree(path)
-        H.write(PROOF / "emulator-cleanup.json", (json.dumps(dict(schema=1, direct_children_reaped=drained,
+        name = "emulator-preflight-cleanup.json" if avd_only else "emulator-cleanup.json"
+        completion = dict(avd_creation_returned=complete, installed_app_exercised=False) if avd_only else dict(trial_returned=complete)
+        H.write(PROOF / name, (json.dumps(dict(schema=1, direct_children_reaped=drained,
             private_avd_removed=not Path("/state/avd").exists(), private_android_home_removed=not Path("/state/android-home").exists(),
-            trial_returned=complete, enclosing_namespace_cleanup_required=True)) + "\n").encode())
+            **completion, enclosing_namespace_cleanup_required=True)) + "\n").encode())
         require(drained, "EMULATOR_CLEANUP_UNCONFIRMED")
         for s, handler in prior.items():
             signal.signal(s, handler)
@@ -831,6 +916,9 @@ def main():
     os.umask(0o077)
     if sys.argv[1:] == ["--inside"]:
         inside()
+        return
+    if sys.argv[1:] == ["--inside-avd-preflight"]:
+        inside(avd_only=True)
         return
     require(len(sys.argv) == 1, "NO_ARBITRARY_COMMAND")
     helper, platform = guards(os.environ)
