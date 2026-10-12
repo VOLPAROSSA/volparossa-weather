@@ -122,6 +122,19 @@ class HostedClients(unittest.TestCase):
         self.assertNotIn("prebuild", repr(commands))
         self.assertNotIn("npx", repr(commands))
 
+    def test_client_fixture_scratch_uses_private_tmp_without_writable_checkout(self):
+        source = (ROOT / "integrations/drizzli/test-client.mjs").read_text()
+        self.assertIn("import { tmpdir } from 'node:os';", source)
+        self.assertIn("const work = await mkdtemp(join(tmpdir(), 'drizzli-client-test-'));", source)
+        self.assertNotIn("await mkdir(join(root, 'build')", source)
+        self.assertNotIn("mkdtemp(join(root", source)
+        self.assertLess(source.index("after(() => rm(work, { recursive: true }));"),
+                        source.index("await cp("))
+        command = H["sandbox"]([], mode="compile", writable=H["STAGE"])
+        self.assertIn(["--tmpfs", "/tmp"], [command[i:i+2] for i in range(len(command))])
+        self.assertNotIn(["--bind", str(ROOT / "build"), str(ROOT / "build")],
+                         [command[i:i+3] for i in range(len(command))])
+
     def test_only_production_build_receives_larger_aggregate_budget(self):
         for name, _cli, _arguments, seconds in H["compile_commands"]():
             self.assertEqual(H["compilation_memory"](name),

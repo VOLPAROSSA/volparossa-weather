@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import assert from 'node:assert/strict';
 import { test, after } from 'node:test';
-import { mkdtemp, cp, copyFile, rm, mkdir, readFile } from 'node:fs/promises';
+import { mkdtemp, cp, copyFile, rm, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { forecast, windForecast, NOW, QUERY } from '../../tests/fixtures.mjs';
@@ -11,8 +12,8 @@ import { toAirQualityProviderForecast } from '../../src/air-quality-provider.mjs
 import { aqForecast, AQ_NOW, AQ_QUERY } from '../../tests/air-quality-fixtures.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
-await mkdir(join(root, 'build'), { recursive: true });
-const work = await mkdtemp(join(root, 'build/drizzli-client-test-'));
+const work = await mkdtemp(join(tmpdir(), 'drizzli-client-test-'));
+after(() => rm(work, { recursive: true }));
 await cp(join(import.meta.dirname, 'overlay/src/lib/services/volparossa'), work, { recursive: true });
 for (const file of ['provider.mjs', 'forecast.mjs', 'air-quality-provider.mjs', 'air-quality.mjs']) {
   await copyFile(join(root, 'src', file), join(work, file));
@@ -20,7 +21,6 @@ for (const file of ['provider.mjs', 'forecast.mjs', 'air-quality-provider.mjs', 
 const { validateProvider, displayValue, displayAccumulationWindow, hasSupportedPrecipitation,
   fetchProvider, validateAirQualityProvider, fetchAirQualityProvider,
   MAX_PROVIDER_BYTES } = await import(pathToFileURL(join(work, 'client.mjs')));
-after(() => rm(work, { recursive: true }));
 
 function response(source = windForecast(), now = NOW) {
   const expiry = new Date(Date.parse(now) + 600000).toISOString();
