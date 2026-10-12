@@ -75,6 +75,40 @@ build and browser reports remain separate. SDKs, dependency caches, browser
 profiles and Git data are not uploaded. These synthetic trials make no weather
 source requests and do not prove core delivery or native Android/iOS operation.
 
+## Android trial candidate
+
+The [Android hosted workflow](../../.github/workflows/hosted-android.yml) is ready
+for its first debug APK build and installed-app emulator trial; neither has yet
+run. The [native preparer](prepare_native_android.py) modifies only a disposable
+Android stage, using package `org.volparossa.weather.trial`. Its test-only
+`lib/volparossa_native_trial.dart` entrypoint starts the real app with
+`VOLPAROSSA_WEATHER=true` and
+`VOLPAROSSA_CORE_ORIGIN=http://127.0.0.1:43210`. The existing dependency lock,
+shared overlay and web/iOS sources stay unchanged.
+
+The [trial driver](native-android-driver.mjs) uses real Android taps and
+background/resume actions. A read-only debug observer checks mounted weather and
+air-quality tables against the synthetic HTTP responses: four weather rows,
+five particulate rows, native times, precipitation windows and missing values.
+The trial also requires expired values to disappear after resuming, without
+another provider request. Mounted widget contents are not proof of pixel
+visibility. The separate fixture-control port is not exposed to the app. This
+candidate does not prove live weather, mobile core delivery, physical-device or
+iOS operation, home-screen widgets or release readiness.
+
+The [official Android and Gradle input pins](../../scripts/prepare_hosted_android.py)
+record exact archive URLs, sizes and published checksums. The native stage uses
+Android API 36, build-tools 35.0.0, NDK 28.2.13676358 and Gradle 8.13; its
+Android-only plugin change selects AGP 8.11.1. Java 17 comes from the disposable
+runner's recorded system packages. Google archive pins use the published SHA1;
+an observed SHA256 is additional provenance, not independent authorization.
+Gradle's distribution has a published SHA256, and its wrapper comes from the
+already pinned Flutter archive. All original archive licenses and notices are
+preserved. Public dependency acquisition precedes an offline rebuild; captured
+Gradle checksums demonstrate consistency, not prior independent review. Only
+successful debug APKs, application notices and bounded reports may be exported,
+not SDKs, caches, signing keys, emulator state or debug-service credentials.
+
 ## Joined core delivery trial
 
 The core's version-three Weather bundle selects this actual Overmorrow client,

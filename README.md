@@ -64,7 +64,8 @@ proof of forecast accuracy or complete overlay-to-browser delivery.
 
 Use an existing Node.js 22+ installation. The ESM JSON contract has no framework
 dependency. The current ecCodes/core process adapters run on Linux; native mobile
-decoders and UI packaging are not implemented.
+decoders are not implemented. Android packaging has a test candidate, but its
+hosted build and installed-app trial remain unverified.
 
 The explicit [source-only decoder builder](third_party/eccodes/README.md) uses
 pinned official ecCodes/ecbuild/libaec sources and workspace-local output. It
@@ -322,6 +323,14 @@ Packaging, background lifecycle and home-screen widgets remain required.
 The [joined core-delivery trial](integrations/overmorrow/README.md#joined-core-delivery-trial)
 now has a separate Overmorrow bundle profile and exact native table checks;
 its thirteen preparation/driver tests pass, but the live trial remains open.
+
+An [Android trial candidate](integrations/overmorrow/README.md#android-trial-candidate)
+now prepares a separate debug app and a hosted emulator test. It starts the real
+app with synthetic products from a loopback provider and checks native table
+values, actual refresh taps and expiry after backgrounding and resuming. The APK
+build and installed-app trial have not yet run. This does not establish a mobile
+core, iOS support or a release-ready application; existing web/iOS sources remain
+unchanged.
 
 ### Additional weather data
 

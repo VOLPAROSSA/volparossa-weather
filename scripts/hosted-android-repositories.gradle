@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Disposable first acquisition only. This constrains configured dependency
+// repositories, not arbitrary code's network capability or redirect destinations.
+// Captured verification metadata is not independent prior review.
+def admitted = [
+    'https://dl.google.com/dl/android/maven2',
+    'https://maven.google.com',
+    'https://repo.maven.apache.org/maven2',
+    'https://repo1.maven.org/maven2',
+    'https://plugins.gradle.org/m2',
+    'https://storage.googleapis.com/download.flutter.io'
+] as Set
+def verifyRepository = { repository ->
+    if (!(repository instanceof org.gradle.api.artifacts.repositories.MavenArtifactRepository)) {
+        throw new GradleException('Native trial permits only fixed public Maven repositories')
+    }
+    def url = repository.url.toString().replaceAll('/+$', '')
+    if (!admitted.contains(url)) {
+        throw new GradleException('Native trial repository is not admitted')
+    }
+}
+gradle.settingsEvaluated { settings ->
+    settings.pluginManagement.repositories.all(verifyRepository)
+    settings.dependencyResolutionManagement.repositories.all(verifyRepository)
+}
+gradle.allprojects { project ->
+    project.repositories.all(verifyRepository)
+    project.buildscript.repositories.all(verifyRepository)
+}
