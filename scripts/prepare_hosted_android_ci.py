@@ -558,6 +558,121 @@ def no_guest_egress_routes(raw):
     return guest_route_observation(raw)["outcome"] == "admitted"
 
 
+def guest_link_snapshot(raw):
+    """Private RTNL identities, not exported names or an interface-name whitelist."""
+    require(len(raw) <= 65536, "GUEST_LINK_BOUND")
+    rows = json.loads(raw.decode("ascii"), object_pairs_hook=H.unique)
+    require(type(rows) is list and 1 <= len(rows) <= 64, "GUEST_LINK_METADATA")
+    allowed = set(("ifindex ifname flags mtu qdisc operstate linkmode group txqlen link_type address broadcast "
+        "promiscuity allmulti min_mtu max_mtu num_tx_queues num_rx_queues gso_max_size gso_max_segs "
+        "tso_max_size tso_max_segs gro_max_size gso_ipv4_max_size gro_ipv4_max_size "
+        "inet6_addr_gen_mode linkinfo").split())
+    result, indexes = {}, set()
+    for row in rows:
+        require(type(row) is dict and set(row) <= allowed, "GUEST_LINK_METADATA")
+        index, name, flags = row.get("ifindex"), row.get("ifname"), row.get("flags")
+        require(type(index) is int and 0 < index < 2**31 and index not in indexes
+            and type(name) is str and re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", name)
+            and name not in result and type(flags) is list and len(flags) <= 32
+            and all(type(x) is str and re.fullmatch(r"[A-Z_-]{1,24}", x) for x in flags)
+            and len(flags) == len(set(flags)), "GUEST_LINK_METADATA")
+        require(row.get("operstate") in ("UNKNOWN", "DOWN", "UP", "DORMANT", "LOWERLAYERDOWN", "TESTING", "NOTPRESENT")
+            and type(row.get("link_type")) is str and type(row.get("qdisc")) is str, "GUEST_LINK_METADATA")
+        info = row.get("linkinfo", {})
+        require(type(info) is dict and set(info) <= {"info_kind", "info_data"}
+            and type(info.get("info_kind", "")) is str, "GUEST_LINK_METADATA")
+        kind = info.get("info_kind", "")
+        loopback = name == "lo" and row["link_type"] == "loopback" and "LOOPBACK" in flags and not info
+        dummy = (kind == "dummy" and row["link_type"] == "ether" and info.get("info_data", {}) == {}
+            and "NOARP" in flags and "LOOPBACK" not in flags)
+        sink = "loopback" if loopback else "dummy" if dummy else "other"
+        # No master/link/XDP/VF/unknown attributes are admitted above. UNKNOWN
+        # operstate alone proves nothing. Non-sink interfaces must be admin down.
+        require(sink != "other" or ("UP" not in flags and row["operstate"] == "DOWN"), "GUEST_LINK_ACTIVE")
+        if sink != "other":
+            require(row["qdisc"] == "noqueue" and row.get("linkmode", "DEFAULT") == "DEFAULT"
+                and row.get("promiscuity", 0) == 0 and row.get("allmulti", 0) == 0
+                and set(flags) <= {"UP", "LOWER_UP", "LOOPBACK", "BROADCAST", "MULTICAST", "NOARP", "NO-CARRIER"},
+                "GUEST_LINK_METADATA")
+        indexes.add(index)
+        # All observed metadata must stay stable across the route/qdisc reads;
+        # no stats query is used, so no traffic counters need to be discarded.
+        result[name] = dict(identity=row, sink=sink)
+    require("lo" in result and result["lo"]["sink"] == "loopback", "GUEST_LINK_METADATA")
+    return result
+
+
+def guest_qdisc_snapshot(raw, links):
+    """Android 16's tc has text output, not -json. No fallback command."""
+    require(len(raw) <= 65536, "GUEST_QDISC_BOUND")
+    rows, count = {}, 0
+    for line in raw.decode("ascii").splitlines():
+        if not line.strip():
+            continue
+        count += 1
+        require(count <= 128, "GUEST_QDISC_BOUND")
+        match = re.fullmatch(r"qdisc ([A-Za-z0-9_-]{1,32}) ([0-9a-f]{1,8}): dev ([A-Za-z0-9_.-]{1,15}) (.+?)\s*", line)
+        require(match is not None and match[3] in links, "GUEST_QDISC_METADATA")
+        kind, handle, name, tail = match.groups()
+        if links[name]["sink"] != "other":
+            require(name not in rows and kind == "noqueue" and handle == "0"
+                and re.fullmatch(r"root(?: refcnt [1-9][0-9]{0,9})?", tail), "GUEST_QDISC_UNSAFE")
+            rows[name] = "noqueue-root"
+        else:
+            # Down non-sink devices are not candidates. Retain their bounded
+            # opaque qdisc line only in private memory for the paired check.
+            rows.setdefault(name, []).append(line)
+    require(all(name in rows for name, item in links.items() if item["sink"] != "other"), "GUEST_QDISC_METADATA")
+    return rows
+
+
+def guest_typed_routes(raw, family, links):
+    """Only plain direct routes to RTNL-proven loopback or standalone dummy."""
+    require(len(raw) <= 65536, "GUEST_ROUTE_OUTPUT_BOUND")
+    counts = dict(loopback=0, dummy=0, rejected=0)
+    for line in raw.decode("ascii").splitlines():
+        words = line.split()
+        if not words:
+            continue
+        if words[0] in ("unicast", "local", "broadcast", "multicast"):
+            words = words[1:]
+        valid, device, seen = bool(words), None, set()
+        try:
+            destination = words[0]
+            if destination != "default":
+                require("%" not in destination and len(destination) <= 64
+                    and ipaddress.ip_network(destination, strict=False).version == family, "GUEST_ROUTE_SHAPE")
+            rest = words[1:]
+            require(len(rest) % 2 == 0, "GUEST_ROUTE_SHAPE")
+            for key, value in zip(rest[::2], rest[1::2]):
+                require(key not in seen, "GUEST_ROUTE_SHAPE")
+                seen.add(key)
+                if key == "dev":
+                    require(value in links and links[value]["sink"] != "other", "GUEST_ROUTE_SHAPE")
+                    device = value
+                elif key == "table":
+                    require(re.fullmatch(r"[A-Za-z0-9_.-]{1,32}", value), "GUEST_ROUTE_SHAPE")
+                elif key == "proto":
+                    require(value in ("kernel", "static", "boot"), "GUEST_ROUTE_SHAPE")
+                elif key == "scope":
+                    require(value in ("host", "link", "global"), "GUEST_ROUTE_SHAPE")
+                elif key in ("metric", "mtu"):
+                    require(re.fullmatch(r"[0-9]{1,10}", value) and int(value) < 2**32, "GUEST_ROUTE_SHAPE")
+                elif key in ("src", "prefsrc"):
+                    require("%" not in value and len(value) <= 64
+                        and ipaddress.ip_address(value).version == family, "GUEST_ROUTE_SHAPE")
+                elif key == "pref":
+                    require(value in ("low", "medium", "high"), "GUEST_ROUTE_SHAPE")
+                else:
+                    # Includes gateway/nexthop, encap, nhid, multipath and BPF.
+                    raise ValueError("GUEST_ROUTE_SHAPE")
+            require(device is not None, "GUEST_ROUTE_SHAPE")
+        except (ValueError, IndexError):
+            valid = False
+        counts[links[device]["sink"] if valid else "rejected"] += 1
+    return counts
+
+
 class GuestNetworkDiagnostic:
     """Last poll only, with overlapping reason counts; no guest identifiers."""
     MAX_RECEIPT = 2048
@@ -636,6 +751,109 @@ class GuestNetworkDiagnostic:
         except BaseException:
             # Best effort only: never replace the primary error or its cleanup.
             pass
+        finally:
+            try:
+                part.unlink(missing_ok=True)
+            except BaseException:
+                pass
+
+
+class GuestNetworkIsolation(GuestNetworkDiagnostic):
+    """Pinned emulator fixture only, not protection from a compromised kernel.
+
+    Android 16 netd RouteController::configureDummyNetwork creates default
+    routes on a kernel dummy sink. Never infer that identity from its name.
+    Paired RTNL metadata plus tc qdisc observations exclude visible redirect
+    ambiguity; no guest permissions, routes or interfaces are modified here.
+    """
+    def __init__(self):
+        super().__init__()
+        self.typed = dict(status="unobserved", ipv4=None, ipv6=None)
+
+    @staticmethod
+    def error_category(error):
+        if type(error) is ValueError:
+            codes = {"GUEST_LINK_BOUND": "link_bound", "GUEST_LINK_METADATA": "link_unknown",
+                "GUEST_LINK_ACTIVE": "link_active", "GUEST_LINK_CHANGED": "link_changed",
+                "GUEST_QDISC_BOUND": "qdisc_bound", "GUEST_QDISC_METADATA": "qdisc_unknown",
+                "GUEST_QDISC_UNSAFE": "qdisc_unsafe", "GUEST_QDISC_CHANGED": "qdisc_changed"}
+            if str(error) in codes:
+                return codes[str(error)]
+        return GuestNetworkDiagnostic.error_category(error)
+
+    def enforce(self, adb_command, stop):
+        try:
+            adb_command("shell", "svc", "wifi", "disable")
+            self.stage = "data_disable"
+            adb_command("shell", "svc", "data", "disable")
+            self.stage = "routes"
+            route_end = min(stop, time.monotonic() + 10)
+            last_rejection = ValueError("GUEST_NETWORK_STILL_ACTIVE")
+            def read(*args):
+                remaining = route_end - time.monotonic()
+                if remaining <= 0:
+                    raise last_rejection
+                return adb_command("shell", *args, seconds=min(20, remaining))
+            while True:
+                if time.monotonic() >= route_end:
+                    raise last_rejection
+                self.polls += 1
+                self.families, self.family = self.unobserved(), None
+                self.typed = dict(status="unknown", ipv4=None, ipv6=None)
+                try:
+                    links = guest_link_snapshot(read("ip", "-details", "-json", "link", "show"))
+                    qdiscs = guest_qdisc_snapshot(read("tc", "qdisc", "show"), links)
+                    routes = {}
+                    for name, flag in self.FAMILIES:
+                        self.family = name
+                        routes[name] = read("ip", flag, "route", "show", "table", "all")
+                        self.families[name] = guest_route_observation(routes[name])
+                    self.family = None
+                    after_qdiscs = guest_qdisc_snapshot(read("tc", "qdisc", "show"), links)
+                    after_links = guest_link_snapshot(read("ip", "-details", "-json", "link", "show"))
+                    require(links == after_links, "GUEST_LINK_CHANGED")
+                    require(qdiscs == after_qdiscs, "GUEST_QDISC_CHANGED")
+                    self.typed = dict(status="verified", ipv4=guest_typed_routes(routes["ipv4"], 4, links),
+                        ipv6=guest_typed_routes(routes["ipv6"], 6, links))
+                    last_rejection = ValueError("GUEST_NETWORK_STILL_ACTIVE")
+                    require(time.monotonic() < route_end, "GUEST_NETWORK_STILL_ACTIVE")
+                    if not self.typed["ipv4"]["rejected"] and not self.typed["ipv6"]["rejected"]:
+                        return dict(schema=2, api=36, architecture="x86_64", kvm_required=True,
+                            scope="controlled-pinned-emulator-routing-fixture",
+                            guest_wifi_disabled=True, guest_mobile_data_disabled=True,
+                            guest_no_usable_egress=True, guest_route_policy="direct-loopback-or-verified-kernel-dummy",
+                            paired_link_and_qdisc_observations=True, route_counts=self.typed,
+                            reverse_ports=[43210], fixture_control_reversed=False, host_network_namespace_isolated=True)
+                except ValueError as error:
+                    if str(error) not in {"GUEST_LINK_ACTIVE", "GUEST_LINK_CHANGED",
+                            "GUEST_QDISC_UNSAFE", "GUEST_QDISC_CHANGED"}:
+                        raise
+                    # svc disable can settle asynchronously. Only observed
+                    # active/changed configurations may settle, within this
+                    # original deadline; malformed/unknown input stays fatal.
+                    last_rejection = error
+                time.sleep(min(0.25, max(0, route_end - time.monotonic())))
+        except BaseException as error:
+            self.publish_failure(error)
+            raise
+
+    def publish_failure(self, error):
+        part = PROOF / "guest-network-diagnostic.part"
+        try:
+            category = self.error_category(error)
+            if self.family is not None:
+                self.families[self.family] = self.unobserved()[self.family]
+                self.families[self.family].update(outcome="unknown", error=category)
+            value = dict(schema=2, kind="hosted-android-guest-network-diagnostic", stage=self.stage,
+                failure=category, polls=self.polls, families=self.families, snapshot="last_poll",
+                typed=self.typed, rejection_counts_overlap=True, device_category_basis="fixed_name_convention_only",
+                gate_passed=False, cause_established=False, raw_text_exported=False)
+            raw = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+            require(len(raw) <= self.MAX_RECEIPT, "GUEST_NETWORK_DIAGNOSTIC_BOUND")
+            H.write(part, raw)
+            os.replace(part, PROOF / "guest-network-diagnostic.json")
+        except BaseException:
+            pass  # Preserve the primary error and its original owned cleanup.
         finally:
             try:
                 part.unlink(missing_ok=True)
@@ -1171,11 +1389,8 @@ def inside(*, avd_only=False):
         # observer-only fixture control port. Disable guest uplinks, then admit
         # only the explicit adbd reverse to the public fixture API.
         diagnostic.phase = "guest_network"
-        GuestNetworkDiagnostic().enforce(adb_command, stop)
-        H.write(PROOF / "emulator-boundary.json", (json.dumps(dict(schema=1, api=36, architecture="x86_64",
-            kvm_required=True, guest_wifi_disabled=True, guest_mobile_data_disabled=True, guest_default_routes_absent=True,
-            guest_non_loopback_routes_absent=True,
-            reverse_ports=[43210], fixture_control_reversed=False, host_network_namespace_isolated=True)) + "\n").encode())
+        boundary = GuestNetworkIsolation().enforce(adb_command, stop)
+        H.write(PROOF / "emulator-boundary.json", (json.dumps(boundary) + "\n").encode())
         diagnostic.phase = "apk_install"
         adb_command("install", "--no-streaming", str(APK), seconds=45)
         diagnostic.phase = "port_reverse"

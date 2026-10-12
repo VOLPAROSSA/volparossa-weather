@@ -375,7 +375,50 @@ names or raw command text are exported, and a name category is not proof of a
 device's link type. The original admission predicate, deadlines, resource limits
 and cleanup remain unchanged. Diagnostic publication cannot replace the primary
 failure or create an app-success report. All 139 inert Android and 40 shared-helper
-tests pass; actual execution of this diagnostic remains required.
+tests pass for that diagnostic candidate.
+
+The [twenty-sixth attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38319732906)
+on `7f0af248fa4339d8d85e67857ab1343df4a2d132` again fails before installation
+at the guest-network gate. The last observed poll rejects one of four IPv4
+routes and four of five IPv6 routes, with one default in each family. The
+non-loopback device names fall into the closed `other` category; that does not
+establish their kernel type or prove usable egress. Original artifact SHA256 is
+`c9896a8e1c48d113ae04521b36a673450b03a48b03c776bbdc27d758be867d4c`;
+all 45 members and fifteen step logs are verified. Both APK builds pass with
+matching receipt size 74,366,059 bytes and SHA256
+`b6d9e6470718bfa5cea11b8cc70507691b6f2c1d2f59d39c4bcbd9da75cc9da6`;
+the failed run does not export the APK itself. The installed phase lasts 48.887
+seconds and peaks at 3,622,367,232 bytes RSS, below 4 GiB. Inner and outer cleanup,
+KVM restoration and unchanged host network namespace pass. There is no app or
+network-boundary success report. Separate component CI passes 314 tests.
+
+The next candidate distinguishes usable routes from positively identified kernel
+dummy sinks. Android 16's
+[netd](https://android.googlesource.com/platform/system/netd/+/refs/tags/android-16.0.0_r1/server/RouteController.cpp)
+installs direct IPv4/IPv6 default routes for its dummy network; a familiar name
+alone is not proof that the observed route uses that mechanism. The candidate
+checks paired `ip -details -json link show` identities and `tc qdisc show`
+snapshots around both all-table route queries. Android's
+[tc implementation](https://android.googlesource.com/platform/external/iproute2/+/refs/tags/android-16.0.0_r1/tc/tc_qdisc.c)
+provides the strict text form used here, without a JSON-command fallback.
+
+Only plain direct routes to genuine loopback or standalone kernel-kind `dummy`
+interfaces with exactly a root `noqueue` qdisc are accepted. Active non-sinks,
+gateway/nexthop/encapsulation, master/peer links, visible XDP, ingress/clsact or
+other sink qdiscs, unknown data and changed observations are not admitted.
+Active/changing configurations may settle within the original absolute ten
+seconds; malformed or unsupported observations fail immediately. Each command
+retains its existing output bound and must finish within that same deadline.
+
+Boundary schema 2 states no usable guest egress under this controlled, pinned
+emulator fixture, not absence of all default or non-loopback routes. It assumes
+the trusted guest kernel and an unprivileged app; paired observations do not
+prove resistance to a compromised kernel, concurrent privileged changes or the
+universal absence of BPF hooks. The historical route predicate remains intact.
+The separate schema-2 failure diagnostic keeps only bounded last-poll counts,
+never names, addresses or raw output. SDK inputs, permissions, resource limits,
+cleanup and full installed-app acceptance are unchanged. This candidate has not
+yet passed an actual installed-app trial.
 
 The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only

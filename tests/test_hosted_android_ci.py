@@ -1461,10 +1461,11 @@ class EmulatorDiagnostics(unittest.TestCase):
         # and in-memory AVD config. Never create /state or execute a native tool.
         real_popen, real_open = subprocess.Popen, open
         path_open, path_mkdir = Path.open, Path.mkdir
-        enforce, original_drain = M.GuestNetworkDiagnostic.enforce, M.drain_children
-        for failed_write in (False, True):
-            with self.subTest(failed_write=failed_write), tempfile.TemporaryDirectory() as directory:
+        original_drain = M.drain_children
+        for accepted, failed_write in ((False, False), (False, True), (True, False)):
+            with self.subTest(accepted=accepted, failed_write=failed_write), tempfile.TemporaryDirectory() as directory:
                 proof, children, calls = Path(directory), [], []
+                now, link_reads = [100.0], [0]
                 def popen(argv, **kwargs):
                     calls.append(argv)
                     if argv[0].endswith("/avdmanager"):
@@ -1474,12 +1475,29 @@ class EmulatorDiagnostics(unittest.TestCase):
                     else:
                         self.assertEqual(argv[:3], [str(M.ANDROID / "platform-tools/adb"), "-s", M.SERIAL])
                         args = argv[3:]
-                        self.assertEqual(args[0], "shell")  # install/reverse/app must never be reached.
+                        if args[0] == "install":
+                            self.assertTrue(accepted)
+                            self.assertEqual(link_reads[0], 3)  # Active, then both stable observations.
+                            # Stop at the real install boundary; this test never
+                            # invents an installed application or final report.
+                            child = real_popen([sys.executable, "-I", "-c", "raise SystemExit(7)"], **kwargs)
+                            children.append(child)
+                            return child
+                        self.assertEqual(args[0], "shell")
                         outputs = {("getprop", "sys.boot_completed"): b"1", ("getprop", "ro.build.version.sdk"): b"36",
                             ("getprop", "ro.product.cpu.abi"): b"x86_64", ("svc", "wifi", "disable"): b"",
                             ("svc", "data", "disable"): b"",
-                            ("ip", "-4", "route", "show", "table", "all"): GuestNetworkDiagnostics.BAD,
-                            ("ip", "-6", "route", "show", "table", "all"): b"fe80::/64 dev private-canary\n"}
+                            ("ip", "-details", "-json", "link", "show"): GuestNetworkIsolationTests.links(),
+                            ("tc", "qdisc", "show"): GuestNetworkIsolationTests.QDISC +
+                                (b"" if accepted else b"qdisc clsact ffff: dev sink-private parent ffff:fff1\n"),
+                            ("ip", "-4", "route", "show", "table", "all"): GuestNetworkIsolationTests.V4,
+                            ("ip", "-6", "route", "show", "table", "all"): GuestNetworkIsolationTests.V6}
+                        if tuple(args[1:]) == ("ip", "-details", "-json", "link", "show"):
+                            link_reads[0] += 1
+                            if accepted and link_reads[0] == 1:
+                                rows = json.loads(GuestNetworkIsolationTests.links())
+                                rows[1]["linkinfo"] = {}  # An ordinary active interface is not yet safe.
+                                outputs[tuple(args[1:])] = json.dumps(rows).encode()
                         code = "import sys;sys.stdout.buffer.write(" + repr(outputs[tuple(args[1:])]) + ")"
                     child = real_popen([sys.executable, "-I", "-c", code], **kwargs)
                     children.append(child)
@@ -1498,22 +1516,29 @@ class EmulatorDiagnostics(unittest.TestCase):
                     return original_write(path, raw)
                 def drain(owned):
                     self.assertEqual(owned, children)
-                    self.assertEqual(len(owned), 11)
-                    self.assertEqual((proof / "guest-network-diagnostic.json").exists(), not failed_write)
-                    self.assertEqual(json.loads((proof / "emulator-diagnostic.json").read_text())["check_code"],
-                        "GUEST_NETWORK_STILL_ACTIVE")
+                    self.assertEqual(len(owned), 17 if accepted else 11)
+                    self.assertEqual((proof / "guest-network-diagnostic.json").exists(), not accepted and not failed_write)
+                    self.assertEqual(json.loads((proof / "emulator-diagnostic.json").read_text())["phase"],
+                        "apk_install" if accepted else "guest_network")
                     return original_drain(owned)
                 with self.guarded_inside(proof, popen), patch.object(M, "open", side_effect=private_open, create=True), \
                         patch.object(Path, "open", config_open), patch.object(Path, "mkdir", mkdir), \
-                        patch.object(M.GuestNetworkDiagnostic, "enforce", lambda self, adb, _stop: enforce(self, adb, time.monotonic() - 1)), \
                         patch.object(M.H, "write", side_effect=write), patch.object(M, "drain_children", side_effect=drain), \
-                        self.assertRaisesRegex(ValueError, "GUEST_NETWORK_STILL_ACTIVE"):
+                        patch.object(M.time, "monotonic", side_effect=lambda: now[0]), \
+                        patch.object(M.time, "sleep", side_effect=lambda _: now.__setitem__(0, now[0] + (0.25 if accepted else 11))), \
+                        self.assertRaises(subprocess.CalledProcessError if accepted else ValueError):
                     M.inside()
                 cleanup = json.loads((proof / "emulator-cleanup.json").read_text())
                 self.assertTrue(cleanup["direct_children_reaped"] and cleanup["private_avd_removed"])
                 self.assertFalse(cleanup["trial_returned"])
                 self.assertTrue(all(c.poll() is not None and c.stdin.closed for c in children))
-                self.assertFalse((proof / "emulator-boundary.json").exists())
+                self.assertEqual((proof / "emulator-boundary.json").exists(), accepted)
+                if accepted:
+                    boundary = json.loads((proof / "emulator-boundary.json").read_text())
+                    self.assertEqual(boundary["schema"], 2)
+                    self.assertTrue(boundary["guest_no_usable_egress"])
+                    self.assertNotIn("guest_default_routes_absent", boundary)
+                    self.assertNotIn("guest_non_loopback_routes_absent", boundary)
                 self.assertFalse((proof / "report.json").exists())
                 self.assertFalse((proof / "guest-network-diagnostic.part").exists())
 
@@ -1699,6 +1724,170 @@ class GuestNetworkDiagnostics(unittest.TestCase):
                 self.assertEqual(family["rejected_routes"], 32768)
                 self.assertEqual(family["route_type_counts"]["other"], 32768)
                 self.assertEqual(family["device_category_counts"]["missing_or_invalid"], 32768)
+
+
+class GuestNetworkIsolationTests(unittest.TestCase):
+    QDISC = b"qdisc noqueue 0: dev lo root refcnt 2\nqdisc noqueue 0: dev sink-private root refcnt 2\n"
+    V4 = b"local 127.0.0.0/8 dev lo table local proto kernel scope host src 127.0.0.1\ndefault dev sink-private table 1003 proto static scope link\n"
+    V6 = b"local ::1 dev lo table local proto kernel metric 0 pref medium\ndefault dev sink-private table 1003 proto static metric 1024 pref medium\nfe80::/64 dev sink-private proto kernel metric 256 pref medium\nmulticast ff00::/8 dev sink-private table local proto kernel metric 256 pref medium\n"
+
+    @staticmethod
+    def links():
+        return json.dumps([dict(ifindex=1, ifname="lo", flags=["LOOPBACK", "UP", "LOWER_UP"],
+            link_type="loopback", qdisc="noqueue", operstate="UNKNOWN", mtu=65536),
+            dict(ifindex=2, ifname="sink-private", flags=["BROADCAST", "NOARP", "UP", "LOWER_UP"],
+            link_type="ether", qdisc="noqueue", operstate="UNKNOWN", mtu=1500, linkinfo=dict(info_kind="dummy"))]).encode()
+
+    def run_gate(self, proof, *, links=None, qdisc=None, routes=None, after=None, after_qdisc=None,
+            late=False, prefix=(), settle=False):
+        values = [self.links() if links is None else links, self.QDISC if qdisc is None else qdisc,
+            *(routes or (self.V4, self.V6)), self.QDISC if after_qdisc is None else after_qdisc,
+            self.links() if after is None else after]
+        values = [*prefix, *values]
+        calls, now = [], [100.0]
+        def adb(*args, **kwargs):
+            calls.append((args, kwargs))
+            if args[:2] == ("shell", "svc"):
+                return b""
+            self.assertGreater(kwargs["seconds"], 0)
+            self.assertLessEqual(kwargs["seconds"], 10)
+            value = values.pop(0)
+            if not values and late:
+                now[0] = 111.0
+            if isinstance(value, BaseException):
+                raise value
+            return value
+        with patch.object(M, "PROOF", proof), patch.object(M.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(M.time, "sleep", side_effect=lambda _: now.__setitem__(0, now[0] + (0.25 if settle else 11))):
+            value = M.GuestNetworkIsolation().enforce(adb, 1000)
+        return value, calls
+
+    def test_positive_kernel_sink_not_name_and_truthful_boundary(self):
+        with tempfile.TemporaryDirectory() as root:
+            boundary, calls = self.run_gate(Path(root))
+            self.assertEqual(boundary["schema"], 2)
+            self.assertTrue(boundary["guest_no_usable_egress"])
+            self.assertEqual(boundary["route_counts"], dict(status="verified",
+                ipv4=dict(loopback=1, dummy=1, rejected=0), ipv6=dict(loopback=1, dummy=3, rejected=0)))
+            self.assertNotIn("guest_default_routes_absent", boundary)
+            self.assertNotIn("guest_non_loopback_routes_absent", boundary)
+            self.assertEqual([x[0] for x in calls[2:]], [
+                ("shell", "ip", "-details", "-json", "link", "show"), ("shell", "tc", "qdisc", "show"),
+                ("shell", "ip", "-4", "route", "show", "table", "all"),
+                ("shell", "ip", "-6", "route", "show", "table", "all"),
+                ("shell", "tc", "qdisc", "show"), ("shell", "ip", "-details", "-json", "link", "show")])
+            self.assertFalse(list(Path(root).iterdir()))
+        self.assertFalse(M.no_guest_egress_routes(self.V4))  # Historical rule is unchanged.
+
+    def test_link_spoof_unknown_master_tunnel_xdp_and_changed_fail_closed(self):
+        for patch in ({"linkinfo": {}}, {"linkinfo": {"info_kind": "bridge"}},
+                {"linkinfo": {"info_kind": "unknown"}}, {"master": "private"}, {"link": "private"},
+                {"ifname": "dummy0", "linkinfo": {}},
+                {"link_index": 3}, {"link_netnsid": 1}, {"xdp": {}}, {"unknown_bpf": {}},
+                {"linkinfo": {"info_kind": "dummy", "info_slave_kind": "bridge"}},
+                {"flags": ["UP", "NOARP", "SLAVE"]}):
+            with self.subTest(patch=patch), tempfile.TemporaryDirectory() as root:
+                rows = json.loads(self.links()); rows[1].update(patch)
+                with self.assertRaises(ValueError): self.run_gate(Path(root), links=json.dumps(rows).encode())
+                receipt = json.loads((Path(root) / "guest-network-diagnostic.json").read_bytes())
+                self.assertFalse(receipt["gate_passed"])
+                self.assertEqual(receipt["typed"]["status"], "unknown")
+        changed = json.loads(self.links()); changed[1]["ifindex"] = 3
+        with tempfile.TemporaryDirectory() as root, self.assertRaisesRegex(ValueError, "GUEST_LINK_CHANGED"):
+            self.run_gate(Path(root), after=json.dumps(changed).encode())
+        for key in ("ifindex", "ifname"):
+            rows = json.loads(self.links()); rows[1][key] = rows[0][key]
+            with self.assertRaisesRegex(ValueError, "GUEST_LINK_METADATA"):
+                M.guest_link_snapshot(json.dumps(rows).encode())
+
+    def test_active_state_can_settle_but_does_not_reset_original_deadline(self):
+        rows = json.loads(self.links()); rows[1]["linkinfo"] = {}
+        active = json.dumps(rows).encode()
+        with tempfile.TemporaryDirectory() as root:
+            value, calls = self.run_gate(Path(root), prefix=[active], settle=True)
+            self.assertTrue(value["guest_no_usable_egress"])
+            self.assertEqual(len(calls), 9)
+            self.assertEqual(calls[-1][1]["seconds"], 9.75)
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(ValueError, "GUEST_LINK_ACTIVE"):
+                self.run_gate(Path(root), links=active)
+            value = json.loads((Path(root) / "guest-network-diagnostic.json").read_bytes())
+            self.assertEqual(value["failure"], "link_active")
+            self.assertEqual(value["polls"], 1)
+            self.assertFalse(value["gate_passed"])
+
+    def test_source_spelling_and_changed_qdisc_are_bound(self):
+        rows = json.loads(self.links())
+        rows[1]["inet6_addr_gen_mode"] = "eui64"  # Android 16 ipaddress.c print_af_spec.
+        M.guest_link_snapshot(json.dumps(rows).encode())
+        rows.append(dict(ifindex=3, ifname="down-other", flags=["BROADCAST"],
+            link_type="ether", qdisc="fq_codel", operstate="DOWN"))
+        raw = json.dumps(rows).encode()
+        qdisc = self.QDISC + b"qdisc fq_codel 1: dev down-other root limit 1024\n"
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(ValueError, "GUEST_QDISC_CHANGED"):
+                self.run_gate(Path(root), links=raw, after=raw, qdisc=qdisc,
+                    after_qdisc=qdisc.replace(b"1024", b"2048"))
+            value = json.loads((Path(root) / "guest-network-diagnostic.json").read_bytes())
+            self.assertEqual(value["failure"], "qdisc_changed")
+            self.assertFalse(value["gate_passed"])
+
+    def test_only_plain_direct_routes_are_accepted(self):
+        links = M.guest_link_snapshot(self.links())
+        for route in (b"default via 10.0.2.2 dev sink-private", b"default nexthop dev sink-private",
+                b"default dev sink-private encap bpf", b"default dev sink-private nhid 3",
+                b"default dev sink-private dev lo", b"default dev unobserved", b"default dev lo onlink",
+                b"default dev sink-private garbage value", b"unreachable default", b"blackhole default",
+                b"fe80::/64 dev sink-private", b"default dev sink-private proto unknown"):
+            with self.subTest(route=route):
+                self.assertEqual(M.guest_typed_routes(route, 4, links)["rejected"], 1)
+        self.assertEqual(M.guest_typed_routes(b"127.0.0.0/8 dev lo", 4, links)["loopback"], 1)
+        self.assertEqual(M.guest_typed_routes(b"", 6, links), dict(loopback=0, dummy=0, rejected=0))
+
+    def test_qdisc_hook_unknown_missing_and_change_fail_closed(self):
+        links = M.guest_link_snapshot(self.links())
+        for raw in (self.QDISC + b"qdisc clsact ffff: dev sink-private parent ffff:fff1\n",
+                self.QDISC + b"qdisc ingress ffff: dev sink-private parent ffff:fff1\n",
+                self.QDISC.replace(b"noqueue", b"fq_codel"), self.QDISC.replace(b"root", b"parent 1:"),
+                self.QDISC.replace(b"refcnt 2", b"refcnt 2 bpf"), self.QDISC.splitlines()[0] + b"\n", b"",
+                self.QDISC + self.QDISC, self.QDISC + b"private output\n"):
+            with self.subTest(raw=raw), self.assertRaises(ValueError): M.guest_qdisc_snapshot(raw, links)
+        # tc's changing reference count is not a redirect configuration change.
+        self.assertEqual(M.guest_qdisc_snapshot(self.QDISC, links),
+            M.guest_qdisc_snapshot(self.QDISC.replace(b"refcnt 2", b"refcnt 3"), links))
+
+    def test_unknown_commands_bounds_privacy_and_original_deadline(self):
+        for output in (b"not-json", b"[]", b"x" * 65537, b"\xff",
+                subprocess.CalledProcessError(1, "private-token")):
+            with self.subTest(output=type(output)), tempfile.TemporaryDirectory() as root:
+                with self.assertRaises((ValueError, subprocess.CalledProcessError)):
+                    self.run_gate(Path(root), links=output)
+                raw = (Path(root) / "guest-network-diagnostic.json").read_bytes()
+                self.assertLessEqual(len(raw), 2048)
+                self.assertNotIn(b"private-token", raw)
+                self.assertFalse(json.loads(raw)["gate_passed"])
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(ValueError, "GUEST_NETWORK_STILL_ACTIVE"):
+                self.run_gate(Path(root), late=True)
+            raw = (Path(root) / "guest-network-diagnostic.json").read_bytes()
+            self.assertLessEqual(len(raw), 2048)
+            for secret in (b"sink-private", b"fe80", b"127.0.0", b"/state"):
+                self.assertNotIn(secret, raw)
+            self.assertFalse(json.loads(raw)["gate_passed"])
+
+    def test_maximum_route_prefix_keeps_closed_last_poll_within_receipt_bound(self):
+        route = b"default via 10.0.2.2 dev sink-private\n"
+        raw_routes = route * (65536 // len(route))
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(ValueError, "GUEST_NETWORK_STILL_ACTIVE"):
+                self.run_gate(Path(root), routes=(raw_routes, raw_routes))
+            raw = (Path(root) / "guest-network-diagnostic.json").read_bytes()
+            self.assertLessEqual(len(raw), 2048)
+            value = json.loads(raw)
+            self.assertEqual(value["schema"], 2)
+            self.assertEqual(value["typed"]["ipv4"]["rejected"], len(raw_routes.splitlines()))
+            for private in (b"sink-private", b"10.0.2.2"):
+                self.assertNotIn(private, raw)
 
 
 class AvdPreflight(unittest.TestCase):
