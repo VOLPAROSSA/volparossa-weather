@@ -149,15 +149,37 @@ def gradle(acquire):
         "-Pdart-obfuscation=false", "-Ptrack-widget-creation=true", "-Ptree-shake-icons=false"]
 
 
+def repository_fixture_command():
+    return ["/state/repository-fixture/gradlew", "-p", "/state/repository-fixture", "--offline", "--no-daemon",
+        "--max-workers=2", "--console=plain", "--init-script", str(ROOT / "scripts/hosted-android-repositories.gradle"),
+        "verifyRepositoryContract"]
+
+
+def gradle_sandbox(command, mode):
+    """Only these fixed Gradle invocations need the bounded 4096-descriptor profile."""
+    require((mode == "acquire" and command == gradle(True)) or
+        (mode == "compile" and command in (gradle(False), repository_fixture_command())),
+        "NATIVE_GRADLE_RESOURCE_SCOPE")
+    argv = sandbox(command, mode)
+    require(argv[:6] == ["/usr/bin/prlimit", "--core=0", "--cpu=900", "--nofile=1024", "--", "/usr/bin/bwrap"],
+        "NATIVE_GRADLE_RESOURCE_TEMPLATE")
+    # This changes the new child only, never the caller/runner limits or the
+    # shared Flutter/web/emulator/preflight sandbox's 1024-descriptor profile.
+    argv[3] = "--nofile=4096:4096"
+    return argv
+
+
 def repository_fixture_report(raw):
     require(type(raw) is bytes and len(raw) <= H.LIMIT, "REPOSITORY_FIXTURE_OUTPUT_BOUND")
     prefix = b"NATIVE_REPOSITORY_FIXTURE "
     records = [line[len(prefix):] for line in raw.splitlines() if line.startswith(prefix)]
     require(len(records) == 1 and len(records[0]) <= 1024, "REPOSITORY_FIXTURE_RECEIPT")
     value = json.loads(records[0], object_pairs_hook=H.unique)
-    expected = dict(schema=1, kind="gradle-repository-contract", gradle_version="8.13", plugin_wrappers=3,
-        rejected=["artifact-url", "unadmitted", "http", "file", "ivy", "flatdir"], networkless=True, external_dependencies=False)
+    expected = dict(schema=2, kind="gradle-repository-contract", gradle_version="8.13", plugin_wrappers=3,
+        rejected=["artifact-url", "unadmitted", "http", "file", "ivy", "flatdir"], networkless=True, external_dependencies=False,
+        nofile_soft=4096, nofile_hard=4096)
     require(value == expected and type(value.get("schema")) is int and type(value.get("plugin_wrappers")) is int
+        and type(value.get("nofile_soft")) is int and type(value.get("nofile_hard")) is int
         and type(value.get("networkless")) is bool and type(value.get("external_dependencies")) is bool,
         "REPOSITORY_FIXTURE_PROOF")
     return value
@@ -185,10 +207,8 @@ def repository_fixture():
     (target / "gradlew").chmod(0o700)
     for name in ("gradlew", "gradle/wrapper/gradle-wrapper.jar"):
         require(H.digest(target / name) == H.digest(wrapper / name), "REPOSITORY_FIXTURE_WRAPPER_CHANGED")
-    command = ["/state/repository-fixture/gradlew", "-p", "/state/repository-fixture", "--offline", "--no-daemon",
-        "--max-workers=2", "--console=plain", "--init-script", str(ROOT / "scripts/hosted-android-repositories.gradle"),
-        "verifyRepositoryContract"]
-    raw = H.run("gradle-repository-contract", sandbox(command, "compile"), 120, env=environment(), memory=MEMORY)
+    raw = H.run("gradle-repository-contract", gradle_sandbox(repository_fixture_command(), "compile"),
+        120, env=environment(), memory=MEMORY)
     result = repository_fixture_report(raw)
     H.save("repository-contract.json", dict(result, fixture_files={name: H.sha(raw) for name, raw in files.items()},
         guard_sha256=H.sha(H.read(ROOT / "scripts/hosted-android-repositories.gradle"))))
@@ -384,7 +404,7 @@ def execute(helper, platform):
         # by Gradle. Properties were separately pinned by the native preparer.
         require(H.digest(STAGE / "android/gradle/wrapper/gradle-wrapper.jar") ==
             H.digest(SDK / "bin/cache/artifacts/gradle_wrapper/gradle/wrapper/gradle-wrapper.jar"), "WRAPPER_CHANGED")
-        H.run("android-acquisition-build", sandbox(gradle(True), "acquire"), 900, env=environment(), cwd=STAGE / "android", memory=MEMORY)
+        H.run("android-acquisition-build", gradle_sandbox(gradle(True), "acquire"), 900, env=environment(), cwd=STAGE / "android", memory=MEMORY)
         metadata = verification_metadata()
         H.save("dependency-capture.json", metadata)
         H.save("acquisition-apk.json", dict(schema=1, artifact=H.digest(APK), network_enabled_build=True, production_authority=False))
@@ -394,7 +414,7 @@ def execute(helper, platform):
         H.run("pub-offline-lock", sandbox(flutter("pub", "get", "--offline", "--enforce-lockfile"), "compile"), 180, env=environment(), memory=MEMORY)
         # Gradle clean deletes only its configured disposable staged build tree.
         # Original acquisition hashes/logs remain outside it in OUTPUT.
-        H.run("android-offline-build", sandbox(gradle(False), "compile"), 900, env=environment(), cwd=STAGE / "android", memory=MEMORY)
+        H.run("android-offline-build", gradle_sandbox(gradle(False), "compile"), 900, env=environment(), cwd=STAGE / "android", memory=MEMORY)
         require(verification_metadata() == metadata, "DEPENDENCY_METADATA_CHANGED")
         native_sources(native)
         W.verify_phase_inputs(helper, pin)

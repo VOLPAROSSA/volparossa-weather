@@ -56,9 +56,11 @@ execution.
 ## Hosted build and browser trials
 
 The [hosted workflow](../../.github/workflows/hosted-overmorrow.yml) prepares a
-public, source-bound Overmorrow build for the next core integration trial. It
-keeps the existing local results above unchanged. The new hosted sequence is not
-verified until its build, both browser trials and cleanup have passed.
+public, source-bound Overmorrow build for the core integration trial. It
+keeps the existing local results above unchanged. The
+[hosted sequence](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38235992570)
+passes compilation, all 23 Flutter tests, both browser trials and cleanup. These
+synthetic trials are separate from the joined core delivery proof below.
 
 The workflow uses the same pinned Flutter 3.38.5 archive and upstream dependency
 lock. SDK acquisition is explicit and verifies the official archive before
@@ -99,9 +101,19 @@ pass.
 The next correction recognizes Gradle 8.13's plugin-repository wrapper through
 its Maven descriptor, keeping the same HTTPS allowlist for both base and
 additional artifact URLs. A new offline Gradle fixture must exercise three real
-wrappers and six rejected repository cases before the app build. All 43
-hosted-preparation tests and 11 native preparer tests pass locally; these do not
-execute Gradle. The fixture, APK build, offline rebuild and installed-app trial
+wrappers and six rejected repository cases before the app build. The
+[fourth attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38247823514)
+passes this real fixture, then reaches further into Android plugin configuration
+before exhausting the inherited 1,024-file-descriptor limit. It does not produce
+an APK; process drain, policy cleanup and KVM access restoration pass.
+
+The next candidate gives only the three fixed Gradle invocations a finite
+4,096-descriptor limit. Other build, browser and emulator profiles keep their
+existing limits; the parent process and development host are unchanged. The
+fixture must report the actual JVM's soft and hard limits. All 47
+hosted-preparation tests and 11 native preparer tests pass locally, including a
+real inert child-process reproduction of descriptor exhaustion. They do not
+execute Gradle. The corrected APK build, offline rebuild and installed-app trial
 still require successful hosted execution.
 
 The [native preparer](prepare_native_android.py) modifies only a disposable

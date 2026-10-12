@@ -7,8 +7,10 @@ import os
 import io
 import json
 from pathlib import Path
+import resource
 import subprocess
 import stat
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -303,9 +305,9 @@ class AptJavaProvenance(unittest.TestCase):
 class RepositoryFixture(unittest.TestCase):
     @staticmethod
     def receipt(**changes):
-        value = dict(schema=1, kind="gradle-repository-contract", gradle_version="8.13", plugin_wrappers=3,
+        value = dict(schema=2, kind="gradle-repository-contract", gradle_version="8.13", plugin_wrappers=3,
             rejected=["artifact-url", "unadmitted", "http", "file", "ivy", "flatdir"], networkless=True,
-            external_dependencies=False)
+            external_dependencies=False, nofile_soft=4096, nofile_hard=4096)
         value.update(changes)
         return b"NATIVE_REPOSITORY_FIXTURE " + json.dumps(value).encode() + b"\n"
 
@@ -315,6 +317,8 @@ class RepositoryFixture(unittest.TestCase):
                 self.receipt(plugin_wrappers=True), self.receipt(plugin_wrappers=3.0), self.receipt(schema=True),
                 self.receipt(rejected=[]), self.receipt(networkless=False), self.receipt(networkless=1),
                 self.receipt(external_dependencies=True), self.receipt(external_dependencies=0),
+                self.receipt(schema=1), self.receipt(nofile_soft=1024), self.receipt(nofile_hard=8192),
+                self.receipt(nofile_soft=4096.0), self.receipt(nofile_hard=None),
                 self.receipt(gradle_version="8.14"), self.receipt(extra="not closed")):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 M.repository_fixture_report(raw)
@@ -342,7 +346,7 @@ class RepositoryFixture(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             sdk, stage, private = self.fixture_paths(Path(root))
             with patch.object(M, "SDK", sdk), patch.object(M, "STAGE", stage), patch.object(M, "PRIVATE", private), \
-                    patch.object(M, "sandbox", side_effect=lambda argv, mode: ["inert-" + mode, *argv]), \
+                    patch.object(M, "gradle_sandbox", side_effect=lambda argv, mode: ["inert-" + mode, *argv]), \
                     patch.object(M.H, "run", return_value=self.receipt()) as run, patch.object(M.H, "save") as save:
                 M.repository_fixture()
             args, kwargs = run.call_args
@@ -391,11 +395,76 @@ class RepositoryFixture(unittest.TestCase):
         self.assertIn("assert wrappers.size() == 3", fixture)
         self.assertIn("it instanceof ResolutionAwareRepository && it.descriptor instanceof MavenRepositoryDescriptor", fixture)
         self.assertIn("assert gradle.startParameter.offline", fixture)
+        self.assertIn("new File('/proc/self/limits')", fixture)
+        self.assertIn("assert descriptorFields == ['Max', 'open', 'files', '4096', '4096', 'files']", fixture)
+        self.assertIn("nofile_soft: nofileSoft, nofile_hard: nofileHard", fixture)
         self.assertIn("assert caught", fixture)
         for label in ("artifact-url", "unadmitted", "http", "file", "ivy", "flatdir"):
             self.assertIn("deny('" + label + "'", fixture)
         source = (ROOT / "scripts/prepare_hosted_android_ci.py").read_text().split("def execute(", 1)[1]
         self.assertLess(source.index('repository_fixture()'), source.index('phase = "public-acquisition-build"'))
+
+
+class GradleDescriptorProfile(unittest.TestCase):
+    def test_only_exact_three_gradle_commands_get_4096_and_other_profiles_stay_1024(self):
+        for command, mode in ((M.gradle(True), "acquire"), (M.gradle(False), "compile"),
+                              (M.repository_fixture_command(), "compile")):
+            previous = M.sandbox(command, mode)
+            current = M.gradle_sandbox(command, mode)
+            self.assertEqual(previous[3], "--nofile=1024")
+            self.assertEqual(current[3], "--nofile=4096:4096")
+            self.assertEqual(previous[:3] + previous[4:], current[:3] + current[4:])
+        for mode in ("acquire", "compile", "emulator"):
+            self.assertEqual(M.sandbox(["inert"], mode)[3], "--nofile=1024")
+        for mode in ("acquire", "compile", "browser"):
+            self.assertEqual(M.H.sandbox(["inert"], mode=mode,
+                writable=M.H.PROOF if mode == "browser" else None)[3], "--nofile=1024")
+
+    def test_arbitrary_commands_changed_arguments_and_wrong_modes_are_rejected(self):
+        for command, mode in ((["inert"], "compile"), (M.gradle(True), "compile"),
+                (M.gradle(False), "acquire"), (M.repository_fixture_command(), "acquire"),
+                (M.gradle(False), "emulator"), (M.gradle(True), "host"),
+                (M.gradle(True) + ["unexpectedTask"], "acquire")):
+            with self.subTest(command=command, mode=mode), self.assertRaisesRegex(ValueError, "NATIVE_GRADLE_RESOURCE_SCOPE"):
+                M.gradle_sandbox(command, mode)
+        with patch.object(M, "sandbox", return_value=["/usr/bin/prlimit", "--nofile=1024"]), \
+                self.assertRaisesRegex(ValueError, "NATIVE_GRADLE_RESOURCE_TEMPLATE"):
+            M.gradle_sandbox(M.gradle(True), "acquire")
+
+    def test_inert_real_prlimit_reproduces_1024_exhaustion_and_4096_success(self):
+        # No sandbox/native tool runs: only the exact prlimit prefix and an
+        # isolated Python child holding bounded read-only /dev/null descriptors.
+        child = r'''
+import errno,json,os,resource
+fds=[]; exhausted=False
+try:
+    try:
+        for _ in range(1100): fds.append(os.open('/dev/null',os.O_RDONLY|os.O_CLOEXEC))
+    except OSError as error:
+        if error.errno!=errno.EMFILE: raise
+        exhausted=True
+    print(json.dumps(dict(opened=len(fds),exhausted=exhausted,limits=resource.getrlimit(resource.RLIMIT_NOFILE))))
+finally:
+    for fd in fds: os.close(fd)
+'''
+        before = resource.getrlimit(resource.RLIMIT_NOFILE)
+        observed = []
+        for argv in (M.sandbox(M.gradle(True), "acquire"), M.gradle_sandbox(M.gradle(True), "acquire")):
+            prefix = argv[:argv.index("--") + 1]
+            result = subprocess.run([*prefix, sys.executable, "-I", "-c", child],
+                check=True, capture_output=True, timeout=10)
+            self.assertEqual(result.stderr, b"")
+            observed.append(json.loads(result.stdout))
+        self.assertEqual(observed[0]["limits"], [1024, 1024])
+        self.assertTrue(observed[0]["exhausted"])
+        self.assertLess(observed[0]["opened"], 1024)
+        self.assertEqual(observed[1], dict(opened=1100, exhausted=False, limits=[4096, 4096]))
+        self.assertEqual(resource.getrlimit(resource.RLIMIT_NOFILE), before)
+
+    def test_both_actual_builds_use_scoped_profile(self):
+        source = (ROOT / "scripts/prepare_hosted_android_ci.py").read_text().split("def execute(", 1)[1]
+        self.assertIn('H.run("android-acquisition-build", gradle_sandbox(gradle(True), "acquire"), 900', source)
+        self.assertIn('H.run("android-offline-build", gradle_sandbox(gradle(False), "compile"), 900', source)
 
 
 if __name__ == "__main__":
