@@ -82,7 +82,46 @@ source requests and do not prove core delivery or native Android/iOS operation.
 
 The [Android hosted workflow](../../.github/workflows/hosted-android.yml) now passes
 the debug APK build and strict offline rebuild; the installed-app emulator trial
-has not yet passed. The
+has not yet passed.
+
+### Current result
+
+[Trial 31](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38432510721)
+at `79090a88` passes both builds but stops before installation. The first link
+query returns complete stdout, empty stderr and exit zero; its JSON is malformed
+at position 5,435. Separating the streams rules out stderr contamination in this
+command, not every possible producer defect. Qdisc/route checks and the app UI
+are not reached. All 45 original artifact members and fifteen step logs are
+audited; artifact SHA256 is
+`404df873966001646625b5134974116f002375db58eaf31a10a3f4a671ee2e4a`.
+Process drain, private-state cleanup, KVM restoration and unchanged host network
+namespace all pass.
+
+Primary [AOSP GRE formatter source](https://android.googlesource.com/platform/external/iproute2/+/refs/tags/android-16.0.0_r1/ip/link_gre.c#510)
+contains an unconditional plain-text write inside detailed JSON output.
+The [link inventory code](https://android.googlesource.com/platform/external/iproute2/+/refs/tags/android-16.0.0_r1/ip/ipaddress.c#1244)
+invokes those detailed printers for down devices too. This is a concrete source
+defect, but not proof of which path produced trial 31's malformed output.
+
+The current candidate keeps the complete basic inventory and obtains full details
+through two fixed queries: loopback and interfaces whose kernel-reported type
+is dummy. Every
+candidate sink must match the inventory's identity and all overlapping fields.
+Both the inventory and detail sets must remain unchanged across the route/qdisc
+checks. Other interfaces must still be administratively down; unknown metadata,
+unsafe qdiscs and routes remain rejected. No malformed JSON is repaired or
+ignored. The original ten-second observation deadline, stream bounds, observer
+guards and cleanup remain in force.
+
+Schema-seven diagnostics distinguish a failed parser from a failed metadata
+join and bind the last query to its actual poll, including a deadline before
+the next poll's first query. The new boundary schema records ten fixed reads;
+historical schemas retain their original meaning. All 177 inert Android checks
+pass. They do not replace the next actual emulator trial or prove installation.
+
+### Earlier attempts and corrections
+
+The
 [first attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38242345261)
 stopped during input preparation because two nested process alarms conflicted.
 The correction keeps the total and per-step deadlines without nesting alarms.

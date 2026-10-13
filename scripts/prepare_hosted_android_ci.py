@@ -558,22 +558,22 @@ def no_guest_egress_routes(raw):
     return guest_route_observation(raw)["outcome"] == "admitted"
 
 
-def guest_link_snapshot(raw):
-    """Private RTNL identities, not exported names or an interface-name whitelist."""
+def guest_link_rows(raw, *, minimum=1):
+    """Bounded RTNL objects; sink authority is checked separately below."""
     require(len(raw) <= 65536, "GUEST_LINK_BOUND")
     rows = json.loads(raw.decode("ascii"), object_pairs_hook=H.unique)
-    require(type(rows) is list and 1 <= len(rows) <= 64, "GUEST_LINK_METADATA")
+    require(type(rows) is list and minimum <= len(rows) <= 64, "GUEST_LINK_METADATA")
     allowed = set(("ifindex ifname flags mtu qdisc operstate linkmode group txqlen link_type address broadcast "
         "promiscuity allmulti min_mtu max_mtu num_tx_queues num_rx_queues gso_max_size gso_max_segs "
         "tso_max_size tso_max_segs gro_max_size gso_ipv4_max_size gro_ipv4_max_size "
         "inet6_addr_gen_mode linkinfo").split())
-    result, indexes = {}, set()
+    names, indexes = set(), set()
     for row in rows:
         require(type(row) is dict and set(row) <= allowed, "GUEST_LINK_METADATA")
         index, name, flags = row.get("ifindex"), row.get("ifname"), row.get("flags")
         require(type(index) is int and 0 < index < 2**31 and index not in indexes
             and type(name) is str and re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", name)
-            and name not in result and type(flags) is list and len(flags) <= 32
+            and name not in names and type(flags) is list and len(flags) <= 32
             and all(type(x) is str and re.fullmatch(r"[A-Z_-]{1,24}", x) for x in flags)
             and len(flags) == len(set(flags)), "GUEST_LINK_METADATA")
         require(row.get("operstate") in ("UNKNOWN", "DOWN", "UP", "DORMANT", "LOWERLAYERDOWN", "TESTING", "NOTPRESENT")
@@ -581,6 +581,15 @@ def guest_link_snapshot(raw):
         info = row.get("linkinfo", {})
         require(type(info) is dict and set(info) <= {"info_kind", "info_data"}
             and type(info.get("info_kind", "")) is str, "GUEST_LINK_METADATA")
+        names.add(name)
+        indexes.add(index)
+    return rows
+
+
+def guest_link_identities(rows):
+    result = {}
+    for row in rows:
+        name, flags, info = row["ifname"], row["flags"], row.get("linkinfo", {})
         kind = info.get("info_kind", "")
         loopback = name == "lo" and row["link_type"] == "loopback" and "LOOPBACK" in flags and not info
         dummy = (kind == "dummy" and row["link_type"] == "ether" and info.get("info_data", {}) == {}
@@ -594,12 +603,41 @@ def guest_link_snapshot(raw):
                 and row.get("promiscuity", 0) == 0 and row.get("allmulti", 0) == 0
                 and set(flags) <= {"UP", "LOWER_UP", "LOOPBACK", "BROADCAST", "MULTICAST", "NOARP", "NO-CARRIER"},
                 "GUEST_LINK_METADATA")
-        indexes.add(index)
         # All observed metadata must stay stable across the route/qdisc reads;
         # no stats query is used, so no traffic counters need to be discarded.
         result[name] = dict(identity=row, sink=sink)
     require("lo" in result and result["lo"]["sink"] == "loopback", "GUEST_LINK_METADATA")
     return result
+
+
+def guest_link_snapshot(raw):
+    """Historical full dump; no change to its metadata or sink admission."""
+    return guest_link_identities(guest_link_rows(raw))
+
+
+def guest_link_join(basic, loopback, dummy):
+    """Only full, matching fixed-query details can attest a kernel sink."""
+    require(len(loopback) == 1 and loopback[0]["ifname"] == "lo", "GUEST_LINK_JOIN")
+    require(all(row.get("linkinfo", {}).get("info_kind") == "dummy" for row in dummy), "GUEST_LINK_JOIN")
+    inventory = {(row["ifindex"], row["ifname"]): row for row in basic}
+    details = {}
+    for row in (*loopback, *dummy):
+        key = (row["ifindex"], row["ifname"])
+        require(key in inventory and key not in details, "GUEST_LINK_JOIN")
+        # Every basic field must still occur with exactly the same JSON value
+        # and type. Do not silently discard fields or equate true with 1.
+        require(set(inventory[key]) <= set(row) and all(
+            json.dumps(value, sort_keys=True) == json.dumps(row[field], sort_keys=True)
+            for field, value in inventory[key].items()), "GUEST_LINK_JOIN")
+        details[key] = row
+    # Basic JSON must never supply its own asserted kind. Down non-sinks stay
+    # in the inventory, and all their metadata participates in the pair check.
+    require(all("linkinfo" not in row for row in basic), "GUEST_LINK_JOIN")
+    joined = [details.get(key, row) for key, row in inventory.items()]
+    value = guest_link_identities(joined)
+    require(value["lo"]["sink"] == "loopback"
+        and all(value[row["ifname"]]["sink"] == "dummy" for row in dummy), "GUEST_LINK_JOIN")
+    return value
 
 
 def guest_qdisc_snapshot(raw, links):
@@ -794,6 +832,12 @@ class GuestNetworkIsolation(GuestNetworkDiagnostic):
     def link_snapshot(self, raw):
         return guest_link_snapshot(raw)
 
+    def read_links(self, read, side):
+        return self.link_snapshot(read("link_" + side, "ip", "-details", "-json", "link", "show"))
+
+    def link_observations_equal(self, before, after):
+        return before == after
+
     def observation_complete(self, adb_command, deadline, boundary):
         return boundary
 
@@ -830,7 +874,7 @@ class GuestNetworkIsolation(GuestNetworkDiagnostic):
                 self.families, self.family = self.unobserved(), None
                 self.typed = dict(status="unknown", ipv4=None, ipv6=None)
                 try:
-                    links = self.link_snapshot(read("link_before", "ip", "-details", "-json", "link", "show"))
+                    links = self.read_links(read, "before")
                     qdiscs = guest_qdisc_snapshot(read("qdisc_before", "tc", "qdisc", "show"), links)
                     routes = {}
                     for name, flag in self.FAMILIES:
@@ -839,8 +883,8 @@ class GuestNetworkIsolation(GuestNetworkDiagnostic):
                         self.families[name] = guest_route_observation(routes[name])
                     self.family = None
                     after_qdiscs = guest_qdisc_snapshot(read("qdisc_after", "tc", "qdisc", "show"), links)
-                    after_links = self.link_snapshot(read("link_after", "ip", "-details", "-json", "link", "show"))
-                    require(links == after_links, "GUEST_LINK_CHANGED")
+                    after_links = self.read_links(read, "after")
+                    require(self.link_observations_equal(links, after_links), "GUEST_LINK_CHANGED")
                     require(qdiscs == after_qdiscs, "GUEST_QDISC_CHANGED")
                     self.typed = dict(status="verified", ipv4=guest_typed_routes(routes["ipv4"], 4, links),
                         ipv6=guest_typed_routes(routes["ipv6"], 6, links))
@@ -995,6 +1039,9 @@ class GuestNetworkObserver(GuestNetworkIsolation):
         return ("shell", "/system/xbin/su", "0", *fixed)
 
     def link_snapshot(self, raw):
+        return self.decode_links(raw, guest_link_snapshot)
+
+    def decode_links(self, raw, parser):
         # Diagnostic projection only. AOSP android-16.0.0_r1 ipaddress.c and
         # lib/json_print.c emit an array of link objects; merged command output
         # need not be valid JSON. Do not strip prefixes or relax the parser.
@@ -1005,7 +1052,7 @@ class GuestNetworkObserver(GuestNetworkIsolation):
         self.link_error = None
         self.link_decode_poll = self.polls
         try:
-            value = guest_link_snapshot(raw)
+            value = parser(raw)
         except BaseException as error:
             self.link_error = error
             reason = self.error_category(error)
@@ -1077,6 +1124,103 @@ class GuestNetworkObserverCapture(GuestNetworkObserver):
         current = (self.streams_poll == self.polls and self.streams_query == self.last_query["name"]
             and (self.streams["status"] != "failed" or self.streams_error is error))
         return dict(result, schema=6, query_streams=dict(self.streams) if current else self.unobserved_streams())
+
+
+class GuestNetworkSinkObserver(GuestNetworkObserverCapture):
+    """All links remain observed; only fixed sink details run kind formatters.
+
+    AOSP android-16.0.0_r1 external/iproute2/ip/ipaddress.c calls kind print_opt
+    only for -details and filters `type` before printing. link_gre.c's ERSPAN
+    formatter has an unconditional fprintf inside JSON; iplink_dummy.c has no
+    print_opt. This is a source-backed failure candidate, not attribution of
+    the SDK trial's unseen malformed bytes to a particular link/plugin.
+    Primary source: https://android.googlesource.com/platform/external/iproute2/+/refs/tags/android-16.0.0_r1/ip/
+    """
+    NETWORK_READS = {
+        "link_before": ("/system/bin/ip", "-json", "link", "show"),
+        "loopback_before": ("/system/bin/ip", "-details", "-json", "link", "show", "dev", "lo"),
+        "dummy_before": ("/system/bin/ip", "-details", "-json", "link", "show", "type", "dummy"),
+        "qdisc_before": ("/system/bin/tc", "qdisc", "show"),
+        "ipv4": ("/system/bin/ip", "-4", "route", "show", "table", "all"),
+        "ipv6": ("/system/bin/ip", "-6", "route", "show", "table", "all"),
+        "qdisc_after": ("/system/bin/tc", "qdisc", "show"),
+        "link_after": ("/system/bin/ip", "-json", "link", "show"),
+        "loopback_after": ("/system/bin/ip", "-details", "-json", "link", "show", "dev", "lo"),
+        "dummy_after": ("/system/bin/ip", "-details", "-json", "link", "show", "type", "dummy"),
+    }
+    QUERIES = frozenset(NETWORK_READS)
+    LINK_QUERIES = frozenset(name for name in NETWORK_READS if name.startswith(("link_", "loopback_", "dummy_")))
+
+    def __init__(self):
+        super().__init__()
+        self.decode_query = None
+        self.join_poll = self.join_error = None
+        self.join_observation = dict(status="unobserved", side=None)
+        self.link_observations = {}
+
+    def query_arguments(self, query, args):
+        self.link_decode = self.unobserved_link_decode()
+        self.link_error = self.decode_query = None
+        self.join_observation = dict(status="unobserved", side=None)
+        self.join_error = None
+        return super().query_arguments(query, args)
+
+    def read_links(self, read, side):
+        if side == "before":
+            # read() can exhaust the original deadline before constructing the
+            # first query of this poll. Do not label an earlier poll's read as
+            # the current last_query when that happens.
+            self.last_query = dict(name=None, outcome="unobserved")
+            self.query_error = None
+        parsed = []
+        for kind in ("link", "loopback", "dummy"):
+            query = kind + "_" + side
+            fixed = self.NETWORK_READS[query]
+            raw = read(query, fixed[0].rsplit("/", 1)[1], *fixed[1:])
+            self.decode_query = query
+            parsed.append(self.decode_links(raw, lambda data: guest_link_rows(data, minimum=0 if kind == "dummy" else 1)))
+        self.join_poll, self.join_error = self.polls, None
+        self.join_observation = dict(status="started", side=side)
+        try:
+            joined = guest_link_join(*parsed)
+        except BaseException as error:
+            self.join_error = error
+            self.join_observation["status"] = "failed"
+            raise
+        self.join_observation["status"] = "verified"
+        self.link_observations[side] = parsed
+        return joined
+
+    def link_observations_equal(self, before, after):
+        # Preserve the complete basic/detail projections too: two different
+        # observations must not collapse to the same merged sink identity.
+        return before == after and json.dumps(self.link_observations["before"], sort_keys=True) == json.dumps(
+            self.link_observations["after"], sort_keys=True)
+
+    def error_category(self, error):
+        if type(error) is ValueError and str(error) == "GUEST_LINK_JOIN":
+            return "link_join"
+        return super().error_category(error)
+
+    def observation_complete(self, adb_command, deadline, boundary):
+        result = super().observation_complete(adb_command, deadline, boundary)
+        result["schema"] = 4
+        result["observer"]["fixed_network_read_queries"] = 10
+        result["observer"]["link_observation"] = "all-basic-and-fixed-sink-details"
+        return result
+
+    def diagnostic_value(self, value, error):
+        result = super().diagnostic_value(value, error)
+        current_decode = (self.link_decode_poll == self.polls and self.decode_query in self.LINK_QUERIES
+            and self.decode_query == self.last_query["name"]
+            and (self.link_decode["status"] != "failed" or self.link_error is error))
+        result.update(schema=7, link_decode_query=self.decode_query if current_decode else None,
+            link_decode=dict(self.link_decode) if current_decode else self.unobserved_link_decode(),
+            link_join=dict(self.join_observation) if self.join_poll == self.polls
+                and self.last_query["name"] in ("dummy_before", "dummy_after")
+                and (self.join_observation["status"] != "failed" or self.join_error is error)
+                else dict(status="unobserved", side=None))
+        return result
 
 
 def package_uid_probe(adb_command):
@@ -1502,7 +1646,7 @@ def inside(*, avd_only=False):
     # material remain under /state, never among uploaded public evidence.
     children, logs = [], []
     diagnostic = EmulatorDiagnostic()
-    network = GuestNetworkObserverCapture()
+    network = GuestNetworkSinkObserver()
     prior = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
     def interrupted(_s, _f):
         raise H.Interrupted("EMULATOR_INTERRUPTED")
@@ -1597,7 +1741,7 @@ def inside(*, avd_only=False):
         # Only the existing literal network reads use structured stdout.
         # Guards, install, app driver and every other command remain unchanged.
         separated = any(tuple(args) == ("shell", "/system/xbin/su", "0", *fixed)
-            for fixed in GuestNetworkObserver.NETWORK_READS.values())
+            for fixed in network.NETWORK_READS.values())
         return command("adb", [adb, "-s", SERIAL, *args], seconds, separate_streams=separated)
     complete = False
     try:

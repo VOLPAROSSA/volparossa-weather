@@ -1481,7 +1481,7 @@ class EmulatorDiagnostics(unittest.TestCase):
                 def popen(argv, **kwargs):
                     calls.append(argv)
                     structured = any(argv == [str(M.ANDROID / "platform-tools/adb"), "-s", M.SERIAL,
-                        "shell", "/system/xbin/su", "0", *fixed] for fixed in M.GuestNetworkObserver.NETWORK_READS.values())
+                        "shell", "/system/xbin/su", "0", *fixed] for fixed in M.GuestNetworkSinkObserver.NETWORK_READS.values())
                     if "stdout" in kwargs and kwargs["stdout"] == subprocess.PIPE:
                         self.assertEqual(kwargs["stderr"], subprocess.PIPE if structured else subprocess.STDOUT)
                     if argv[0].endswith("/avdmanager"):
@@ -1513,7 +1513,9 @@ class EmulatorDiagnostics(unittest.TestCase):
                         outputs = {("getprop", "sys.boot_completed"): b"1", ("getprop", "ro.build.version.sdk"): b"36",
                             ("getprop", "ro.product.cpu.abi"): b"x86_64", ("svc", "wifi", "disable"): b"",
                             ("svc", "data", "disable"): b"",
-                            ("ip", "-details", "-json", "link", "show"): GuestNetworkIsolationTests.links(),
+                            ("ip", "-json", "link", "show"): GuestNetworkSinkObserverTests.projections()[0],
+                            ("ip", "-details", "-json", "link", "show", "dev", "lo"): GuestNetworkSinkObserverTests.projections()[1],
+                            ("ip", "-details", "-json", "link", "show", "type", "dummy"): GuestNetworkSinkObserverTests.projections()[2],
                             ("tc", "qdisc", "show"): GuestNetworkIsolationTests.QDISC +
                                 (b"" if accepted else b"qdisc clsact ffff: dev sink-private parent ffff:fff1\n"),
                             ("ip", "-4", "route", "show", "table", "all"): GuestNetworkIsolationTests.V4,
@@ -1530,12 +1532,13 @@ class EmulatorDiagnostics(unittest.TestCase):
                         # observer prefix for this inert child-output fixture.
                         if args[1:3] == ["/system/xbin/su", "0"] and args[3] in ("/system/bin/ip", "/system/bin/tc"):
                             args = ["shell", args[3].rsplit("/", 1)[1], *args[4:]]
-                        if tuple(args[1:]) == ("ip", "-details", "-json", "link", "show"):
+                        if tuple(args[1:]) == ("ip", "-json", "link", "show"):
                             link_reads[0] += 1
-                            if accepted and link_reads[0] == 1:
-                                rows = json.loads(GuestNetworkIsolationTests.links())
-                                rows[1]["linkinfo"] = {}  # An ordinary active interface is not yet safe.
-                                outputs[tuple(args[1:])] = json.dumps(rows).encode()
+                        if (tuple(args[1:]) == ("ip", "-details", "-json", "link", "show", "type", "dummy")
+                                and accepted and link_reads[0] == 1):
+                            # Active basic device without kernel dummy attestation
+                            # is not yet safe. Only the next full pair settles.
+                            outputs[tuple(args[1:])] = b"[]"
                         if query_fails and tuple(args[1:]) == ("tc", "qdisc", "show"):
                             code = "print('Permission denied: private-canary');raise SystemExit(9)"
                         else:
@@ -1588,9 +1591,9 @@ class EmulatorDiagnostics(unittest.TestCase):
                 def drain(owned):
                     try:
                         self.assertEqual(owned, children)
-                        self.assertEqual(len(owned), (34 if package_uid == b"10000" else 32 if package_uid == b"0" else 31)
+                        self.assertEqual(len(owned), (40 if package_uid == b"10000" else 38 if package_uid == b"0" else 37)
                             if reaches_install else 12 if guard_fails == "before"
-                            else 26 if guard_fails == "after" else 17 if streams else 18)
+                            else 32 if guard_fails == "after" else 17 if streams else 20)
                         self.assertEqual((proof / "guest-network-diagnostic.json").exists(), not reaches_install and not failed_write)
                         self.assertEqual(json.loads((proof / "emulator-diagnostic.json").read_text())["phase"],
                             ("app_driver" if package_uid == b"10000" else "package_identity" if package_uid == b"0"
@@ -1608,7 +1611,7 @@ class EmulatorDiagnostics(unittest.TestCase):
                         if streams and not reaches_install:
                             raw = (proof / "guest-network-diagnostic.json").read_bytes()
                             value = json.loads(raw)
-                            self.assertEqual(value["schema"], 6)
+                            self.assertEqual(value["schema"], 7)
                             self.assertEqual(value["last_query"], dict(name="link_before",
                                 outcome="returned" if streams == "malformed" else "command_failed"))
                             stream = value["query_streams"]
@@ -1665,7 +1668,7 @@ class EmulatorDiagnostics(unittest.TestCase):
                 self.assertEqual((proof / "emulator-boundary.json").exists(), reaches_install)
                 if reaches_install:
                     boundary = json.loads((proof / "emulator-boundary.json").read_text())
-                    self.assertEqual(boundary["schema"], 3)
+                    self.assertEqual(boundary["schema"], 4)
                     self.assertTrue(boundary["guest_no_usable_egress"])
                     self.assertEqual(boundary["package_uid_probe"]["verified"], package_uid == b"10000")
                     self.assertFalse(boundary["package_uid_probe"]["app_pid_observed"])
@@ -2405,7 +2408,7 @@ class GuestNetworkObserverTests(unittest.TestCase):
         tree = ast.parse((ROOT / "scripts/prepare_hosted_android_ci.py").read_text())
         inside = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "inside")
         code = ast.unparse(inside)
-        self.assertIn("network = GuestNetworkObserverCapture()", code)
+        self.assertIn("network = GuestNetworkSinkObserver()", code)
         self.assertLess(code.index("network.enforce"), code.index("adb_command('install'"))
         self.assertLess(code.index("adb_command('install'"), code.index("package_uid_probe(adb_command)"))
         self.assertLess(code.index("package_uid_probe(adb_command)"), code.index("adb_command('reverse'"))
@@ -2467,6 +2470,309 @@ class GuestNetworkObserverTests(unittest.TestCase):
             self.assertLessEqual(len(raw), 2048)
             for secret in (b"sink-private", b"10.0.2.2", b"/system", b"u:r:", b"private-stderr"):
                 self.assertNotIn(secret, raw)
+
+
+class GuestNetworkSinkObserverTests(unittest.TestCase):
+    """Inert RTNL projections, never guest/native tools or network changes."""
+    READS = (
+        ("link_before", ("/system/bin/ip", "-json", "link", "show")),
+        ("loopback_before", ("/system/bin/ip", "-details", "-json", "link", "show", "dev", "lo")),
+        ("dummy_before", ("/system/bin/ip", "-details", "-json", "link", "show", "type", "dummy")),
+        ("qdisc_before", ("/system/bin/tc", "qdisc", "show")),
+        ("ipv4", ("/system/bin/ip", "-4", "route", "show", "table", "all")),
+        ("ipv6", ("/system/bin/ip", "-6", "route", "show", "table", "all")),
+        ("qdisc_after", ("/system/bin/tc", "qdisc", "show")),
+        ("link_after", ("/system/bin/ip", "-json", "link", "show")),
+        ("loopback_after", ("/system/bin/ip", "-details", "-json", "link", "show", "dev", "lo")),
+        ("dummy_after", ("/system/bin/ip", "-details", "-json", "link", "show", "type", "dummy")),
+    )
+
+    @staticmethod
+    def projections():
+        detail = json.loads(GuestNetworkIsolationTests.links())
+        basic = [{k: v for k, v in row.items() if k != "linkinfo"} for row in detail]
+        for row in detail:
+            row.update(promiscuity=0, allmulti=0, linkmode="DEFAULT")
+        return tuple(json.dumps(rows).encode() for rows in (basic, detail[:1], detail[1:]))
+
+    def run_gate(self, proof, *, overrides=None, advances=None, diagnostic=None, calls=None, stop=1000):
+        observer = diagnostic or M.GuestNetworkSinkObserver()
+        basic, lo, dummy = self.projections()
+        fixtures = GuestNetworkIsolationTests
+        values = (basic, lo, dummy, fixtures.QDISC, fixtures.V4, fixtures.V6, fixtures.QDISC, basic, lo, dummy)
+        calls, now, read_index, guards = [] if calls is None else calls, [100.0], [0], {}
+        overrides, advances = overrides or {}, advances or {}
+        def adb(*args, **kwargs):
+            calls.append((args, kwargs))
+            if args[:2] == ("shell", "svc"):
+                return b""
+            self.assertGreater(kwargs["seconds"], 0)
+            self.assertLessEqual(kwargs["seconds"], min(110.0, stop) - now[0])
+            structured = args[1:4] in (("/system/xbin/su", "0", "/system/bin/ip"),
+                ("/system/xbin/su", "0", "/system/bin/tc"))
+            if structured:
+                index = read_index[0]
+                name, expected = self.READS[index]
+                self.assertEqual(args, ("shell", "/system/xbin/su", "0", *expected))
+                key, value = ("query", name), values[index]
+                read_index[0] += 1
+            else:
+                matches = [(name, value) for name, (argv, value) in GuestNetworkObserverTests.GUARDS.items()
+                    if args == ("shell", *argv)]
+                self.assertEqual(len(matches), 1)
+                name, value = matches[0]
+                count = guards.get(name, 0)
+                self.assertLess(count, 2)
+                guards[name] = count + 1
+                key = ("before" if count == 0 else "after", name)
+            now[0] += advances.get(key, 0.01)
+            value = overrides.get(key, value)
+            if isinstance(value, BaseException):
+                if structured:
+                    observer.record_streams(b"", b"private-command-canary", {"stdout", "stderr"}, 9, value)
+                raise value
+            if structured:
+                observer.record_streams(value, b"private-stderr-canary", {"stdout", "stderr"}, 0)
+            return value
+        with patch.object(M, "PROOF", proof), patch.object(M.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(M.time, "sleep", side_effect=lambda _: now.__setitem__(0, 111.0)):
+            boundary = observer.enforce(adb, stop)
+        return boundary, calls
+
+    def failure(self, overrides, *, error=ValueError, pattern=None, advances=None):
+        with tempfile.TemporaryDirectory() as directory:
+            proof = Path(directory)
+            with self.assertRaises(error) as caught:
+                self.run_gate(proof, overrides=overrides, advances=advances)
+            if pattern:
+                self.assertEqual(str(caught.exception), pattern)
+            raw = (proof / "guest-network-diagnostic.json").read_bytes()
+            value = json.loads(raw)
+            self.assertEqual(value["schema"], 7)
+            self.assertFalse(value["gate_passed"] or value["cause_established"] or value["raw_text_exported"])
+            self.assertLessEqual(len(raw), 2048)
+            self.assertEqual((proof / "guest-network-diagnostic.json").stat().st_mode & 0o777, 0o600)
+            for secret in (b"sink-private", b"private-command-canary", b"private-stderr-canary", b"/system/"):
+                self.assertNotIn(secret, raw)
+            return value
+
+    def test_exact_ten_reads_paired_guards_and_truthful_new_boundary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            boundary, calls = self.run_gate(Path(directory))
+            expected_guards = [("shell", *argv) for argv, _ in GuestNetworkObserverTests.GUARDS.values()]
+            self.assertEqual([args for args, _ in calls], [
+                ("shell", "svc", "wifi", "disable"), ("shell", "svc", "data", "disable"),
+                *expected_guards, *[("shell", "/system/xbin/su", "0", *args) for _, args in self.READS], *expected_guards])
+            self.assertEqual(M.GuestNetworkSinkObserver.NETWORK_READS, dict(self.READS))
+            self.assertEqual(M.GuestNetworkSinkObserver.QUERIES, frozenset(dict(self.READS)))
+            self.assertEqual(boundary["schema"], 4)
+            self.assertEqual(boundary["observer"], dict(authority="disposable-userdebug-su",
+                existing_su_domain_permissive=True, pre_and_post_guards_verified=True,
+                global_selinux_enforcing=True, adb_shell_unprivileged=True,
+                fixed_network_read_queries=10, app_authority=False, hostile_kernel_proof=False,
+                link_observation="all-basic-and-fixed-sink-details"))
+            self.assertFalse(boundary["package_uid_probe"]["verified"])
+            self.assertEqual(boundary["route_counts"]["ipv6"], dict(loopback=1, dummy=3, rejected=0))
+            self.assertFalse(list(Path(directory).iterdir()))
+
+    def test_empty_dummy_set_only_with_no_unattested_up_device_or_dummy_routes(self):
+        basic, lo, _ = (json.loads(raw) for raw in self.projections())
+        # An ordinary down interface is still observed, not excluded by name.
+        down = dict(ifindex=7, ifname="down-private", flags=["BROADCAST"], link_type="ether",
+            operstate="DOWN", qdisc="fq_codel", mtu=1500)
+        overrides = {("query", "link_" + side): json.dumps([basic[0], down]).encode() for side in ("before", "after")}
+        overrides.update({("query", "dummy_" + side): b"[]" for side in ("before", "after")})
+        overrides.update({("query", "qdisc_" + side): b"qdisc noqueue 0: dev lo root\n" for side in ("before", "after")})
+        overrides.update({("query", "ipv4"): b"local 127.0.0.0/8 dev lo table local\n",
+            ("query", "ipv6"): b"local ::1 dev lo table local\n"})
+        with tempfile.TemporaryDirectory() as directory:
+            boundary, _ = self.run_gate(Path(directory), overrides=overrides)
+            self.assertEqual(boundary["route_counts"]["ipv4"]["dummy"], 0)
+        for row in (dict(down, flags=["UP"]), dict(down, operstate="UNKNOWN")):
+            changed = dict(overrides, **{})
+            changed[("query", "link_before")] = json.dumps([basic[0], row]).encode()
+            self.failure(changed, pattern="GUEST_LINK_ACTIVE")
+        for query in ("link_before", "loopback_before"):
+            self.failure({("query", query): b"[]"}, pattern="GUEST_LINK_METADATA")
+        self.failure({("query", "dummy_before"): b"[]"}, pattern="GUEST_LINK_ACTIVE")
+
+    def test_duplicate_missing_extra_identity_and_kind_details_fail_closed(self):
+        basic, lo, dummy = (json.loads(raw) for raw in self.projections())
+        cases = (("link_before", basic + basic[:1]), ("loopback_before", lo * 2),
+            ("dummy_before", dummy * 2), ("dummy_before", [dict(dummy[0], ifindex=77)]),
+            ("dummy_before", [dict(dummy[0], ifname="new-private")]),
+            ("dummy_before", [*dummy, dict(dummy[0], ifindex=77, ifname="new-private")]),
+            ("loopback_before", dummy), ("dummy_before", lo),
+            ("dummy_before", [dict(dummy[0], linkinfo={"info_kind": "bridge"})]),
+            ("link_before", basic[1:]), ("link_before", [basic[0], dict(basic[1], ifindex=1)]))
+        for query, rows in cases:
+            with self.subTest(query=query, rows=rows):
+                self.failure({("query", query): json.dumps(rows).encode()})
+
+    def test_every_overlapping_basic_field_requires_same_value_and_presence(self):
+        _, lo, dummy = (json.loads(raw) for raw in self.projections())
+        for query, rows in (("loopback_before", lo), ("dummy_before", dummy)):
+            for field, value in rows[0].items():
+                if field in ("linkinfo", "promiscuity", "allmulti", "linkmode"):
+                    continue
+                modified = dict(rows[0])
+                modified.pop(field)
+                with self.subTest(query=query, absent=field):
+                    self.failure({("query", query): json.dumps([modified]).encode()})
+            for change in ({"mtu": 1400}, {"mtu": True}, {"operstate": "DOWN"},
+                    {"flags": ["NOARP"]}, {"qdisc": "fq_codel"}, {"link_type": "other"}):
+                with self.subTest(query=query, change=change):
+                    value = self.failure({("query", query): json.dumps([dict(rows[0], **change)]).encode()})
+                    self.assertEqual(value["failure"], "link_join")
+                    self.assertEqual(value["link_join"], dict(status="failed", side="before"))
+                    self.assertEqual(value["last_query"], dict(name="dummy_before", outcome="returned"))
+                    # The last dummy parse succeeded; the aggregate join did
+                    # not. Do not call this a failed dummy parser/command.
+                    self.assertEqual(value["link_decode"]["status"], "verified")
+                    self.assertEqual(value["query_streams"]["status"], "complete")
+
+    def test_unknown_metadata_and_all_prior_sink_restrictions_remain_closed(self):
+        basic, lo, dummy = (json.loads(raw) for raw in self.projections())
+        for query, rows in (("link_before", basic), ("loopback_before", lo), ("dummy_before", dummy)):
+            for field in ("master", "link", "link_index", "link_netnsid", "xdp", "vfinfo_list", "private_unknown"):
+                changed = [dict(rows[0], **{field: 1}), *rows[1:]]
+                with self.subTest(query=query, field=field):
+                    value = self.failure({("query", query): json.dumps(changed).encode()}, pattern="GUEST_LINK_METADATA")
+                    self.assertEqual(value["last_query"]["name"], query)
+                    self.assertEqual(value["link_decode_query"], query)
+        for change in ({"promiscuity": 1}, {"allmulti": 1}, {"linkmode": "DORMANT"},
+                {"linkinfo": {"info_kind": "dummy", "info_data": {"private": True}}},
+                {"linkinfo": {"info_kind": "dummy", "info_slave_kind": "bridge"}}):
+            self.failure({("query", "dummy_before"): json.dumps([dict(dummy[0], **change)]).encode()})
+        # Neither an asserted basic kind nor an UP ordinary interface attests a sink.
+        self.failure({("query", "link_before"): json.dumps([basic[0], dummy[0]]).encode()}, pattern="GUEST_LINK_JOIN")
+        for flags in (["UP", "PROMISC", "NOARP"], ["UP", "LOOPBACK", "NOARP"]):
+            changed_basic, changed_dummy = dict(basic[1], flags=flags), dict(dummy[0], flags=flags)
+            self.failure({("query", "link_before"): json.dumps([basic[0], changed_basic]).encode(),
+                ("query", "dummy_before"): json.dumps([changed_dummy]).encode()})
+
+    def test_paired_complete_inventories_and_detail_sets_must_match(self):
+        basic, lo, dummy = (json.loads(raw) for raw in self.projections())
+        cases = (
+            {("query", "loopback_after"): json.dumps([dict(lo[0], max_mtu=65536)]).encode()},
+            {("query", "dummy_after"): json.dumps([dict(dummy[0], num_tx_queues=2)]).encode()},
+            {("query", "link_after"): json.dumps([dict(basic[0], allmulti=0), basic[1]]).encode()},
+            {("query", "link_after"): json.dumps([*basic, dict(ifindex=3, ifname="down-private",
+                flags=[], link_type="ether", operstate="DOWN", qdisc="noqueue")]).encode()},
+        )
+        for changed in cases:
+            with self.subTest(changed=changed):
+                value = self.failure(changed, pattern="GUEST_LINK_CHANGED")
+                self.assertEqual(value["failure"], "link_changed")
+        # A formerly attested, but down, dummy disappearing from the type set
+        # must not disappear silently behind a still-usable basic inventory.
+        basic[1].update(flags=["NOARP"], operstate="DOWN")
+        dummy[0].update(flags=["NOARP"], operstate="DOWN")
+        self.failure({("query", "link_" + side): json.dumps(basic).encode() for side in ("before", "after")} |
+            {("query", "dummy_before"): json.dumps(dummy).encode(), ("query", "dummy_after"): b"[]"},
+            pattern="GUEST_LINK_CHANGED")
+
+    def test_each_link_parser_and_command_failure_binds_exact_query_and_poll(self):
+        for query in M.GuestNetworkSinkObserver.LINK_QUERIES:
+            for raw in (b"[private-canary", b'[{"ifindex":1,"ifindex":2}]', b"x" * 65537, b"{}", b"\xff"):
+                with self.subTest(query=query, raw=raw[:10]):
+                    value = self.failure({("query", query): raw})
+                    self.assertEqual(value["last_query"], dict(name=query, outcome="returned"))
+                    self.assertEqual(value["link_decode_query"], query)
+                    self.assertEqual(value["link_decode"]["status"], "failed")
+                    self.assertEqual(value["query_streams"]["status"], "complete")
+                    self.assertEqual(value["link_join"], dict(status="unobserved", side=None))
+            error = subprocess.CalledProcessError(9, "private-command-canary")
+            value = self.failure({("query", query): error}, error=subprocess.CalledProcessError)
+            self.assertEqual(value["last_query"], dict(name=query, outcome="command_failed"))
+            self.assertIsNone(value["link_decode_query"])
+            self.assertEqual(value["link_decode"]["status"], "unobserved")
+            self.assertEqual(value["query_streams"]["exit_status"], 9)
+
+    def test_new_queries_cannot_change_executable_interface_filter_or_use_shell(self):
+        observer = M.GuestNetworkSinkObserver()
+        for query, args in (("dummy_before", ("ip", "-details", "-json", "link", "show")),
+                ("loopback_before", ("ip", "-details", "-json", "link", "show", "dev", "private")),
+                ("dummy_after", ("ip", "-details", "-json", "link", "show", "type", "gre")),
+                ("link_before", ("ip", "-json", "link", "show", "up")),
+                ("private", ("sh", "-c", "private"))):
+            with self.subTest(query=query), self.assertRaisesRegex(ValueError, "GUEST_OBSERVER_QUERY"):
+                observer.query_arguments(query, args)
+
+    def test_original_total_deadline_and_every_guard_still_apply(self):
+        for query in dict(self.READS):
+            value = self.failure({}, advances={("query", query): 10})
+            self.assertFalse(value["gate_passed"])
+        for phase in ("before", "after"):
+            for name in GuestNetworkObserverTests.GUARDS:
+                with self.subTest(phase=phase, name=name):
+                    value = self.failure({(phase, name): b"private-canary"}, pattern="GUEST_OBSERVER_REJECTED")
+                    self.assertEqual(value["observer"]["guard"], name)
+                    self.assertEqual(value["last_query"], dict(name=None, outcome="unobserved"))
+                    self.assertIsNone(value["link_decode_query"])
+                    self.assertEqual(value["query_streams"]["status"], "unobserved")
+
+    def test_later_poll_query_error_or_guard_never_reuses_decode_or_join(self):
+        observer = M.GuestNetworkSinkObserver()
+        observer.polls = 1
+        basic, lo, dummy = self.projections()
+        raws = iter((basic, lo, dummy))
+        def read(query, *args):
+            observer.last_query = dict(name=query, outcome="returned")
+            observer.query_arguments(query, args)
+            raw = next(raws)
+            observer.record_streams(raw, b"", {"stdout", "stderr"}, 0)
+            return raw
+        observer.read_links(read, "before")
+        self.assertEqual(observer.diagnostic_value({}, ValueError())["link_join"]["status"], "verified")
+        observer.polls = 2
+        stale = observer.diagnostic_value({}, ValueError())
+        self.assertIsNone(stale["link_decode_query"])
+        self.assertEqual(stale["link_join"]["status"], "unobserved")
+        self.assertEqual(stale["query_streams"]["status"], "unobserved")
+        observer.polls = 1
+        observer.last_query = dict(name=None, outcome="unobserved")
+        stale = observer.diagnostic_value({}, ValueError())
+        self.assertIsNone(stale["link_decode_query"])
+        self.assertEqual(stale["link_join"]["status"], "unobserved")
+
+    def test_new_poll_deadline_before_first_read_cannot_export_previous_query(self):
+        observer = M.GuestNetworkSinkObserver()
+        after_sleep, reads, ticks = [False], [], iter((109.9, 110.1))
+        raw = iter((*self.projections(), GuestNetworkIsolationTests.QDISC
+            + b"qdisc clsact ffff: dev sink-private parent ffff:fff1\n"))
+        def clock():
+            return next(ticks, 110.1) if after_sleep[0] else 100.0
+        def adb(*args, **kwargs):
+            if args[:2] == ("shell", "svc"):
+                return b""
+            for argv, value in GuestNetworkObserverTests.GUARDS.values():
+                if args == ("shell", *argv):
+                    return value
+            query, fixed = self.READS[len(reads)]
+            self.assertEqual(args, ("shell", "/system/xbin/su", "0", *fixed))
+            reads.append(query)
+            value = next(raw)
+            observer.record_streams(value, b"", {"stdout", "stderr"}, 0)
+            return value
+        with tempfile.TemporaryDirectory() as directory:
+            proof = Path(directory)
+            with patch.object(M, "PROOF", proof), patch.object(M.time, "monotonic", side_effect=clock), \
+                    patch.object(M.time, "sleep", side_effect=lambda _: after_sleep.__setitem__(0, True)), \
+                    self.assertRaisesRegex(ValueError, "GUEST_QDISC_UNSAFE"):
+                observer.enforce(adb, 1000)
+            value = json.loads((proof / "guest-network-diagnostic.json").read_bytes())
+        self.assertEqual(reads, ["link_before", "loopback_before", "dummy_before", "qdisc_before"])
+        self.assertEqual(value["schema"], 7)
+        self.assertEqual(value["polls"], 2)
+        self.assertEqual(value["snapshot"], "last_poll")
+        self.assertEqual(value["failure"], "qdisc_unsafe")  # Original rejection, not a new cause.
+        self.assertEqual(value["last_query"], dict(name=None, outcome="unobserved"))
+        self.assertEqual(value["query_streams"], observer.unobserved_streams())
+        self.assertEqual(value["link_decode"], observer.unobserved_link_decode())
+        self.assertIsNone(value["link_decode_query"])
+        self.assertEqual(value["link_join"], dict(status="unobserved", side=None))
+        self.assertFalse(value["gate_passed"] or value["cause_established"])
 
 
 class AvdPreflight(unittest.TestCase):
