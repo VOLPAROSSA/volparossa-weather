@@ -2093,7 +2093,7 @@ class GuestNetworkObserverTests(unittest.TestCase):
                         self.run_gate(Path(root), overrides={(phase, name): b"private-token"}, calls=calls)
                     raw = (Path(root) / "guest-network-diagnostic.json").read_bytes()
                     value = json.loads(raw)
-                    self.assertEqual(value["schema"], 4)
+                    self.assertEqual(value["schema"], 5)
                     self.assertEqual(value["stage"], "observer_" + phase)
                     self.assertEqual(value["observer"]["guard"], name)
                     self.assertEqual(value["observer"]["outcome"], "failed")
@@ -2157,6 +2157,162 @@ class GuestNetworkObserverTests(unittest.TestCase):
             self.assertLessEqual(len(raw), 2048)
             for secret in (b"sink-private", b"10.0.2.2", b"/system", b"u:r:"):
                 self.assertNotIn(secret, raw)
+
+    def test_link_decode_distinguishes_closed_json_failures_without_changing_exception(self):
+        cases = (
+            (b"", "empty", "expected_value", json.JSONDecodeError),
+            (b"private-prefix\n[]", "other", "expected_value", json.JSONDecodeError),
+            (b"[", "array_prefix", "expected_value", json.JSONDecodeError),
+            (b'{"private-key":', "object_prefix", "expected_value", json.JSONDecodeError),
+            (b'[] private-trailer', "array_prefix", "extra_data", json.JSONDecodeError),
+            (b'[{private-key}]', "array_prefix", "expected_key", json.JSONDecodeError),
+            (b'[{"private-key" 1}]', "array_prefix", "expected_colon", json.JSONDecodeError),
+            (b'[{"private-key":1 "private-second":2}]', "array_prefix", "expected_comma", json.JSONDecodeError),
+            (b'["private-unclosed', "array_prefix", "unterminated_string", json.JSONDecodeError),
+            (b'["private-\\q"]', "array_prefix", "invalid_escape", json.JSONDecodeError),
+            (b'["private-\x01"]', "array_prefix", "invalid_control", json.JSONDecodeError),
+            (b'[{"private-key":1,"private-key":2}]', "array_prefix", "link_json_duplicate", ValueError),
+            (b'\xffprivate', "other", "non_ascii", UnicodeDecodeError),
+            (b'[]', "array_prefix", "link_unknown", ValueError),
+        )
+        for raw, shape, reason, error_type in cases:
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as root, patch.object(M, "PROOF", Path(root)):
+                diagnostic = M.GuestNetworkObserver()
+                with self.assertRaises(error_type) as caught:
+                    diagnostic.link_snapshot(raw)
+                self.assertIs(diagnostic.link_error, caught.exception)
+                diagnostic.publish_failure(caught.exception)
+                encoded = (Path(root) / "guest-network-diagnostic.json").read_bytes()
+                value = json.loads(encoded)
+                self.assertEqual(value["schema"], 5)
+                self.assertEqual(value["link_decode"]["status"], "failed")
+                self.assertEqual(value["link_decode"]["shape"], shape)
+                self.assertEqual(value["link_decode"]["reason"], reason)
+                self.assertEqual(value["link_decode"]["bytes"], len(raw))
+                self.assertLessEqual(len(encoded), 2048)
+                self.assertNotIn(b"private-", encoded)
+                self.assertFalse(value["gate_passed"])
+                if isinstance(caught.exception, json.JSONDecodeError):
+                    self.assertEqual(value["failure"], "link_json_syntax")
+                    self.assertEqual(value["link_decode"]["position"], caught.exception.pos)
+                # A later error cannot inherit the failed parser observation.
+                diagnostic.publish_failure(ValueError("later-private"))
+                later = json.loads((Path(root) / "guest-network-diagnostic.json").read_bytes())
+                self.assertEqual(later["link_decode"], diagnostic.unobserved_link_decode())
+        # JSON recursion thresholds differ across supported Python versions;
+        # inject that exceptional parser result rather than stress host stacks.
+        error = RecursionError("private-parser-message")
+        diagnostic = M.GuestNetworkObserver()
+        with patch.object(M, "guest_link_snapshot", side_effect=error), self.assertRaises(RecursionError) as caught:
+            diagnostic.link_snapshot(b"[[[]]]")
+        self.assertIs(caught.exception, error)
+        self.assertEqual(diagnostic.link_decode["reason"], "link_json_depth")
+        for unrelated in (RecursionError("private"), json.JSONDecodeError("Expecting value", "private", 0),
+                ValueError("DUPLICATE_JSON_KEY")):
+            self.assertEqual(diagnostic.error_category(unrelated), "unknown")
+
+    def test_aosp_json_link_shape_and_all_existing_safety_predicates_are_unchanged(self):
+        # Source-derived example, not a captured emulator dump: AOSP16
+        # ipaddress.c print_linkinfo/print_af_spec + lib/json_print.c array.
+        rows = json.loads(GuestNetworkIsolationTests.links())
+        rows[0].update(linkmode="DEFAULT", group="default", txqlen=1000,
+            address="00:00:00:00:00:00", broadcast="00:00:00:00:00:00", promiscuity=0,
+            num_tx_queues=1, num_rx_queues=1, gso_max_size=65536, gso_max_segs=65535,
+            inet6_addr_gen_mode="eui64")
+        rows[1].update(linkinfo=dict(info_kind="dummy", info_data={}))
+        raw = json.dumps(rows, indent=2).encode()
+        observer = M.GuestNetworkObserver()
+        self.assertEqual(observer.link_snapshot(raw), M.guest_link_snapshot(raw))
+        self.assertEqual(observer.link_decode, dict(status="verified", bytes=len(raw),
+            shape="array_prefix", reason="none", position=None))
+        for delta in ({"master": "private"}, {"xdp": {}}, {"linkinfo": {"info_kind": "bridge"}},
+                {"qdisc": "clsact"}, {"unknown": "private"}):
+            changed = json.loads(raw); changed[1].update(delta)
+            data = json.dumps(changed).encode()
+            with self.assertRaises(ValueError) as original: M.guest_link_snapshot(data)
+            with self.assertRaises(ValueError) as observed: observer.link_snapshot(data)
+            self.assertEqual(type(original.exception), type(observed.exception))
+            self.assertEqual(str(original.exception), str(observed.exception))
+
+    def test_returned_network_query_records_parser_failure_not_command_failure(self):
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaises(json.JSONDecodeError):
+                self.run_gate(Path(root), overrides={("query", "link_before"): b"private-not-json"})
+            raw = (Path(root) / "guest-network-diagnostic.json").read_bytes()
+            value = json.loads(raw)
+            self.assertEqual(value["last_query"], dict(name="link_before", outcome="returned"))
+            self.assertEqual(value["observer"]["before"], "verified")
+            self.assertEqual(value["failure"], "link_json_syntax")
+            self.assertEqual(value["link_decode"]["reason"], "expected_value")
+            self.assertNotIn(b"private-not-json", raw)
+        diagnostic = M.GuestNetworkObserver()
+        with self.assertRaisesRegex(ValueError, "GUEST_LINK_BOUND"):
+            diagnostic.link_snapshot(b"[" * 65537)
+        self.assertEqual(diagnostic.link_decode["bytes"], 65537)
+        self.assertEqual(diagnostic.link_decode["reason"], "link_bound")
+
+    def retry_link_failure(self, proof, *, expire_before_arguments=False):
+        diagnostic, now, queries = M.GuestNetworkObserver(), [100.0], []
+        error = ValueError("CHILD_FAILED")
+        fixtures = GuestNetworkIsolationTests
+        def clock():
+            # The second poll has started, but read() has not yet constructed
+            # the next command. Its existing absolute deadline still applies.
+            return 110.0 if expire_before_arguments and diagnostic.polls >= 2 else now[0]
+        def adb(*args, **kwargs):
+            if args[:2] == ("shell", "svc"):
+                return b""
+            for argv, value in self.GUARDS.values():
+                if args == ("shell", *argv):
+                    return value
+            self.assertGreater(kwargs["seconds"], 0)
+            index = len(queries)
+            queries.append(args)
+            expected = self.READS[1 if index == 1 else 0][1]
+            self.assertEqual(args, ("shell", "/system/xbin/su", "0", *expected))
+            if index == 0:
+                return fixtures.links()
+            if index == 1:
+                self.assertEqual(diagnostic.link_decode["status"], "verified")
+                return fixtures.QDISC.replace(b"qdisc noqueue 0: dev sink-private", b"qdisc clsact 0: dev sink-private")
+            self.assertEqual(index, 2)
+            raise error
+        with patch.object(M, "PROOF", proof), patch.object(M.time, "monotonic", side_effect=clock), \
+                patch.object(M.time, "sleep", side_effect=lambda duration: now.__setitem__(0, now[0] + duration)):
+            with self.assertRaises(ValueError) as caught:
+                diagnostic.enforce(adb, 1000)
+        self.assertEqual(diagnostic.polls, 2)
+        self.assertFalse((proof / "emulator-boundary.json").exists())
+        value = json.loads((proof / "guest-network-diagnostic.json").read_bytes())
+        self.assertEqual(value["polls"], 2)
+        self.assertEqual(value["snapshot"], "last_poll")
+        self.assertEqual(value["link_decode"], diagnostic.unobserved_link_decode())
+        return value, queries, caught.exception, error
+
+    def test_retry_link_command_failure_does_not_export_previous_poll_decode(self):
+        with tempfile.TemporaryDirectory() as root:
+            value, queries, caught, error = self.retry_link_failure(Path(root))
+            self.assertIs(caught, error)
+            self.assertEqual(len(queries), 3)
+            self.assertEqual(value["last_query"], dict(name="link_before", outcome="command_failed"))
+
+    def test_retry_deadline_before_arguments_does_not_export_previous_poll_decode(self):
+        with tempfile.TemporaryDirectory() as root:
+            value, queries, caught, _ = self.retry_link_failure(Path(root), expire_before_arguments=True)
+            self.assertEqual(str(caught), "GUEST_QDISC_UNSAFE")
+            self.assertEqual(len(queries), 2)
+            self.assertEqual(value["failure"], "qdisc_unsafe")
+
+    def test_link_after_command_failure_does_not_export_link_before_decode(self):
+        with tempfile.TemporaryDirectory() as root:
+            diagnostic, error = M.GuestNetworkObserver(), ValueError("CHILD_FAILED")
+            with self.assertRaises(ValueError) as caught:
+                self.run_gate(Path(root), diagnostic=diagnostic, overrides={("query", "link_after"): error})
+            self.assertIs(caught.exception, error)
+            value = json.loads((Path(root) / "guest-network-diagnostic.json").read_bytes())
+            self.assertEqual(value["polls"], 1)
+            self.assertEqual(value["last_query"], dict(name="link_after", outcome="command_failed"))
+            self.assertEqual(value["link_decode"], diagnostic.unobserved_link_decode())
 
     def test_package_identity_is_fixed_nonprivileged_and_not_application_pid(self):
         for raw in (b"10000", b"19999\n", b"12345\r\n"):

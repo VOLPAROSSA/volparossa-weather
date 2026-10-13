@@ -791,6 +791,9 @@ class GuestNetworkIsolation(GuestNetworkDiagnostic):
     def query_arguments(self, query, args):
         return ("shell", *args)
 
+    def link_snapshot(self, raw):
+        return guest_link_snapshot(raw)
+
     def observation_complete(self, adb_command, deadline, boundary):
         return boundary
 
@@ -827,7 +830,7 @@ class GuestNetworkIsolation(GuestNetworkDiagnostic):
                 self.families, self.family = self.unobserved(), None
                 self.typed = dict(status="unknown", ipv4=None, ipv6=None)
                 try:
-                    links = guest_link_snapshot(read("link_before", "ip", "-details", "-json", "link", "show"))
+                    links = self.link_snapshot(read("link_before", "ip", "-details", "-json", "link", "show"))
                     qdiscs = guest_qdisc_snapshot(read("qdisc_before", "tc", "qdisc", "show"), links)
                     routes = {}
                     for name, flag in self.FAMILIES:
@@ -836,7 +839,7 @@ class GuestNetworkIsolation(GuestNetworkDiagnostic):
                         self.families[name] = guest_route_observation(routes[name])
                     self.family = None
                     after_qdiscs = guest_qdisc_snapshot(read("qdisc_after", "tc", "qdisc", "show"), links)
-                    after_links = guest_link_snapshot(read("link_after", "ip", "-details", "-json", "link", "show"))
+                    after_links = self.link_snapshot(read("link_after", "ip", "-details", "-json", "link", "show"))
                     require(links == after_links, "GUEST_LINK_CHANGED")
                     require(qdiscs == after_qdiscs, "GUEST_QDISC_CHANGED")
                     self.typed = dict(status="verified", ipv4=guest_typed_routes(routes["ipv4"], 4, links),
@@ -928,9 +931,22 @@ class GuestNetworkObserver(GuestNetworkIsolation):
         super().__init__()
         self.observer = dict(before="unobserved", after="unobserved", guard=None, outcome="unobserved")
         self.guard_error = None
+        self.link_decode = self.unobserved_link_decode()
+        self.link_error = None
+        self.link_decode_poll = None
 
     @staticmethod
-    def error_category(error):
+    def unobserved_link_decode():
+        return dict(status="unobserved", bytes=None, shape="unobserved", reason="none", position=None)
+
+    def error_category(self, error):
+        if self.link_decode_poll == self.polls and self.link_error is error:
+            if isinstance(error, json.JSONDecodeError):
+                return "link_json_syntax"
+            if isinstance(error, RecursionError):
+                return "link_json_depth"
+            if type(error) is ValueError and str(error) == "DUPLICATE_JSON_KEY":
+                return "link_json_duplicate"
         if type(error) is ValueError:
             category = {"GUEST_OBSERVER_REJECTED": "observer_rejected",
                 "GUEST_OBSERVER_BOUND": "observer_bound", "GUEST_OBSERVER_DEADLINE": "observer_deadline",
@@ -969,10 +985,44 @@ class GuestNetworkObserver(GuestNetworkIsolation):
     def query_arguments(self, query, args):
         # Only this literal six-query mapping can cross the fixture boundary.
         # No shell command string, caller-selected executable or fallback.
+        if query in ("link_before", "link_after"):
+            self.link_decode = self.unobserved_link_decode()
+            self.link_error = None
+            self.link_decode_poll = self.polls
         fixed = self.NETWORK_READS.get(query)
         require(fixed is not None and tuple(args) == (fixed[0].rsplit("/", 1)[1], *fixed[1:]),
             "GUEST_OBSERVER_QUERY")
         return ("shell", "/system/xbin/su", "0", *fixed)
+
+    def link_snapshot(self, raw):
+        # Diagnostic projection only. AOSP android-16.0.0_r1 ipaddress.c and
+        # lib/json_print.c emit an array of link objects; merged command output
+        # need not be valid JSON. Do not strip prefixes or relax the parser.
+        prefix = raw[:65536].lstrip(b" \t\r\n")[:1]
+        shape = "empty" if not prefix else "array_prefix" if prefix == b"[" else "object_prefix" if prefix == b"{" else "other"
+        self.link_decode = dict(status="started", bytes=min(len(raw), 65537), shape=shape,
+            reason="none", position=None)
+        self.link_error = None
+        self.link_decode_poll = self.polls
+        try:
+            value = guest_link_snapshot(raw)
+        except BaseException as error:
+            self.link_error = error
+            reason = self.error_category(error)
+            position = None
+            if isinstance(error, json.JSONDecodeError):
+                # CPython's fixed parser messages only, never doc/message text
+                # or a key/address/interface copied out of the command output.
+                reason = {"Expecting value": "expected_value", "Extra data": "extra_data",
+                    "Expecting property name enclosed in double quotes": "expected_key",
+                    "Expecting ',' delimiter": "expected_comma", "Expecting ':' delimiter": "expected_colon",
+                    "Unterminated string starting at": "unterminated_string",
+                    "Invalid \\escape": "invalid_escape", "Invalid control character at": "invalid_control"}.get(error.msg, "json_syntax")
+                position = error.pos if type(error.pos) is int and 0 <= error.pos <= 65536 else None
+            self.link_decode.update(status="failed", reason=reason, position=position)
+            raise  # Retain the original exception and existing owned cleanup.
+        self.link_decode["status"] = "verified"
+        return value
 
     def observation_complete(self, adb_command, deadline, boundary):
         self.check_observer(adb_command, deadline, "after")
@@ -988,7 +1038,12 @@ class GuestNetworkObserver(GuestNetworkIsolation):
         observer = dict(self.observer)
         if observer["outcome"] == "failed" and self.guard_error is not error:
             observer.update(guard=None, outcome="unobserved")
-        return dict(value, schema=4, observer=observer,
+        # A new poll can hit its deadline before query_arguments runs. Never
+        # attach a previous poll's parse to this last-poll receipt either.
+        decoded = (self.unobserved_link_decode() if self.link_decode_poll != self.polls
+            or (self.link_decode["status"] == "failed" and self.link_error is not error)
+            else dict(self.link_decode))
+        return dict(value, schema=5, observer=observer, link_decode=decoded,
             observer_authority="disposable-userdebug-existing-permissive-su")
 
 
