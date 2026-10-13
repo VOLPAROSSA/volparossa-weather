@@ -59,6 +59,24 @@ class Workflow(unittest.TestCase):
         self.assertNotIn("usermod", self.text)
         self.assertNotIn("sysctl", self.text)
 
+    def test_slow_package_acquisition_extends_only_bounded_disposable_setup(self):
+        install = self.text.split("      - name: Install declared tools only on this disposable hosted runner\n", 1)[1]
+        install = install.split("      - name: Prepare exact public inputs", 1)[0]
+        self.assertEqual(re.findall(r"(?m)^          timeout ([0-9]+)s sudo -n env DEBIAN_FRONTEND=noninteractive apt-get (.*)$", install),
+                         [("180", "update"), ("600", "install --yes --no-install-recommends \\")])
+        self.assertEqual(install.count("apt-get "), 2)
+        for guard in ('test "$GITHUB_ACTIONS" = true',
+                      'test "$RUNNER_ENVIRONMENT" = github-hosted',
+                      'test "$(id -u)" != 0', 'test -c /dev/kvm',
+                      'test "$(df --output=avail -B1 "$GITHUB_WORKSPACE" | tail -n1 | tr -d \' \')" -ge 25769803776'):
+            self.assertIn(guard, install)
+        self.assertEqual(re.findall(r"(?m)^    timeout-minutes: (.+)$", self.text), ["75"])
+        self.assertIn("permissions:\n  contents: read\n", self.text)
+        self.assertIn("runs-on: ubuntu-24.04", self.text)
+        self.assertNotIn("retry", install)
+        self.assertNotRegex(install, r"\b(?:while|until|sleep)\b")
+        self.assertNotIn("continue-on-error", self.text)
+
     def test_no_private_runtime_uploads(self):
         self.assertIn("            build/hosted-android-inputs/download-failure.json\n", self.text)
         self.assertEqual(self.text.count("            build/overmorrow-hosted-android-proof/emulator-diagnostic.json\n"), 1)
