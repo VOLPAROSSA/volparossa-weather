@@ -117,14 +117,22 @@ class ObserverFailure extends Error {
   }
 }
 
-export function adbFailure(error) {
-  // Node's own callback metadata only: never inspect/export its command,
-  // message, stdout, stderr, path or the VM service authentication URI.
+export function adbFailure(error, { args, stdout, stderr } = {}) {
+  // Classify Node's callback metadata; never export its command, message,
+  // stdout, stderr, path or the VM service authentication URI.
   const code = error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 'adb_output_bound'
     : Number.isInteger(error?.code) ? 'adb_exit'
     : ['SIGKILL', 'SIGTERM'].includes(error?.signal) ? 'adb_signal'
     : ['ENOENT', 'EACCES', 'EMFILE', 'ENFILE'].includes(error?.code) ? 'adb_spawn_failed' : 'adb_failed';
-  return new ObserverFailure(code, error?.code, error?.signal);
+  const failure = new ObserverFailure(code, error?.code, error?.signal);
+  // Android 16 toybox pidof returns 1 with no output when no process matches.
+  // ADB transport errors can also return 1: only this exact command and empty
+  // complete streams qualify. Keep the discriminator in memory, never output.
+  failure.pidAbsent = Array.isArray(args) && args.length === 3
+    && args[0] === 'shell' && args[1] === 'pidof' && args[2] === PACKAGE
+    && error?.code === 1 && error.signal === null && error.killed === false
+    && stdout === '' && stderr === '';
+  return failure;
 }
 
 export class ObserverDiagnostic {
@@ -156,7 +164,7 @@ export function recordDriverFailure(report, diagnostic, error) {
   }
 }
 
-export async function startInstalledApp({ adb, diagnostic, installed, ownApp }) {
+export async function startInstalledApp({ adb, waitFor, diagnostic, installed, ownApp }) {
   await diagnostic.at('package_check', async () => {
     assert.match(await adb(['shell', 'pm', 'path', PACKAGE]), /^package:\/data\/app\/[^\r\n]+\/base\.apk$/);
   });
@@ -164,10 +172,35 @@ export async function startInstalledApp({ adb, diagnostic, installed, ownApp }) 
   await diagnostic.at('force_stop', () => adb(['shell', 'am', 'force-stop', PACKAGE]));
   // Retain ownership before the existing launch command, including failure.
   ownApp();
-  await diagnostic.at('app_start', () => adb(['shell', 'am', 'start', '-W', '-n', COMPONENT]));
-  const pid = await diagnostic.at('pidof', () => adb(['shell', 'pidof', PACKAGE]));
-  await diagnostic.at('pid_validation', () => assert.match(pid, /^[1-9]\d{0,7}$/));
+  // AOSP android-16.0.0_r1 ActivityManagerShellCommand.runStartActivity uses
+  // startActivityAndWait only for -W. Dispatch the same activity; actual PID,
+  // read-only VM and mounted UI observations below establish readiness.
+  await diagnostic.at('app_start', () => adb(['shell', 'am', 'start', '-n', COMPONENT]));
+  diagnostic.subphase = diagnostic.waitingFor = 'pidof';
+  const pid = await waitFor(async () => {
+    let value;
+    try { value = await diagnostic.at('pidof', () => adb(['shell', 'pidof', PACKAGE])); }
+    catch (error) {
+      if (error instanceof ObserverFailure && error.pidAbsent === true
+          && error.observerCode === 'adb_exit' && error.exitStatus === 1 && error.signal === null) return null;
+      throw error;
+    }
+    await diagnostic.at('pid_validation', () => assert.match(value, /^[1-9]\d{0,7}$/));
+    return value;
+  });
+  diagnostic.waitingFor = null;
   return pid;
+}
+
+export async function resumeInstalledApp({ adb, waitFor, snapshot }) {
+  await adb(['shell', 'am', 'start', '-n', COMPONENT]);
+  // The caller retains the original VM and isolate; no new attach or process
+  // launch is substituted for the observed paused-to-resumed lifecycle.
+  return waitFor(async () => {
+    const value = await snapshot();
+    return value.current_lifecycle === 'resumed' && value.lifecycle.includes('paused')
+      && value.lifecycle.lastIndexOf('resumed') > value.lifecycle.lastIndexOf('paused') ? value : null;
+  });
 }
 
 class ReadOnlyVm {
@@ -211,7 +244,14 @@ class ReadOnlyVm {
 
 export async function waitForObservation(check, deadline, remaining, milliseconds = 15000) {
   const end = Math.min(deadline, Date.now() + milliseconds);
-  while (Date.now() < end) { remaining(); const value = await check(); if (value) return value; await pause(250); }
+  while (Date.now() < end) {
+    remaining();
+    const value = await check();
+    remaining();
+    if (Date.now() >= end) break; // An awaited result cannot extend its window.
+    if (value) return value;
+    await pause(250);
+  }
   throw new ObserverFailure('observation_deadline');
 }
 
@@ -288,7 +328,7 @@ async function main() {
     if (!cleanup) remaining();
     return new Promise((done, reject) => execFile(adbPath, ['-s', serial, ...args], {
       timeout: 8000, killSignal: 'SIGKILL', maxBuffer: 65536, encoding: 'utf8',
-    }, (error, stdout) => error ? reject(adbFailure(error)) : done(stdout.trim())));
+    }, (error, stdout, stderr) => error ? reject(adbFailure(error, { args, stdout, stderr })) : done(stdout.trim())));
   }
   async function control(path = '/state') {
     remaining(); assert.ok(['/state', '/phase/refresh', '/phase/short-lived'].includes(path));
@@ -347,7 +387,7 @@ async function main() {
     });
   }
   try {
-    const pid = await startInstalledApp({ adb, diagnostic,
+    const pid = await startInstalledApp({ adb, waitFor, diagnostic,
       installed() { report.scope.installed_android_app = true; }, ownApp() { appOwned = true; } });
     report.phase = 'read-only-observer';
     isolate = await observeVm({ adb, waitFor, pid, diagnostic,
@@ -374,12 +414,7 @@ async function main() {
     const before = await snapshot(); assert.equal(before.current_lifecycle, 'resumed');
     await adb(['shell', 'input', 'keyevent', 'KEYCODE_HOME']);
     await pause(6000); remaining();
-    await adb(['shell', 'am', 'start', '-W', '-n', COMPONENT]);
-    const resumed = await waitFor(async () => {
-      const value = await snapshot();
-      return value.current_lifecycle === 'resumed' && value.lifecycle.includes('paused')
-        && value.lifecycle.lastIndexOf('resumed') > value.lifecycle.lastIndexOf('paused') ? value : null;
-    });
+    const resumed = await resumeInstalledApp({ adb, waitFor, snapshot });
     assert.ok(resumed.labels.filter(label => label === 'Expired — refresh required; values are hidden').length === 2);
     assert.equal(resumed.tables.length, 0); assert.deepEqual((await control()).calls, { weather: 3, air_quality: 3 });
     report.checks.real_android_background_resume = true;

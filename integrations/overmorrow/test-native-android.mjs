@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { HEADERS, PACKAGE, COMPONENT, numberEqual, validateSnapshot, verifyTable, vmAddress,
-  adbFailure, ObserverDiagnostic, observeVm, waitForObservation, startInstalledApp,
+  adbFailure, ObserverDiagnostic, observeVm, waitForObservation, startInstalledApp, resumeInstalledApp,
   recordDriverFailure } from './native-android-driver.mjs';
 import { nativeFixtureState, API_PORT, CONTROL_PORT } from './native-android-fixture.mjs';
 
@@ -109,7 +109,7 @@ const PRIVATE_TEXT = 'private-token http://127.0.0.1:43212/private/ /private/own
 const VM_LINE = 'The Dart VM service is listening on http://127.0.0.1:34567/private-token/';
 const flush = () => new Promise(done => setImmediate(done));
 function observerFixture(options = {}) {
-  const diagnostic = new ObserverDiagnostic(), calls = [], owned = [];
+  const diagnostic = options.diagnostic ?? new ObserverDiagnostic(), calls = [], owned = [];
   let vm;
   class Socket extends EventTarget {
     readyState = WebSocket.CONNECTING;
@@ -137,7 +137,7 @@ function observerFixture(options = {}) {
     }
     close() { this.readyState = WebSocket.CLOSED; queueMicrotask(() => this.dispatchEvent(new Event('close'))); }
   }
-  const context = { pid: '1234', diagnostic, Socket,
+  const context = { pid: options.pid ?? '1234', diagnostic, Socket,
     async adb(args) {
       calls.push(args[0]);
       if (options.adb === args[0] && calls.filter(value => value === args[0]).length >= (options.adbAfter ?? 1)) {
@@ -271,12 +271,16 @@ function installedFixture(options = {}) {
     async run() {
       try {
         return await startInstalledApp({ diagnostic,
+          waitFor: check => waitForObservation(check, options.deadline ?? Date.now() + 180000,
+            options.remaining ?? (() => {})),
           async adb(args) {
             const operation = args[1] === 'pm' ? 'package_check' : args[1] === 'pidof' ? 'pidof'
               : args[2] === 'force-stop' ? 'force_stop' : 'app_start';
             calls.push({ operation, args, appOwned });
-            if (options.fail === operation) throw adbFailure({ code: 1, stdout: PRIVATE_TEXT, stderr: PRIVATE_TEXT });
+            if (options.fail === operation) throw adbFailure(options.error ?? { code: 1, stdout: PRIVATE_TEXT, stderr: PRIVATE_TEXT },
+              { args, stdout: options.stdout, stderr: options.stderr });
             if (operation === 'package_check') return options.package ?? 'package:/data/app/private/base.apk';
+            if (operation === 'pidof' && options.readPid) return options.readPid(args);
             return operation === 'pidof' ? (options.pid ?? '1234') : '';
           },
           installed() { report.scope.installed_android_app = true; }, ownApp() { appOwned = true; },
@@ -290,7 +294,7 @@ test('installed-app helper preserves exact command sequence, validation and clea
   assert.equal(await fixture.run(), '1234');
   assert.deepEqual(fixture.calls.map(row => row.args), [
     ['shell', 'pm', 'path', PACKAGE], ['shell', 'am', 'force-stop', PACKAGE],
-    ['shell', 'am', 'start', '-W', '-n', COMPONENT], ['shell', 'pidof', PACKAGE],
+    ['shell', 'am', 'start', '-n', COMPONENT], ['shell', 'pidof', PACKAGE],
   ]);
   assert.deepEqual(fixture.calls.map(row => row.appOwned), [false, false, true, true]);
   assert.equal(fixture.report.scope.installed_android_app, true);
@@ -320,6 +324,9 @@ test('package and PID outputs retain their original strict rejection without exp
     [{ package: PRIVATE_TEXT }, 'package_check', false, false],
     [{ pid: PRIVATE_TEXT }, 'pid_validation', true, true],
     [{ pid: '1234\n1235' }, 'pid_validation', true, true],
+    [{ pid: '1234 1234' }, 'pid_validation', true, true],
+    [{ pid: '0' }, 'pid_validation', true, true],
+    [{ pid: '123456789' }, 'pid_validation', true, true],
     [{ pid: '' }, 'pid_validation', true, true],
   ]) {
     const fixture = installedFixture(options); await assert.rejects(fixture.run());
@@ -366,4 +373,144 @@ test('interruption before the first observer query cannot inherit installed PID 
   assert.equal(fixture.report.failure_diagnostic.subphase, 'unobserved');
   assert.equal(fixture.report.failure_diagnostic.code, 'interrupted');
   assert.equal(fixture.report.passed, false);
+});
+
+function absentPid(args = ['shell', 'pidof', PACKAGE]) {
+  return adbFailure({ code: 1, signal: null, killed: false }, { args, stdout: '', stderr: '' });
+}
+test('only exact pidof exit 1 with complete empty streams and no kill is an in-memory absence', () => {
+  const diagnostic = new ObserverDiagnostic(), args = ['shell', 'pidof', PACKAGE];
+  const absence = absentPid(); assert.equal(absence.pidAbsent, true);
+  const receipt = diagnostic.failure(absence);
+  assert.equal(receipt.code, 'adb_exit'); assert.equal(receipt.adb_exit_status, 1);
+  assert.ok(!Object.hasOwn(receipt, 'pidAbsent'));
+  for (const [error, context] of [
+    [{ code: 1 }, { args, stdout: '', stderr: '' }],
+    [{ code: 1, signal: null }, { args, stdout: '', stderr: '' }],
+    [{ code: 1, signal: null, killed: true }, { args, stdout: '', stderr: '' }],
+    [{ code: 1, signal: 'SIGKILL', killed: false }, { args, stdout: '', stderr: '' }],
+    [{ code: 2, signal: null, killed: false }, { args, stdout: '', stderr: '' }],
+    [{ code: 1, signal: null, killed: false }, { args, stdout: '', stderr: PRIVATE_TEXT }],
+    [{ code: 1, signal: null, killed: false }, { args, stdout: '1234', stderr: '' }],
+    [{ code: 1, signal: null, killed: false }, { args, stdout: '', stderr: '\n' }],
+    [{ code: 1, signal: null, killed: false }, { args, stdout: '' }],
+    [{ code: 1, signal: null, killed: false }, { args: ['shell', 'pidof', 'other'], stdout: '', stderr: '' }],
+    [{ code: 1, signal: null, killed: false }, { args: [...args, '-s'], stdout: '', stderr: '' }],
+    [{ code: 1, signal: null, killed: false }, { args: ['shell', 'am', 'start'], stdout: '', stderr: '' }],
+  ]) {
+    const failure = adbFailure(error, context); assert.equal(failure.pidAbsent, false);
+    assert.ok(!JSON.stringify(diagnostic.failure(failure)).includes('private'));
+  }
+});
+test('one actual helper launch polls absent PID then continues into the unchanged read-only observer', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100 });
+  let reads = 0;
+  const fixture = installedFixture({ readPid(args) { if (++reads < 3) throw absentPid(args); return '1234'; } });
+  const result = fixture.run();
+  await flush(); assert.equal(reads, 1); assert.equal(fixture.owned(), true);
+  t.mock.timers.tick(250); await flush(); assert.equal(reads, 2);
+  t.mock.timers.tick(250); const pid = await result;
+  assert.equal(pid, '1234'); assert.equal(fixture.diagnostic.waitingFor, null);
+  assert.equal(fixture.calls.filter(row => row.operation === 'app_start').length, 1);
+  assert.equal(fixture.calls.filter(row => row.operation === 'force_stop').length, 1);
+  assert.ok(fixture.calls.filter(row => row.operation === 'pidof').every(row => row.appOwned));
+  const observer = observerFixture({ pid, diagnostic: fixture.diagnostic });
+  assert.equal(await observer.run(), 'isolates/12');
+  assert.deepEqual(observer.calls, ['logcat', 'forward', 'getVM', 'getIsolate']);
+  await observer.close(); assert.equal(fixture.report.passed, false);
+});
+test('PID polling does not hide transport errors, missing metadata, killed commands or forged absence', async () => {
+  const args = ['shell', 'pidof', PACKAGE];
+  const failures = [
+    adbFailure({ code: 1, signal: null, killed: false }, { args, stdout: '', stderr: PRIVATE_TEXT }),
+    adbFailure({ code: 1, signal: null, killed: false }, { args, stdout: '1234', stderr: '' }),
+    adbFailure({ code: 1 }), adbFailure({ code: 1, signal: null, killed: true }, { args, stdout: '', stderr: '' }),
+    adbFailure({ code: 2 }), adbFailure({ signal: 'SIGKILL' }),
+    adbFailure({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }),
+    { observerCode: 'adb_exit', exitStatus: 1, signal: null, pidAbsent: true },
+  ];
+  for (const failure of failures) {
+    const fixture = installedFixture({ readPid() { throw failure; } });
+    await assert.rejects(fixture.run(), error => error === failure);
+    assert.equal(fixture.calls.length, 4); assert.equal(fixture.owned(), true);
+    assert.equal(fixture.report.failure_diagnostic.subphase, 'pidof');
+    assert.equal(fixture.report.passed, false);
+  }
+});
+test('absent PID expires in the original 15s observation window without relaunch', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100 });
+  const fixture = installedFixture({ readPid(args) { throw absentPid(args); } });
+  const result = assert.rejects(fixture.run(), error => error.observerCode === 'observation_deadline');
+  await flush(); t.mock.timers.tick(15000); await result;
+  assert.equal(fixture.calls.length, 4); assert.equal(fixture.owned(), true);
+  assert.equal(fixture.report.failure_diagnostic.subphase, 'pidof');
+  assert.equal(fixture.report.failure_diagnostic.code, 'observation_deadline');
+});
+test('PID returned at or after observation/global deadline is rejected with ownership retained', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100 });
+  const Failure = adbFailure({}).constructor;
+  for (const [elapsed, global, code] of [[15000, 180000, 'observation_deadline'],
+    [15001, 180000, 'observation_deadline'], [1000, 1000, 'trial_deadline']]) {
+    let resolvePid;
+    const deadline = Date.now() + global;
+    const fixture = installedFixture({ deadline,
+      remaining() { if (Date.now() >= deadline) throw new Failure('trial_deadline'); },
+      readPid() { return new Promise(resolve => { resolvePid = resolve; }); } });
+    const result = assert.rejects(fixture.run(), error => error.observerCode === code);
+    await flush(); assert.equal(typeof resolvePid, 'function');
+    t.mock.timers.tick(elapsed); resolvePid('1234'); await result;
+    assert.equal(fixture.calls.length, 4); assert.equal(fixture.owned(), true);
+    assert.equal(fixture.report.passed, false);
+  }
+});
+test('interruptions before or during a PID query cannot become successful startup', async () => {
+  const Failure = adbFailure({}).constructor;
+  for (const before of [true, false]) {
+    let interrupted = before, resolvePid;
+    const error = new Failure('interrupted');
+    const fixture = installedFixture({ remaining() { if (interrupted) throw error; },
+      readPid() { return new Promise(resolve => { resolvePid = resolve; }); } });
+    const result = assert.rejects(fixture.run(), failure => failure === error);
+    await flush();
+    if (!before) { interrupted = true; resolvePid('1234'); }
+    await result;
+    assert.equal(fixture.calls.length, before ? 3 : 4); assert.equal(fixture.owned(), true);
+    assert.equal(fixture.report.failure_diagnostic.code, 'interrupted');
+    assert.equal(fixture.report.passed, false);
+  }
+});
+test('resume dispatch uses the original snapshot closure and requires actual paused then resumed state', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100 });
+  const calls = [], values = [snapshot(), { ...snapshot(), lifecycle: ['resumed', 'paused'], current_lifecycle: 'paused' },
+    { ...snapshot(), lifecycle: ['resumed', 'paused', 'resumed'] }];
+  let reads = 0;
+  const result = resumeInstalledApp({ async adb(args) { calls.push(args); },
+    waitFor: check => waitForObservation(check, Date.now() + 180000, () => {}),
+    async snapshot() { return values[reads++]; } });
+  await flush(); assert.equal(reads, 1);
+  t.mock.timers.tick(250); await flush(); assert.equal(reads, 2);
+  t.mock.timers.tick(250); assert.equal(await result, values[2]);
+  assert.deepEqual(calls, [['shell', 'am', 'start', '-n', COMPONENT]]);
+  const source = await readFile(new URL('./native-android-driver.mjs', import.meta.url), 'utf8');
+  assert.ok(source.includes('resumeInstalledApp({ adb, waitFor, snapshot })'));
+  assert.ok(source.includes('await vm.request(EXTENSION, { isolateId: isolate })'));
+  assert.ok(source.includes("assert.equal(resumed.tables.length, 0); assert.deepEqual((await control()).calls, { weather: 3, air_quality: 3 })"));
+  assert.ok(!source.includes("'start', '-W'"));
+});
+test('resume launch errors and missing or late lifecycle observations never become readiness', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100 });
+  const failure = adbFailure({ signal: 'SIGKILL' }); let reads = 0;
+  await assert.rejects(resumeInstalledApp({ async adb() { throw failure; },
+    async waitFor() { reads++; }, async snapshot() { reads++; } }), error => error === failure);
+  assert.equal(reads, 0);
+  for (const late of [false, true]) {
+    let calls = 0, resolveSnapshot;
+    const result = assert.rejects(resumeInstalledApp({ async adb() { calls++; },
+      waitFor: check => waitForObservation(check, Date.now() + 180000, () => {}),
+      async snapshot() { return late ? new Promise(resolve => { resolveSnapshot = resolve; }) : snapshot(); },
+    }), error => error.observerCode === 'observation_deadline');
+    await flush(); t.mock.timers.tick(15000);
+    if (late) resolveSnapshot({ ...snapshot(), lifecycle: ['paused', 'resumed'] });
+    await result; assert.equal(calls, 1);
+  }
 });
