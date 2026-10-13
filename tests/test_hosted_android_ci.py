@@ -1460,19 +1460,30 @@ class EmulatorDiagnostics(unittest.TestCase):
         # Reach the actual inside() network gate using only tiny Python children
         # and in-memory AVD config. Never create /state or execute a native tool.
         real_popen, real_open = subprocess.Popen, open
+        real_read = os.read
+        real_selector = M.selectors.DefaultSelector
         path_open, path_mkdir = Path.open, Path.mkdir
         original_drain, original_sleep = M.drain_children, M.time.sleep
-        for accepted, failed_write, query_fails, guard_fails, package_uid in (
-                (False, False, False, False, None), (False, True, False, False, None),
-                (True, False, False, False, None), (False, False, True, False, None),
-                (False, False, False, "before", None), (True, False, False, "after", None),
-                (True, False, False, False, b"0"), (True, False, False, False, b"10000")):
-            with self.subTest(accepted=accepted, failed_write=failed_write, query_fails=query_fails), tempfile.TemporaryDirectory() as directory:
+        for accepted, failed_write, query_fails, guard_fails, package_uid, streams in (
+                (False, False, False, False, None, None), (False, True, False, False, None, None),
+                (True, False, False, False, None, None), (False, False, True, False, None, None),
+                (False, False, False, "before", None, None), (True, False, False, "after", None, None),
+                (True, False, False, False, b"0", None), (True, False, False, False, b"10000", None),
+                (True, False, False, False, None, "contaminated"),
+                *((False, False, False, False, None, case) for case in
+                    ("stdout_overflow", "stderr_overflow", "combined_overflow", "nonzero", "incomplete",
+                        "spawn_interrupt", "selector_failure", "malformed"))):
+            with self.subTest(accepted=accepted, failed_write=failed_write, query_fails=query_fails, streams=streams), tempfile.TemporaryDirectory() as directory:
                 proof, children, calls = Path(directory), [], []
+                query_fds = set()
                 now, link_reads, shell_uid_reads = [100.0], [0], [0]
                 reaches_install = accepted and not guard_fails
                 def popen(argv, **kwargs):
                     calls.append(argv)
+                    structured = any(argv == [str(M.ANDROID / "platform-tools/adb"), "-s", M.SERIAL,
+                        "shell", "/system/xbin/su", "0", *fixed] for fixed in M.GuestNetworkObserver.NETWORK_READS.values())
+                    if "stdout" in kwargs and kwargs["stdout"] == subprocess.PIPE:
+                        self.assertEqual(kwargs["stderr"], subprocess.PIPE if structured else subprocess.STDOUT)
                     if argv[0].endswith("/avdmanager"):
                         code = "import sys;sys.stdin.read()"
                     elif "server" in argv or "native-android-fixture.mjs" in argv[1] or "-avd" in argv:
@@ -1529,9 +1540,39 @@ class EmulatorDiagnostics(unittest.TestCase):
                             code = "print('Permission denied: private-canary');raise SystemExit(9)"
                         else:
                             code = "import sys;sys.stdout.buffer.write(" + repr(outputs[tuple(args[1:])]) + ")"
+                        if structured and streams:
+                            if streams == "contaminated":
+                                code += ";sys.stderr.buffer.write(b'private-stderr-canary\\n')"
+                            elif streams == "stdout_overflow":
+                                code = "import sys,time;sys.stdout.buffer.write(b'x'*65537);sys.stdout.flush();time.sleep(30)"
+                            elif streams == "stderr_overflow":
+                                code = "import sys,time;sys.stderr.buffer.write(b'x'*65537);sys.stderr.flush();time.sleep(30)"
+                            elif streams == "combined_overflow":
+                                code = "import sys,time;sys.stdout.buffer.write(b'x'*32768);sys.stdout.flush();sys.stderr.buffer.write(b'y'*32769);sys.stderr.flush();time.sleep(30)"
+                            elif streams == "nonzero":
+                                code += ";sys.stderr.buffer.write(b'private-stderr-canary');raise SystemExit(9)"
+                            elif streams == "incomplete":
+                                code += ";sys.stdout.flush();import time;time.sleep(30)"
+                            elif streams == "malformed":
+                                code = "import sys;sys.stdout.write('[');sys.stderr.buffer.write(" + repr(GuestNetworkIsolationTests.links()) + ")"
                     child = real_popen([sys.executable, "-I", "-c", code], **kwargs)
                     children.append(child)
+                    if structured:
+                        query_fds.update((child.stdout.fileno(), child.stderr.fileno()))
+                        if streams == "spawn_interrupt":
+                            # Invoke only this helper's temporary signal
+                            # handler, never signal the host/test process.
+                            M.signal.getsignal(M.signal.SIGTERM)(M.signal.SIGTERM, None)
                     return child
+                def read(fd, size):
+                    raw = real_read(fd, size)
+                    if streams == "incomplete" and fd in query_fds:
+                        now[0] = 111.0  # Same original 10s budget, no real wait.
+                    return raw
+                def selector():
+                    if streams == "selector_failure" and query_fds:
+                        raise OSError("private-selector-error")
+                    return real_selector()
                 def private_open(path, *args, **kwargs):
                     self.assertIn(path, ("/state/adb.log", "/state/fixture.log", "/state/emulator.log"))
                     return real_open(proof / Path(path).name, *args, **kwargs)
@@ -1549,7 +1590,7 @@ class EmulatorDiagnostics(unittest.TestCase):
                         self.assertEqual(owned, children)
                         self.assertEqual(len(owned), (34 if package_uid == b"10000" else 32 if package_uid == b"0" else 31)
                             if reaches_install else 12 if guard_fails == "before"
-                            else 26 if guard_fails == "after" else 18)
+                            else 26 if guard_fails == "after" else 17 if streams else 18)
                         self.assertEqual((proof / "guest-network-diagnostic.json").exists(), not reaches_install and not failed_write)
                         self.assertEqual(json.loads((proof / "emulator-diagnostic.json").read_text())["phase"],
                             ("app_driver" if package_uid == b"10000" else "package_identity" if package_uid == b"0"
@@ -1564,6 +1605,38 @@ class EmulatorDiagnostics(unittest.TestCase):
                             self.assertEqual(json.loads(raw)["observer"]["guard"], "shell_uid")
                             self.assertEqual(json.loads(raw)["polls"], 0 if guard_fails == "before" else 2)
                             self.assertNotIn(b"private-guard-canary", raw)
+                        if streams and not reaches_install:
+                            raw = (proof / "guest-network-diagnostic.json").read_bytes()
+                            value = json.loads(raw)
+                            self.assertEqual(value["schema"], 6)
+                            self.assertEqual(value["last_query"], dict(name="link_before",
+                                outcome="returned" if streams == "malformed" else "command_failed"))
+                            stream = value["query_streams"]
+                            self.assertEqual(stream["status"], "complete" if streams == "malformed" else "failed")
+                            self.assertEqual(value["link_decode"]["status"], "failed" if streams == "malformed" else "unobserved")
+                            if streams.endswith("overflow"):
+                                self.assertEqual(value["failure"], "command_output_bound")
+                                self.assertGreater(stream["stdout_bytes"] + stream["stderr_bytes"], 65536)
+                            elif streams == "nonzero":
+                                self.assertEqual(stream["exit_status"], 9)
+                                self.assertTrue(stream["stdout_eof"] and stream["stderr_eof"])
+                                self.assertEqual(value["failure"], "command_exit")
+                            elif streams == "incomplete":
+                                self.assertEqual(value["failure"], "command_deadline")
+                                self.assertFalse(stream["stdout_eof"] and stream["stderr_eof"])
+                            elif streams == "spawn_interrupt":
+                                self.assertEqual(value["failure"], "interrupted")
+                                self.assertFalse(stream["stdout_eof"] or stream["stderr_eof"])
+                            elif streams == "selector_failure":
+                                self.assertEqual(value["failure"], "command_io")
+                                self.assertFalse(stream["stdout_eof"] or stream["stderr_eof"])
+                            else:
+                                self.assertEqual(value["failure"], "link_json_syntax")
+                                self.assertEqual(stream["stdout_bytes"], 1)
+                                self.assertEqual(stream["stderr_bytes"], len(GuestNetworkIsolationTests.links()))
+                                self.assertTrue(stream["stdout_eof"] and stream["stderr_eof"])
+                            self.assertLessEqual(len(raw), 2048)
+                            self.assertNotIn(b"private-stderr-canary", raw)
                     finally:
                         drained = original_drain(owned)
                     return drained
@@ -1575,15 +1648,20 @@ class EmulatorDiagnostics(unittest.TestCase):
                 with self.guarded_inside(proof, popen), patch.object(M, "open", side_effect=private_open, create=True), \
                         patch.object(Path, "open", config_open), patch.object(Path, "mkdir", mkdir), \
                         patch.object(M.H, "write", side_effect=write), patch.object(M, "drain_children", side_effect=drain), \
+                        patch.object(M.os, "read", side_effect=read), \
+                        patch.object(M.selectors, "DefaultSelector", side_effect=selector), \
                         patch.object(M.time, "monotonic", side_effect=lambda: now[0]), \
                         patch.object(M.time, "sleep", side_effect=sleep), \
-                        self.assertRaises(subprocess.CalledProcessError
-                            if (reaches_install and package_uid != b"0") or query_fails else ValueError):
+                        self.assertRaises(M.H.Interrupted if streams == "spawn_interrupt" else OSError
+                            if streams == "selector_failure" else subprocess.CalledProcessError
+                            if (reaches_install and package_uid != b"0") or query_fails or streams == "nonzero" else ValueError):
                     M.inside()
                 cleanup = json.loads((proof / "emulator-cleanup.json").read_text())
                 self.assertTrue(cleanup["direct_children_reaped"] and cleanup["private_avd_removed"])
                 self.assertFalse(cleanup["trial_returned"])
                 self.assertTrue(all(c.poll() is not None and c.stdin.closed for c in children))
+                self.assertTrue(all(c.stderr is None or c.stderr.closed for c in children))
+                self.assertTrue(all(c.stdout is None or c.stdout.closed for c in children))
                 self.assertEqual((proof / "emulator-boundary.json").exists(), reaches_install)
                 if reaches_install:
                     boundary = json.loads((proof / "emulator-boundary.json").read_text())
@@ -2327,10 +2405,68 @@ class GuestNetworkObserverTests(unittest.TestCase):
         tree = ast.parse((ROOT / "scripts/prepare_hosted_android_ci.py").read_text())
         inside = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "inside")
         code = ast.unparse(inside)
-        self.assertLess(code.index("GuestNetworkObserver().enforce"), code.index("adb_command('install'"))
+        self.assertIn("network = GuestNetworkObserverCapture()", code)
+        self.assertLess(code.index("network.enforce"), code.index("adb_command('install'"))
         self.assertLess(code.index("adb_command('install'"), code.index("package_uid_probe(adb_command)"))
         self.assertLess(code.index("package_uid_probe(adb_command)"), code.index("adb_command('reverse'"))
         self.assertLess(code.index("package_uid_probe(adb_command)"), code.index("command('app_driver'"))
+
+    def test_structured_stream_receipt_is_bound_to_current_query_poll_and_error(self):
+        observer = M.GuestNetworkObserverCapture()
+        observer.polls = 1
+        def query(name):
+            fixed = self.READS[0 if name == "link_before" else 1][1]
+            observer.last_query = dict(name=name, outcome="returned")
+            observer.query_arguments(name, (fixed[0].rsplit("/", 1)[1], *fixed[1:]))
+        query("link_before")
+        observer.record_streams(b"[]", b"private-stderr", {"stdout", "stderr"}, 0)
+        value = observer.diagnostic_value({}, ValueError("GUEST_LINK_METADATA"))
+        self.assertEqual(value["schema"], 6)
+        self.assertEqual(value["query_streams"], dict(status="complete", stdout_bytes=2, stderr_bytes=14,
+            stdout_eof=True, stderr_eof=True, exit_status=0))
+        query("qdisc_before")
+        self.assertEqual(observer.diagnostic_value({}, ValueError())["query_streams"], observer.unobserved_streams())
+        error = subprocess.CalledProcessError(9, "private-command")
+        observer.record_streams(b"", b"private-stderr", {"stdout", "stderr"}, 9, error)
+        self.assertEqual(observer.diagnostic_value({}, error)["query_streams"]["status"], "failed")
+        self.assertEqual(observer.diagnostic_value({}, ValueError())["query_streams"], observer.unobserved_streams())
+        observer.polls = 2  # A deadline can fire before the next argv is built.
+        self.assertEqual(observer.diagnostic_value({}, error)["query_streams"], observer.unobserved_streams())
+        observer.polls = 1
+        observer.last_query = dict(name=None, outcome="unobserved")  # Later guard, not this read.
+        self.assertEqual(observer.diagnostic_value({}, error)["query_streams"], observer.unobserved_streams())
+
+    def test_real_inert_merged_stderr_reproduces_structured_input_failure(self):
+        expected = GuestNetworkIsolationTests.links()
+        code = ("import sys;sys.stdout.buffer.write(" + repr(expected) + ");sys.stdout.flush();"
+            "sys.stderr.buffer.write(b'private-stderr-canary\\n');sys.stderr.flush()")
+        argv = [sys.executable, "-I", "-c", code]
+        merged = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=True, timeout=5)
+        with self.assertRaises(json.JSONDecodeError):
+            M.guest_link_snapshot(merged.stdout)
+        separate = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=5)
+        self.assertEqual(separate.stdout, expected)
+        self.assertEqual(separate.stderr, b"private-stderr-canary\n")
+        self.assertEqual(M.guest_link_snapshot(separate.stdout), M.guest_link_snapshot(expected))
+
+    def test_structured_stream_maximum_closed_receipt_stays_within_original_cap(self):
+        observer = M.GuestNetworkObserverCapture()
+        route = b"default via 10.0.2.2 dev sink-private\n"
+        routes = route * (65536 // len(route))
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(ValueError, "GUEST_NETWORK_STILL_ACTIVE") as caught:
+                self.run_gate(Path(root), diagnostic=observer,
+                    overrides={("query", "ipv4"): routes, ("query", "ipv6"): routes})
+            observer.record_streams(b"x" * 65535, b"y", {"stdout", "stderr"}, 0)
+            with patch.object(M, "PROOF", Path(root)):
+                observer.publish_failure(caught.exception)
+            raw = (Path(root) / "guest-network-diagnostic.json").read_bytes()
+            value = json.loads(raw)
+            self.assertEqual(value["schema"], 6)
+            self.assertEqual(value["query_streams"]["stdout_bytes"], 65535)
+            self.assertLessEqual(len(raw), 2048)
+            for secret in (b"sink-private", b"10.0.2.2", b"/system", b"u:r:", b"private-stderr"):
+                self.assertNotIn(secret, raw)
 
 
 class AvdPreflight(unittest.TestCase):

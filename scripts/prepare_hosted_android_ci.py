@@ -498,7 +498,7 @@ def drain_children(children):
         except (OSError, subprocess.SubprocessError):
             drained = False
         finally:
-            for pipe in (child.stdin, child.stdout):
+            for pipe in (child.stdin, child.stdout, child.stderr):
                 if pipe is not None:
                     try:
                         pipe.close()
@@ -1047,6 +1047,38 @@ class GuestNetworkObserver(GuestNetworkIsolation):
             observer_authority="disposable-userdebug-existing-permissive-su")
 
 
+class GuestNetworkObserverCapture(GuestNetworkObserver):
+    """Separate structured stdout from private stderr for fixed reads only."""
+    def __init__(self):
+        super().__init__()
+        self.streams = self.unobserved_streams()
+        self.streams_poll = self.streams_query = self.streams_error = None
+
+    @staticmethod
+    def unobserved_streams():
+        return dict(status="unobserved", stdout_bytes=None, stderr_bytes=None,
+            stdout_eof=False, stderr_eof=False, exit_status=None)
+
+    def query_arguments(self, query, args):
+        result = super().query_arguments(query, args)
+        self.streams = self.unobserved_streams()
+        self.streams_poll, self.streams_query, self.streams_error = self.polls, query, None
+        return result
+
+    def record_streams(self, stdout, stderr, eof, exit_status, error=None):
+        self.streams = dict(status="complete" if error is None else "failed",
+            stdout_bytes=min(len(stdout), 65537), stderr_bytes=min(len(stderr), 65537),
+            stdout_eof="stdout" in eof, stderr_eof="stderr" in eof,
+            exit_status=exit_status if type(exit_status) is int and -128 <= exit_status <= 255 else None)
+        self.streams_error = error
+
+    def diagnostic_value(self, value, error):
+        result = super().diagnostic_value(value, error)
+        current = (self.streams_poll == self.polls and self.streams_query == self.last_query["name"]
+            and (self.streams["status"] != "failed" or self.streams_error is error))
+        return dict(result, schema=6, query_streams=dict(self.streams) if current else self.unobserved_streams())
+
+
 def package_uid_probe(adb_command):
     # AOSP run-as rejects system/non-debuggable packages and drops real,
     # effective and saved IDs to the package UID before exec. This observes
@@ -1470,6 +1502,7 @@ def inside(*, avd_only=False):
     # material remain under /state, never among uploaded public evidence.
     children, logs = [], []
     diagnostic = EmulatorDiagnostic()
+    network = GuestNetworkObserverCapture()
     prior = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
     def interrupted(_s, _f):
         raise H.Interrupted("EMULATOR_INTERRUPTED")
@@ -1491,39 +1524,53 @@ def inside(*, avd_only=False):
         if pending:
             raise H.Interrupted("NATIVE_OWNED_SPAWN_INTERRUPTED")
         return child
-    def command(category, argv, seconds=20, data=None):
+    def command(category, argv, seconds=20, data=None, *, separate_streams=False):
+        raw, stderr_raw, eof = bytearray(), bytearray(), set()
         try:
             require(time.monotonic() < stop, "EMULATOR_DEADLINE")
             end = min(stop, time.monotonic() + seconds)
-            child = spawn(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            child = spawn(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE if separate_streams else subprocess.STDOUT)
         except BaseException as error:
+            if separate_streams:
+                network.record_streams(raw, stderr_raw, eof, None, error)
             diagnostic.failed_command(error, category)
             raise
-        raw = bytearray()
         output_complete = False
         try:
             if data:
                 child.stdin.write(data)
             child.stdin.close()
             with selectors.DefaultSelector() as selector:
-                selector.register(child.stdout, selectors.EVENT_READ)
+                selector.register(child.stdout, selectors.EVENT_READ, "stdout")
+                if separate_streams:
+                    selector.register(child.stderr, selectors.EVENT_READ, "stderr")
                 while selector.get_map():
                     require(time.monotonic() < end, "EMULATOR_COMMAND_DEADLINE")
                     for key, _ in selector.select(0.1):
                         part = os.read(key.fd, 4096)
                         if not part:
                             selector.unregister(key.fileobj)
-                        raw.extend(part)
-                        require(len(raw) <= 65536, "EMULATOR_COMMAND_OUTPUT")
+                            eof.add(key.data)
+                        (stderr_raw if key.data == "stderr" else raw).extend(part)
+                        # Preserve the original TOTAL output bound, not 64KiB
+                        # per stream. Neither stream is persisted or exported.
+                        require(len(raw) + len(stderr_raw) <= 65536, "EMULATOR_COMMAND_OUTPUT")
             output_complete = True
             child.wait(timeout=max(0.1, end - time.monotonic()))
             if child.returncode:
                 raise subprocess.CalledProcessError(child.returncode, "owned-native-command")
+            if separate_streams:
+                require(time.monotonic() < end, "EMULATOR_COMMAND_DEADLINE")
+                network.record_streams(raw, stderr_raw, eof, child.returncode)
             return bytes(raw)
         except BaseException as error:
             # Capture the observed status before TERM/KILL cleanup can change
             # it. Only this propagated error may consume its command context.
-            diagnostic.failed_command(error, category, child.returncode, raw, output_complete)
+            if separate_streams:
+                network.record_streams(raw, stderr_raw, eof, child.returncode, error)
+            diagnostic.failed_command(error, category, child.returncode,
+                b"" if separate_streams else raw, False if separate_streams else output_complete)
             raise
         finally:
             if child.poll() is None:
@@ -1533,7 +1580,11 @@ def inside(*, avd_only=False):
                 except subprocess.TimeoutExpired:
                     child.kill()
                     child.wait(timeout=3)
-            child.stdout.close()
+            try:
+                child.stdout.close()
+            finally:
+                if separate_streams:
+                    child.stderr.close()
     def start(name, argv):
         try:
             log = open("/state/" + name + ".log", "xb")
@@ -1543,7 +1594,11 @@ def inside(*, avd_only=False):
             diagnostic.failed_command(error, "adb_server" if name == "adb" else name)
             raise
     def adb_command(*args, seconds=20):
-        return command("adb", [adb, "-s", SERIAL, *args], seconds)
+        # Only the existing literal network reads use structured stdout.
+        # Guards, install, app driver and every other command remain unchanged.
+        separated = any(tuple(args) == ("shell", "/system/xbin/su", "0", *fixed)
+            for fixed in GuestNetworkObserver.NETWORK_READS.values())
+        return command("adb", [adb, "-s", SERIAL, *args], seconds, separate_streams=separated)
     complete = False
     try:
         diagnostic.phase = "avd_create"
@@ -1584,7 +1639,7 @@ def inside(*, avd_only=False):
         # observer-only fixture control port. Disable guest uplinks, then admit
         # only the explicit adbd reverse to the public fixture API.
         diagnostic.phase = "guest_network"
-        boundary = GuestNetworkObserver().enforce(adb_command, stop)
+        boundary = network.enforce(adb_command, stop)
         H.write(PROOF / "emulator-boundary.json", (json.dumps(boundary) + "\n").encode())
         diagnostic.phase = "apk_install"
         adb_command("install", "--no-streaming", str(APK), seconds=45)
