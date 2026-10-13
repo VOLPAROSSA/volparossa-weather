@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { HEADERS, PACKAGE, COMPONENT, numberEqual, validateSnapshot, verifyTable, vmAddress,
   adbFailure, ObserverDiagnostic, observeVm, waitForObservation, startInstalledApp, resumeInstalledApp,
-  recordDriverFailure } from './native-android-driver.mjs';
+  recordDriverFailure, readFixtureControl, exerciseNativeProducts } from './native-android-driver.mjs';
 import { nativeFixtureState, API_PORT, CONTROL_PORT } from './native-android-fixture.mjs';
 
 const NOW = '2026-10-12T02:00:00.000Z';
@@ -499,18 +499,23 @@ test('package and PID outputs retain their original strict rejection without exp
     for (const value of ['private', '1234', '1235', 'http://']) assert.ok(!JSON.stringify(fixture.report).includes(value));
   }
 });
-test('failure publisher binds installed and observer phases but later control failures cannot inherit their context', async () => {
+test('failure publisher keeps historical startup schema and resets product-phase observations', async () => {
   const diagnostic = new ObserverDiagnostic();
   await diagnostic.at('get_isolate', () => {});
   for (const phase of ['installed-app', 'read-only-observer']) {
     const report = { phase, passed: false };
     recordDriverFailure(report, diagnostic, adbFailure({ signal: 'SIGKILL' }));
+    assert.equal(report.failure_diagnostic.schema, 1);
     assert.equal(report.failure_diagnostic.code, 'adb_signal'); assert.equal(report.failure_diagnostic.adb_signal, 'SIGKILL');
   }
   for (const phase of ['initial-native-products', 'actual-refresh', 'background-resume-expiry']) {
     const report = { phase, passed: false };
+    diagnostic.beginProducts(1);
     recordDriverFailure(report, diagnostic, new TypeError(PRIVATE_TEXT));
-    assert.deepEqual(report, { phase, passed: false, failure: 'NATIVE_TRIAL_PHASE_FAILED' });
+    assert.equal(report.failure, 'NATIVE_TRIAL_PHASE_FAILED');
+    assert.equal(report.failure_diagnostic.schema, 2);
+    assert.equal(report.failure_diagnostic.subphase, 'unobserved');
+    assert.equal(report.failure_diagnostic.progress.weather_requests_observed, null);
   }
 });
 test('interruption before the first observer query cannot inherit installed PID validation', async () => {
@@ -657,7 +662,8 @@ test('resume dispatch uses the original snapshot closure and requires actual pau
   const source = await readFile(new URL('./native-android-driver.mjs', import.meta.url), 'utf8');
   assert.ok(source.includes('resumeInstalledApp({ adb, waitFor, snapshot })'));
   assert.ok(source.includes('await vm.request(EXTENSION, { isolateId: isolate })'));
-  assert.ok(source.includes("assert.equal(resumed.tables.length, 0); assert.deepEqual((await control()).calls, { weather: 3, air_quality: 3 })"));
+  assert.ok(source.includes('assert.equal(resumed.tables.length, 0)'));
+  assert.ok(source.includes('assert.deepEqual(final.calls, { weather: 3, air_quality: 3 })'));
   assert.ok(!source.includes("'start', '-W'"));
 });
 test('resume launch errors and missing or late lifecycle observations never become readiness', async t => {
@@ -676,4 +682,238 @@ test('resume launch errors and missing or late lifecycle observations never beco
     if (late) resolveSnapshot({ ...snapshot(), lifecycle: ['paused', 'resumed'] });
     await result; assert.equal(calls, 1);
   }
+});
+
+function controlResponse(value, status = 200) {
+  const bytes = Buffer.from(typeof value === 'string' ? value : JSON.stringify(value));
+  return { status, body: (async function* () { yield bytes; })() };
+}
+async function rejectedProducts(fixture) {
+  let failure;
+  try { await fixture.run(); } catch (error) { failure = error; }
+  assert.ok(failure, 'synthetic product operation must fail');
+  recordDriverFailure(fixture.report, fixture.diagnostic, failure);
+  assert.equal(fixture.report.passed, false);
+  const receipt = fixture.report.failure_diagnostic;
+  assert.equal(receipt.schema, 2); assert.equal(receipt.acceptance_evidence, false);
+  assert.equal(receipt.cause_established, false); assert.equal(receipt.raw_output_retained, false);
+  assert.ok(Buffer.byteLength(JSON.stringify(receipt)) <= 2048);
+  for (const raw of ['private-token', 'http://', '/private/', 'Expires ', 'Temperature']) {
+    assert.ok(!JSON.stringify(receipt).includes(raw));
+  }
+  return { failure, receipt };
+}
+function productMetadata(product) {
+  const source = product.forecast.source;
+  return [`Model ${source.model}; run ${source.model_run_at}`, `Acquired ${source.acquired_at}`,
+    `Expires ${product.freshness.expires_at}`, source.attribution, `${source.license}: ${source.license_url}`, source.changes];
+}
+// No server, app or native process. Run the actual driver sequence against the
+// synthetic fixture's products to test its predicates, not to claim UI proof.
+function productExerciseFixture(options = {}) {
+  const { state } = fixture(), diagnostic = new ObserverDiagnostic(), events = [];
+  const report = { phase: 'read-only-observer', passed: false, checks: {}, observations: {},
+    scope: { mounted_widget_tables: false, real_adb_interaction: false } };
+  let resumed = false;
+  const context = { report, diagnostic, remaining() { options.remaining?.(report, diagnostic); },
+    async control(path) {
+      return readFixtureControl({ remaining: context.remaining, diagnostic, async fetchControl(url, init) {
+        const path = new URL(url).pathname;
+        events.push(['control', path, init.method]);
+        assert.equal(new URL(url).origin, 'http://127.0.0.1:43211');
+        assert.equal(init.redirect, 'error'); assert.ok(init.signal instanceof AbortSignal);
+        if (path !== '/state') state.setPhase(path.slice('/phase/'.length));
+        const value = state.status();
+        options.control?.(value, path, report, diagnostic);
+        return controlResponse(value);
+      } }, path);
+    },
+    async waitFor(check, milliseconds = 15000) {
+      events.push(['wait', milliseconds]);
+      options.beforeWait?.(report, diagnostic);
+      const result = await check();
+      if (!result) throw new (adbFailure({}).constructor)('observation_deadline');
+      return result;
+    },
+    async snapshot() {
+      events.push(['snapshot', report.phase, diagnostic.subphase]);
+      const products = state.status().products;
+      const value = snapshot(resumed ? [] : [table(products.weather), table(products.air_quality, true)]);
+      value.labels = resumed ? Array(2).fill('Expired — refresh required; values are hidden')
+        : Object.values(products).flatMap(productMetadata);
+      value.refresh = [{ x: 540, y: 1800, enabled: true, visible: true, hit_testable: true }];
+      if (resumed) value.lifecycle = ['resumed', 'inactive', 'hidden', 'paused', 'resumed'];
+      options.snapshot?.(value, report, diagnostic);
+      return validateSnapshot(value);
+    },
+    async adb(args) {
+      events.push(['adb', ...args]); options.adb?.(args, report, diagnostic);
+      if (args[2] === 'tap') { state.product(false, NOW); state.product(true, NOW); }
+      if (args[1] === 'am') { assert.deepEqual(args, ['shell', 'am', 'start', '-n', COMPONENT]); resumed = true; }
+    },
+    async sleep(ms) { events.push(['sleep', ms]); options.sleep?.(ms, report, diagnostic); },
+  };
+  return { report, diagnostic, events, context, state, run: () => exerciseNativeProducts(context) };
+}
+
+test('actual product sequence retains exact initial/refresh/expiry gates, commands and wait budgets', async () => {
+  const fixture = productExerciseFixture(); await fixture.run();
+  assert.equal(fixture.report.passed, true); assert.equal(fixture.report.phase, 'complete');
+  assert.deepEqual(fixture.report.checks, { initial_exact_native_rows: true,
+    actual_tap_refresh_and_missing_values: true, real_android_background_resume: true,
+    expired_products_hidden_without_network_refresh: true });
+  assert.deepEqual(fixture.report.observations.requests, { weather: 3, air_quality: 3 });
+  assert.equal(fixture.report.observations.initial.weather.rows, 4);
+  assert.equal(fixture.report.observations.refresh.air_quality.rows, 5);
+  assert.deepEqual(fixture.events.filter(row => row[0] === 'wait').map(row => row[1]), [15000, 15000, 15000, 3000, 15000]);
+  assert.deepEqual(fixture.events.filter(row => row[0] === 'control').map(row => row.slice(1)),
+    [['/state', 'GET'], ['/phase/refresh', 'POST'], ['/state', 'GET'], ['/phase/short-lived', 'POST'], ['/state', 'GET'], ['/state', 'GET']]);
+  assert.deepEqual(fixture.events.filter(row => row[0] === 'adb').map(row => row.slice(1)), [
+    ['shell', 'input', 'tap', '540', '1800'], ['shell', 'input', 'tap', '540', '1800'],
+    ['shell', 'input', 'keyevent', 'KEYCODE_HOME'], ['shell', 'am', 'start', '-n', COMPONENT]]);
+  assert.deepEqual(fixture.events.filter(row => row[0] === 'sleep'), [['sleep', 6000]]);
+});
+test('control request/status/body/decode/schema failures preserve the primary exception and redact output', async () => {
+  const primary = new Error(PRIVATE_TEXT), value = fixture().state.status();
+  for (const [stage, fetchControl] of [
+    ['control_request', async () => { throw primary; }],
+    ['control_status', async () => controlResponse(PRIVATE_TEXT, 400)],
+    ['control_body', async () => ({ status: 200, body: (async function* () { throw primary; })() })],
+    ['control_body', async () => controlResponse('x'.repeat(65537))],
+    ['control_decode', async () => controlResponse(PRIVATE_TEXT)],
+    ['control_schema', async () => controlResponse({ ...value, core_executed: true })],
+  ]) {
+    const diagnostic = new ObserverDiagnostic(); diagnostic.beginProducts(1);
+    let failure;
+    try { await readFixtureControl({ diagnostic, remaining() {}, fetchControl }); } catch (error) { failure = error; }
+    assert.ok(failure);
+    if (stage === 'control_request' || stage === 'control_body' && fetchControl.toString().includes('throw primary')) assert.equal(failure, primary);
+    const report = { phase: 'initial-native-products', passed: false };
+    recordDriverFailure(report, diagnostic, failure);
+    assert.equal(report.failure_diagnostic.subphase, stage);
+    assert.ok(!JSON.stringify(report).includes(PRIVATE_TEXT));
+  }
+  const diagnostic = new ObserverDiagnostic(), json = JSON.stringify(value);
+  assert.deepEqual(await readFixtureControl({ diagnostic, remaining() {},
+    fetchControl: async () => controlResponse(json + ' '.repeat(65536 - Buffer.byteLength(json))) }), value);
+  let fetches = 0;
+  await assert.rejects(readFixtureControl({ diagnostic, remaining() {}, fetchControl() { fetches++; } }, PRIVATE_TEXT));
+  assert.equal(fetches, 0);
+});
+test('request diagnostics distinguish zero observed from unknown and expected count, without relaxing counts', async () => {
+  const absent = productExerciseFixture({ beforeWait() { throw new Error(PRIVATE_TEXT); } });
+  const unseen = (await rejectedProducts(absent)).receipt.progress;
+  assert.equal(unseen.expected_requests_per_product, 1); assert.equal(unseen.weather_requests_observed, null);
+  const waiting = productExerciseFixture({ control(value) { value.calls = { weather: 0, air_quality: 1 }; } });
+  const result = await rejectedProducts(waiting);
+  assert.equal(result.receipt.subphase, 'product_count_wait');
+  assert.equal(result.receipt.progress.weather_requests_observed, 0);
+  assert.equal(result.receipt.progress.air_quality_requests_observed, 1);
+  const excessive = productExerciseFixture({ control(value) { value.calls.weather = 2; } });
+  const rejected = await rejectedProducts(excessive);
+  assert.equal(rejected.receipt.subphase, 'product_counts'); assert.equal(rejected.receipt.code, 'validation_failed');
+  assert.equal(rejected.receipt.progress.weather_requests_observed, 2);
+  assert.deepEqual(excessive.report.checks, {});
+});
+test('real product waiter keeps its 15s bound and interruption remains primary after an awaited control read', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100 });
+  const pending = productExerciseFixture({ control(value) { value.calls = { weather: 0, air_quality: 0 }; } });
+  pending.context.waitFor = check => waitForObservation(check, Date.now() + 180000, () => {});
+  const result = rejectedProducts(pending);
+  await flush(); t.mock.timers.tick(15000);
+  const { receipt } = await result;
+  assert.equal(receipt.code, 'observation_deadline'); assert.equal(receipt.subphase, 'product_count_wait');
+  assert.equal(receipt.progress.expected_requests_per_product, 1);
+  assert.equal(receipt.progress.weather_requests_observed, 0);
+  assert.equal(receipt.progress.air_quality_requests_observed, 0);
+  const primary = new (adbFailure({}).constructor)('interrupted');
+  let interrupted = false;
+  const fixture = productExerciseFixture({ control() { interrupted = true; } });
+  fixture.context.waitFor = check => waitForObservation(check, Date.now() + 180000, () => { if (interrupted) throw primary; });
+  const failure = await rejectedProducts(fixture);
+  assert.equal(failure.failure, primary); assert.equal(failure.receipt.code, 'interrupted');
+  assert.deepEqual(fixture.report.checks, {});
+  assert.ok(!fixture.events.some(row => row[0] === 'snapshot' || row[0] === 'adb'));
+});
+test('16 mounted collection attempts retain exact tables and all six metadata fields per product', async () => {
+  for (const mode of ['table', 'metadata', 'empty']) {
+    const fixture = productExerciseFixture({ snapshot(value) {
+      if (mode === 'table') value.tables[0].rows[0][1] = '1234567';
+      if (mode === 'metadata') value.labels = value.labels.filter(text => !text.startsWith('Model '));
+      if (mode === 'empty') { value.tables = []; value.labels = []; }
+    } });
+    const { receipt } = await rejectedProducts(fixture);
+    assert.equal(receipt.subphase, 'products_unobserved'); assert.equal(receipt.progress.collection_attempts, 16);
+    assert.equal(receipt.progress.weather_table_seen, mode !== 'empty');
+    assert.equal(receipt.progress.weather_table_matched, mode === 'metadata');
+    assert.equal(receipt.progress.weather_metadata_matches, mode === 'empty' ? 0 : mode === 'metadata' ? 5 : 6);
+    assert.equal(fixture.events.filter(row => row[0] === 'adb' && row[3] === 'swipe').length, 16);
+    assert.ok(fixture.events.filter(row => row[0] === 'sleep').every(row => row[1] === 200));
+  }
+});
+test('snapshot/swipe/tap/background/resume failures bind actual awaited operation and preserve identity', async () => {
+  const primary = adbFailure({ signal: 'SIGKILL' });
+  for (const stage of ['product_snapshot', 'swipe', 'refresh_snapshot', 'tap', 'expiry_snapshot',
+    'before_background', 'background_home', 'background_pause', 'resume_start', 'resume_snapshot']) {
+    const fail = diagnostic => { if (diagnostic.subphase === stage) throw primary; };
+    const fixture = productExerciseFixture({ snapshot(value, report, diagnostic) {
+      fail(diagnostic); if (stage === 'swipe') value.labels = [];
+    }, adb(args, report, diagnostic) { fail(diagnostic); }, sleep(ms, report, diagnostic) { fail(diagnostic); } });
+    const { receipt, failure } = await rejectedProducts(fixture);
+    assert.equal(failure, primary); assert.equal(receipt.subphase, stage); assert.equal(receipt.code, 'adb_signal');
+  }
+});
+test('refresh target cannot be inferred, and phase reset prevents stale initial success counters', async () => {
+  const fixture = productExerciseFixture({ snapshot(value, report) { if (report.phase === 'actual-refresh') value.refresh = []; } });
+  const { receipt } = await rejectedProducts(fixture);
+  assert.equal(receipt.subphase, 'refresh_unobserved'); assert.equal(receipt.progress.refresh_search_attempts, 16);
+  assert.equal(receipt.progress.expected_requests_per_product, 2); assert.equal(receipt.progress.collection_attempts, 0);
+  assert.equal(receipt.progress.weather_requests_observed, null); assert.equal(receipt.progress.weather_table_matched, null);
+  assert.equal(fixture.report.checks.initial_exact_native_rows, true);
+  assert.equal(fixture.report.checks.actual_tap_refresh_and_missing_values, undefined);
+});
+test('missing value, expiry consumption, real lifecycle, hidden tables and no-extra-fetch remain required', async () => {
+  for (const stage of ['missing_values', 'expiry_wait', 'before_background', 'resume_wait', 'expired_labels', 'expired_tables', 'final_requests']) {
+    const fixture = productExerciseFixture({ control(value, path, report) {
+      if (stage === 'missing_values' && report.phase === 'actual-refresh' && path === '/state') {
+        value.products.weather.forecast.samples[0].temperature_2m = 12;
+      }
+      if (stage === 'final_requests' && report.phase === 'background-resume-expiry' && value.calls.weather === 3
+          && fixture.events.some(row => row[0] === 'adb' && row[2] === 'am')) value.calls.air_quality = 2;
+    }, snapshot(value, report, diagnostic) {
+      if (stage === 'missing_values' && diagnostic.subphase === 'product_snapshot' && report.phase === 'actual-refresh') value.tables[0].rows[0][1] = '12';
+      if (stage === 'expiry_wait' && diagnostic.subphase === 'expiry_snapshot') value.labels = [];
+      if (stage === 'before_background' && diagnostic.subphase === stage) value.current_lifecycle = 'paused';
+      if (diagnostic.subphase === 'resume_snapshot') {
+        if (stage === 'resume_wait') value.lifecycle = ['resumed'];
+        if (stage === 'expired_labels') value.labels.pop();
+        if (stage === 'expired_tables') value.tables = [table(fixture.state.status().products.weather)];
+      }
+    } });
+    const { receipt } = await rejectedProducts(fixture);
+    assert.equal(receipt.subphase, stage);
+    assert.equal(fixture.report.scope.mounted_widget_tables, false);
+    assert.equal(fixture.report.scope.real_adb_interaction, false);
+    if (stage === 'expiry_wait') assert.equal(receipt.progress.expiry_labels_matched, 0);
+    if (stage === 'expired_labels') assert.equal(receipt.progress.expired_labels_observed, 1);
+    if (stage === 'expired_tables') assert.equal(receipt.progress.tables_remaining, 1);
+  }
+});
+test('schema2 is a fixed bounded projection, cannot echo arbitrary data, and optional diagnosis cannot mask failure', () => {
+  const diagnostic = new ObserverDiagnostic(); diagnostic.beginProducts(1);
+  const keys = Object.keys(diagnostic.productFailure(new Error()).progress);
+  for (const invalid of [PRIVATE_TEXT, {}, [], NaN, Infinity, -1, 999999, 1.5]) {
+    diagnostic.progress = Object.fromEntries(keys.map(key => [key, invalid]));
+    diagnostic.progress[PRIVATE_TEXT] = PRIVATE_TEXT; diagnostic.subphase = PRIVATE_TEXT;
+    const receipt = diagnostic.productFailure(new Error(PRIVATE_TEXT));
+    assert.deepEqual(Object.keys(receipt.progress), keys); assert.ok(Object.values(receipt.progress).every(value => value === null));
+    assert.equal(receipt.subphase, 'unobserved'); assert.ok(!JSON.stringify(receipt).includes(PRIVATE_TEXT));
+  }
+  diagnostic.beginProducts(3);
+  diagnostic.note(() => { throw new Error(PRIVATE_TEXT); });
+  assert.equal(diagnostic.productFailure(new Error()).progress.weather_requests_observed, null);
+  const report = { phase: 'actual-refresh', passed: false };
+  diagnostic.productFailure = () => { throw new Error(PRIVATE_TEXT); };
+  recordDriverFailure(report, diagnostic, new Error(PRIVATE_TEXT));
+  assert.deepEqual(report, { phase: 'actual-refresh', passed: false, failure: 'NATIVE_TRIAL_PHASE_FAILED' });
 });
