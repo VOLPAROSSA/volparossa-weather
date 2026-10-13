@@ -8,6 +8,7 @@ import importlib.util
 import os
 import io
 import json
+import re
 from pathlib import Path
 import resource
 import subprocess
@@ -1611,7 +1612,7 @@ class EmulatorDiagnostics(unittest.TestCase):
                         if streams and not reaches_install:
                             raw = (proof / "guest-network-diagnostic.json").read_bytes()
                             value = json.loads(raw)
-                            self.assertEqual(value["schema"], 7)
+                            self.assertEqual(value["schema"], 8)
                             self.assertEqual(value["last_query"], dict(name="link_before",
                                 outcome="returned" if streams == "malformed" else "command_failed"))
                             stream = value["query_streams"]
@@ -2408,7 +2409,7 @@ class GuestNetworkObserverTests(unittest.TestCase):
         tree = ast.parse((ROOT / "scripts/prepare_hosted_android_ci.py").read_text())
         inside = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "inside")
         code = ast.unparse(inside)
-        self.assertIn("network = GuestNetworkSinkObserver()", code)
+        self.assertIn("network = GuestNetworkMetadataObserver()", code)
         self.assertLess(code.index("network.enforce"), code.index("adb_command('install'"))
         self.assertLess(code.index("adb_command('install'"), code.index("package_uid_probe(adb_command)"))
         self.assertLess(code.index("package_uid_probe(adb_command)"), code.index("adb_command('reverse'"))
@@ -2773,6 +2774,249 @@ class GuestNetworkSinkObserverTests(unittest.TestCase):
         self.assertIsNone(value["link_decode_query"])
         self.assertEqual(value["link_join"], dict(status="unobserved", side=None))
         self.assertFalse(value["gate_passed"] or value["cause_established"])
+
+
+class GuestNetworkMetadataTests(unittest.TestCase):
+    @staticmethod
+    def legacy_rows(raw, *, minimum=1):
+        """Frozen cd13a93 guest_link_rows, before predicate observations."""
+        require = M.require
+        require(len(raw) <= 65536, "GUEST_LINK_BOUND")
+        rows = json.loads(raw.decode("ascii"), object_pairs_hook=M.H.unique)
+        require(type(rows) is list and minimum <= len(rows) <= 64, "GUEST_LINK_METADATA")
+        allowed = set(("ifindex ifname flags mtu qdisc operstate linkmode group txqlen link_type address broadcast "
+            "promiscuity allmulti min_mtu max_mtu num_tx_queues num_rx_queues gso_max_size gso_max_segs "
+            "tso_max_size tso_max_segs gro_max_size gro_ipv4_max_size gso_ipv4_max_size "
+            "inet6_addr_gen_mode linkinfo").split())
+        names, indexes = set(), set()
+        for row in rows:
+            require(type(row) is dict and set(row) <= allowed, "GUEST_LINK_METADATA")
+            index, name, flags = row.get("ifindex"), row.get("ifname"), row.get("flags")
+            require(type(index) is int and 0 < index < 2**31 and index not in indexes
+                and type(name) is str and re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", name)
+                and name not in names and type(flags) is list and len(flags) <= 32
+                and all(type(x) is str and re.fullmatch(r"[A-Z_-]{1,24}", x) for x in flags)
+                and len(flags) == len(set(flags)), "GUEST_LINK_METADATA")
+            require(row.get("operstate") in ("UNKNOWN", "DOWN", "UP", "DORMANT", "LOWERLAYERDOWN", "TESTING", "NOTPRESENT")
+                and type(row.get("link_type")) is str and type(row.get("qdisc")) is str, "GUEST_LINK_METADATA")
+            info = row.get("linkinfo", {})
+            require(type(info) is dict and set(info) <= {"info_kind", "info_data"}
+                and type(info.get("info_kind", "")) is str, "GUEST_LINK_METADATA")
+            names.add(name)
+            indexes.add(index)
+        return rows
+
+    @staticmethod
+    def legacy_identities(rows):
+        """Frozen cd13a93 sink predicates and outputs."""
+        result = {}
+        for row in rows:
+            name, flags, info = row["ifname"], row["flags"], row.get("linkinfo", {})
+            kind = info.get("info_kind", "")
+            loopback = name == "lo" and row["link_type"] == "loopback" and "LOOPBACK" in flags and not info
+            dummy = (kind == "dummy" and row["link_type"] == "ether" and info.get("info_data", {}) == {}
+                and "NOARP" in flags and "LOOPBACK" not in flags)
+            sink = "loopback" if loopback else "dummy" if dummy else "other"
+            M.require(sink != "other" or ("UP" not in flags and row["operstate"] == "DOWN"), "GUEST_LINK_ACTIVE")
+            if sink != "other":
+                M.require(row["qdisc"] == "noqueue" and row.get("linkmode", "DEFAULT") == "DEFAULT"
+                    and row.get("promiscuity", 0) == 0 and row.get("allmulti", 0) == 0
+                    and set(flags) <= {"UP", "LOWER_UP", "LOOPBACK", "BROADCAST", "MULTICAST", "NOARP", "NO-CARRIER"},
+                    "GUEST_LINK_METADATA")
+            result[name] = dict(identity=row, sink=sink)
+        M.require("lo" in result and result["lo"]["sink"] == "loopback", "GUEST_LINK_METADATA")
+        return result
+
+    def observe(self, overrides, *, error_type=ValueError, observer=None):
+        observer = observer or M.GuestNetworkMetadataObserver()
+        with tempfile.TemporaryDirectory() as directory:
+            proof = Path(directory)
+            with self.assertRaises(error_type) as caught:
+                GuestNetworkSinkObserverTests().run_gate(proof, diagnostic=observer, overrides=overrides)
+            raw = (proof / "guest-network-diagnostic.json").read_bytes()
+            value = json.loads(raw)
+            self.assertEqual(value["schema"], 8)
+            self.assertLessEqual(len(raw), 2048)
+            self.assertLessEqual(len(json.dumps(value["link_metadata"], separators=(",", ":")).encode()), 512)
+            self.assertFalse(value["gate_passed"] or value["cause_established"] or value["raw_text_exported"])
+            for private in (b"private-canary", b"sink-private", b"/system/", b"private-stderr"):
+                self.assertNotIn(private, raw)
+            self.assertEqual((proof / "guest-network-diagnostic.json").stat().st_mode & 0o777, 0o600)
+        return value, caught.exception, observer
+
+    def test_each_row_predicate_reports_first_failure_without_raw_values(self):
+        row = json.loads(GuestNetworkSinkObserverTests.projections()[0])[0]
+        cases = [({}, "document_type", "document"), ([], "row_count", "document"),
+            ([row] * 65, "row_count", "document"), ([None], "row_type", "row"),
+            ([dict(row, private_unknown="private-canary")], "unknown_fields", "row"),
+            ([dict(row, ifindex=True)], "index_type", "ifindex"),
+            ([dict(row, ifindex=0)], "index_range", "ifindex"),
+            ([row, row], "index_duplicate", "ifindex"),
+            ([dict(row, ifname={})], "name_type", "ifname"),
+            ([dict(row, ifname="private-canary@secret")], "name_shape", "ifname"),
+            ([row, dict(row, ifindex=2)], "name_duplicate", "ifname"),
+            ([dict(row, flags={})], "flags_type", "flags"),
+            ([dict(row, flags=["UP"] * 33)], "flags_count", "flags"),
+            ([dict(row, flags=[{}])], "flag_type", "flags"),
+            ([dict(row, flags=["private-canary"])], "flag_shape", "flags"),
+            ([dict(row, flags=["UP", "UP"])], "flags_duplicate", "flags"),
+            ([dict(row, operstate={})], "operstate_type", "operstate"),
+            ([dict(row, operstate="private-canary")], "operstate_value", "operstate"),
+            ([dict(row, link_type=[])], "link_type_type", "link_type"),
+            ([dict(row, qdisc=None)], "qdisc_type", "qdisc"),
+            ([dict(row, linkinfo=[])], "linkinfo_type", "linkinfo"),
+            ([dict(row, linkinfo={"private-canary": True})], "linkinfo_unknown_fields", "linkinfo"),
+            ([dict(row, linkinfo={"info_kind": {}})], "linkinfo_kind_type", "linkinfo")]
+        for field in ("ifindex", "ifname", "flags", "operstate", "link_type", "qdisc"):
+            cases.append(([{k: v for k, v in row.items() if k != field}], "required_missing", field))
+        for rows, reason, field in cases:
+            with self.subTest(reason=reason, field=field):
+                value, error, _ = self.observe({("query", "link_before"): json.dumps(rows).encode()})
+                self.assertIs(type(error), ValueError)
+                self.assertEqual(str(error), "GUEST_LINK_METADATA")
+                metadata = value["link_metadata"]
+                self.assertEqual((metadata["status"], metadata["context"], metadata["reason"], metadata["field"]),
+                    ("rejected", "rows", reason, field))
+                self.assertEqual(value["last_query"], dict(name="link_before", outcome="returned"))
+                self.assertEqual(value["link_decode_query"], "link_before")
+                self.assertEqual(value["query_streams"]["status"], "complete")
+        # Preserve conjunction order: unknown top-level fields precede index;
+        # an early malformed flag precedes a later non-string flag.
+        for changes, reason in ((dict(private_unknown=True, ifindex=None), "unknown_fields"),
+                (dict(ifindex=None, ifname=None), "index_type"),
+                (dict(flags=["private-canary", {}]), "flag_shape")):
+            value, _, _ = self.observe({("query", "link_before"): json.dumps([dict(row, **changes)]).encode()})
+            self.assertEqual(value["link_metadata"]["reason"], reason)
+
+    def test_unknown_keys_are_only_bounded_literal_topology_classes(self):
+        row = json.loads(GuestNetworkSinkObserverTests.projections()[0])[0]
+        for name, category in M.GuestNetworkMetadataObserver.UNKNOWN_CLASSES.items():
+            value, _, _ = self.observe({("query", "link_before"): json.dumps([dict(row, **{name: "private-canary"})]).encode()})
+            self.assertEqual(value["link_metadata"]["unknown_key_classes"], [category])
+        changed = dict(row, **{name: "private-canary" for name in M.GuestNetworkMetadataObserver.UNKNOWN_CLASSES})
+        changed.update({"private-canary-" + str(i): "private-canary" for i in range(100)})
+        value, _, _ = self.observe({("query", "link_before"): json.dumps([changed]).encode()})
+        self.assertEqual(value["link_metadata"]["unknown_key_classes"],
+            sorted(set(M.GuestNetworkMetadataObserver.UNKNOWN_CLASSES.values()) | {"other_unknown"}))
+        info = dict(row, linkinfo={"info_slave_kind": "private-canary", "private-canary": []})
+        value, _, _ = self.observe({("query", "link_before"): json.dumps([info]).encode()})
+        self.assertEqual(value["link_metadata"]["unknown_key_classes"], ["other_unknown", "slave_kind"])
+
+    def test_sink_metadata_reports_join_context_not_a_parser_or_command_failure(self):
+        for field, bad, reason in (("qdisc", "fq_codel", "sink_qdisc"), ("linkmode", "DORMANT", "sink_linkmode"),
+                ("promiscuity", 1, "sink_promiscuity"), ("allmulti", 1, "sink_allmulti"),
+                ("flags", ["UP", "NOARP", "PROMISC"], "sink_flags")):
+            basic, _, dummy = (json.loads(raw) for raw in GuestNetworkSinkObserverTests.projections())
+            dummy[0][field] = bad
+            if field in basic[1]:
+                basic[1][field] = bad
+            value, error, _ = self.observe({("query", "link_before"): json.dumps(basic).encode(),
+                ("query", "dummy_before"): json.dumps(dummy).encode()})
+            self.assertEqual(str(error), "GUEST_LINK_METADATA")
+            self.assertEqual(value["link_metadata"], dict(status="rejected", context="join", reason=reason,
+                field=field, unknown_key_classes=[]))
+            self.assertEqual(value["link_join"], dict(status="failed", side="before"))
+            self.assertEqual(value["last_query"], dict(name="dummy_before", outcome="returned"))
+            self.assertEqual(value["link_decode"]["status"], "verified")
+            self.assertEqual(value["query_streams"]["status"], "complete")
+        basic, lo, _ = (json.loads(raw) for raw in GuestNetworkSinkObserverTests.projections())
+        for row in (basic[0], lo[0]):
+            row.update(link_type="ether", flags=[], operstate="DOWN")
+        value, _, _ = self.observe({("query", "link_before"): json.dumps(basic).encode(),
+            ("query", "loopback_before"): json.dumps(lo).encode()})
+        self.assertEqual(value["link_metadata"]["reason"], "loopback_required")
+
+    def test_exact_query_error_poll_binding_including_later_guard(self):
+        for query in M.GuestNetworkSinkObserver.LINK_QUERIES:
+            value, error, observer = self.observe({("query", query): b"[{}]"})
+            self.assertEqual(value["link_metadata"]["reason"], "required_missing")
+            self.assertEqual(value["last_query"]["name"], query)
+            self.assertEqual(value["link_decode_query"], query)
+            for condition in ("other_error", "other_poll", "other_query", "guard"):
+                with self.subTest(query=query, condition=condition):
+                    with patch.object(observer, "polls", observer.polls + (1 if condition == "other_poll" else 0)), \
+                            patch.object(observer, "last_query", dict(name=None if condition == "guard" else "qdisc_after"
+                                if condition == "other_query" else query, outcome="returned")):
+                        result = observer.diagnostic_value({}, ValueError("GUEST_LINK_METADATA") if condition == "other_error" else error)
+                    self.assertEqual(result["link_metadata"], observer.unobserved_metadata())
+        for raw in (b"[private-canary", b'[{"ifindex":1,"ifindex":2}]', b"x" * 65537, b"\xff"):
+            value, _, observer = self.observe({("query", "link_before"): raw})
+            self.assertEqual(value["link_metadata"], observer.unobserved_metadata())
+        value, _, observer = self.observe({("query", "dummy_before"): subprocess.CalledProcessError(9, "private-canary")},
+            error_type=subprocess.CalledProcessError)
+        self.assertEqual(value["link_metadata"], observer.unobserved_metadata())
+
+    def test_diagnostic_callback_failure_never_replaces_primary_exception(self):
+        for failure in (OSError("private-canary"), KeyboardInterrupt(), RuntimeError("private-canary")):
+            observer = M.GuestNetworkMetadataObserver()
+            with patch.object(observer, "metadata_rejected", side_effect=failure):
+                value, error, _ = self.observe({("query", "link_before"): b"[{}]"}, observer=observer)
+            self.assertIs(type(error), ValueError)
+            self.assertEqual(str(error), "GUEST_LINK_METADATA")
+            self.assertEqual(value["link_metadata"], observer.unobserved_metadata())
+        observer = M.GuestNetworkMetadataObserver()
+        observer.metadata_context = "rows"
+        for reason, field in (("private-canary", "row"), ("row_type", "private-canary")):
+            with self.assertRaisesRegex(ValueError, "GUEST_LINK_DIAGNOSTIC_ENUM"):
+                observer.metadata_rejected(ValueError(), reason, field, ())
+        self.assertEqual(observer.metadata, observer.unobserved_metadata())
+
+    def test_original_parser_semantics_and_short_circuit_types_are_unchanged(self):
+        rows = json.loads(GuestNetworkIsolationTests.links())
+        values = [None, False, True, 0, -1, 2**31, 1.5, "", "private-canary", [], {},
+            [None], [{}], ["UP", {}], ["private-canary", {}], ["UP", "UP"], ["UP"] * 33]
+        candidates = [None, {}, [], [None], [False], [[]], [{}], rows, rows * 2, rows * 33]
+        for field in ("ifindex", "ifname", "flags", "operstate", "link_type", "qdisc", "linkinfo",
+                "linkmode", "promiscuity", "allmulti", "master", "link_index", "xdp"):
+            candidates.extend([[rows[0], dict(rows[1], **{field: value})] for value in values])
+            candidates.append([rows[0], {k: v for k, v in rows[1].items() if k != field}])
+        for value in values:
+            candidates.append([rows[0], dict(rows[1], linkinfo={"info_kind": value})])
+            candidates.append([rows[0], dict(rows[1], linkinfo={"info_kind": "dummy", "info_data": value})])
+        def outcome(parser, raw, minimum):
+            try:
+                parsed = parser(raw, minimum=minimum)
+                return ("ok", parsed)
+            except BaseException as error:
+                return ("error", type(error), str(error))
+        for raw in ([json.dumps(value).encode() for value in candidates]
+                + [b"[", b'[{"ifindex":1,"ifindex":2}]', b"x" * 65537, b"\xff"]):
+            for minimum in (0, 1):
+                with self.subTest(raw=raw[:100], minimum=minimum):
+                    expected = outcome(self.legacy_rows, raw, minimum)
+                    self.assertEqual(outcome(M.guest_link_rows, raw, minimum), expected)
+                    self.assertEqual(outcome(lambda data, **kw: M.guest_link_rows(data, rejection=Mock(), **kw), raw, minimum), expected)
+                    if expected[0] == "ok":
+                        def identities(fn):
+                            try: return ("ok", fn(expected[1]))
+                            except BaseException as error: return ("error", type(error), str(error))
+                        self.assertEqual(identities(M.guest_link_identities), identities(self.legacy_identities))
+
+    def test_new_success_boundary_is_identical_and_historical_schema7_is_untouched(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = GuestNetworkSinkObserverTests().run_gate
+            old, old_calls = run(Path(directory), diagnostic=M.GuestNetworkSinkObserver())
+            new, new_calls = run(Path(directory), diagnostic=M.GuestNetworkMetadataObserver())
+            self.assertEqual(new, old)
+            self.assertEqual(new_calls, old_calls)
+            with self.assertRaises(ValueError):
+                run(Path(directory), diagnostic=M.GuestNetworkSinkObserver(), overrides={("query", "link_before"): b"[{}]"})
+            historical = json.loads((Path(directory) / "guest-network-diagnostic.json").read_bytes())
+            self.assertEqual(historical["schema"], 7)
+            self.assertNotIn("link_metadata", historical)
+
+    def test_full_route_counts_and_all_unknown_key_classes_keep_original_receipt_bound(self):
+        row = json.loads(GuestNetworkSinkObserverTests.projections()[0])[0]
+        row.update({key: "private-canary" for key in M.GuestNetworkMetadataObserver.UNKNOWN_CLASSES})
+        row["private-canary"] = "private-canary"
+        route = b"default via 10.0.2.2 dev private-canary\n"
+        routes = route * (65536 // len(route))
+        value, _, _ = self.observe({("query", "ipv4"): routes, ("query", "ipv6"): routes,
+            ("query", "link_after"): json.dumps([row]).encode()})
+        self.assertEqual(value["last_query"]["name"], "link_after")
+        self.assertEqual(value["link_metadata"]["reason"], "unknown_fields")
+        self.assertGreater(value["families"]["ipv4"]["routes"], 1000)
+        self.assertGreater(value["families"]["ipv6"]["routes"], 1000)
 
 
 class AvdPreflight(unittest.TestCase):

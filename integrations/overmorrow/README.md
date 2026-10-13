@@ -86,16 +86,27 @@ has not yet passed.
 
 ### Current result
 
-[Trial 31](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38432510721)
-at `79090a88` passes both builds but stops before installation. The first link
-query returns complete stdout, empty stderr and exit zero; its JSON is malformed
-at position 5,435. Separating the streams rules out stderr contamination in this
-command, not every possible producer defect. Qdisc/route checks and the app UI
-are not reached. All 45 original artifact members and fifteen step logs are
-audited; artifact SHA256 is
-`404df873966001646625b5134974116f002375db58eaf31a10a3f4a671ee2e4a`.
-Process drain, private-state cleanup, KVM restoration and unchanged host network
-namespace all pass.
+[Trial 32](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38438989104)
+at `cd13a93a` passes the APK build and offline rebuild, then stops before
+installation. The first basic link query returns complete, valid JSON:
+6,259 stdout bytes, empty stderr and exit zero. Strict metadata validation
+rejects it as `link_unknown`; the original receipt does not identify the
+particular predicate or field. Detail queries, qdisc/route checks and the app UI
+are not reached. All 45 original artifact members, fifteen step logs and pinned
+source/toolchain bindings are audited. Artifact SHA256 is
+`a10cba7d854f080da0408a58323d860a33344439b9ccace2e50c3c4540d79021`;
+original log ZIP SHA256 is
+`d1ba9822cfa67d84d41052403e0cd362ed2d4438e6bc4580ea8940c96700a472`.
+Both builds produce the same 74,366,059-byte APK. Process drain, private-state
+cleanup, KVM restoration and unchanged host network namespace all pass.
+
+The preceding [trial 31](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38432510721)
+at `79090a88` also passes both builds, but its detailed link query produces
+malformed JSON at position 5,435. Its complete stdout and empty stderr rule out
+stderr contamination in that command, not every possible producer defect.
+Its original 45-member artifact has SHA256
+`404df873966001646625b5134974116f002375db58eaf31a10a3f4a671ee2e4a`;
+cleanup passes, while installation and UI checks are not reached.
 
 Primary [AOSP GRE formatter source](https://android.googlesource.com/platform/external/iproute2/+/refs/tags/android-16.0.0_r1/ip/link_gre.c#510)
 contains an unconditional plain-text write inside detailed JSON output.
@@ -113,11 +124,15 @@ unsafe qdiscs and routes remain rejected. No malformed JSON is repaired or
 ignored. The original ten-second observation deadline, stream bounds, observer
 guards and cleanup remain in force.
 
-Schema-seven diagnostics distinguish a failed parser from a failed metadata
-join and bind the last query to its actual poll, including a deadline before
-the next poll's first query. The new boundary schema records ten fixed reads;
-historical schemas retain their original meaning. All 177 inert Android checks
-pass. They do not replace the next actual emulator trial or prove installation.
+Schema-eight diagnostics add the first rejected metadata predicate and field
+category, with a closed classification of unknown keys. No raw keys, interface
+names, addresses or values are exported. The observation is bound to the exact
+exception, query and poll; command or JSON failures cannot inherit stale metadata
+diagnostics. Optional diagnostic failures preserve the original rejection.
+Historical schemas one through seven and the ten-read boundary schema four
+retain their meaning. All 185 inert Android checks pass, including comparisons
+against the previous parser's acceptance and short-circuit behavior. These checks
+do not replace the next actual emulator trial or prove installation.
 
 ### Earlier attempts and corrections
 

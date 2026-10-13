@@ -558,35 +558,64 @@ def no_guest_egress_routes(raw):
     return guest_route_observation(raw)["outcome"] == "admitted"
 
 
-def guest_link_rows(raw, *, minimum=1):
+def guest_link_metadata_check(condition, reason, field, rejection, unknown=()):
+    if condition:
+        return
+    error = ValueError("GUEST_LINK_METADATA")
+    if rejection is not None:
+        try:
+            rejection(error, reason, field, unknown)
+        except BaseException:
+            pass  # Optional diagnostics never replace the original rejection.
+    raise error
+
+
+def guest_link_rows(raw, *, minimum=1, rejection=None):
     """Bounded RTNL objects; sink authority is checked separately below."""
     require(len(raw) <= 65536, "GUEST_LINK_BOUND")
     rows = json.loads(raw.decode("ascii"), object_pairs_hook=H.unique)
-    require(type(rows) is list and minimum <= len(rows) <= 64, "GUEST_LINK_METADATA")
+    def check(condition, reason, field, unknown=()):
+        guest_link_metadata_check(condition, reason, field, rejection, unknown)
+    check(type(rows) is list, "document_type", "document")
+    check(minimum <= len(rows) <= 64, "row_count", "document")
     allowed = set(("ifindex ifname flags mtu qdisc operstate linkmode group txqlen link_type address broadcast "
         "promiscuity allmulti min_mtu max_mtu num_tx_queues num_rx_queues gso_max_size gso_max_segs "
         "tso_max_size tso_max_segs gro_max_size gso_ipv4_max_size gro_ipv4_max_size "
         "inet6_addr_gen_mode linkinfo").split())
     names, indexes = set(), set()
     for row in rows:
-        require(type(row) is dict and set(row) <= allowed, "GUEST_LINK_METADATA")
+        check(type(row) is dict, "row_type", "row")
+        check(set(row) <= allowed, "unknown_fields", "row", set(row) - allowed)
         index, name, flags = row.get("ifindex"), row.get("ifname"), row.get("flags")
-        require(type(index) is int and 0 < index < 2**31 and index not in indexes
-            and type(name) is str and re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", name)
-            and name not in names and type(flags) is list and len(flags) <= 32
-            and all(type(x) is str and re.fullmatch(r"[A-Z_-]{1,24}", x) for x in flags)
-            and len(flags) == len(set(flags)), "GUEST_LINK_METADATA")
-        require(row.get("operstate") in ("UNKNOWN", "DOWN", "UP", "DORMANT", "LOWERLAYERDOWN", "TESTING", "NOTPRESENT")
-            and type(row.get("link_type")) is str and type(row.get("qdisc")) is str, "GUEST_LINK_METADATA")
+        # Same order and short-circuit boundaries as the original conjunctions.
+        # In particular, nonhashable names/flags never reach set membership.
+        check(type(index) is int, "required_missing" if "ifindex" not in row else "index_type", "ifindex")
+        check(0 < index < 2**31, "index_range", "ifindex")
+        check(index not in indexes, "index_duplicate", "ifindex")
+        check(type(name) is str, "required_missing" if "ifname" not in row else "name_type", "ifname")
+        check(re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", name), "name_shape", "ifname")
+        check(name not in names, "name_duplicate", "ifname")
+        check(type(flags) is list, "required_missing" if "flags" not in row else "flags_type", "flags")
+        check(len(flags) <= 32, "flags_count", "flags")
+        for flag in flags:
+            check(type(flag) is str, "flag_type", "flags")
+            check(re.fullmatch(r"[A-Z_-]{1,24}", flag), "flag_shape", "flags")
+        check(len(flags) == len(set(flags)), "flags_duplicate", "flags")
+        check(row.get("operstate") in ("UNKNOWN", "DOWN", "UP", "DORMANT", "LOWERLAYERDOWN", "TESTING", "NOTPRESENT"),
+            "required_missing" if "operstate" not in row else "operstate_type"
+                if type(row["operstate"]) is not str else "operstate_value", "operstate")
+        check(type(row.get("link_type")) is str, "required_missing" if "link_type" not in row else "link_type_type", "link_type")
+        check(type(row.get("qdisc")) is str, "required_missing" if "qdisc" not in row else "qdisc_type", "qdisc")
         info = row.get("linkinfo", {})
-        require(type(info) is dict and set(info) <= {"info_kind", "info_data"}
-            and type(info.get("info_kind", "")) is str, "GUEST_LINK_METADATA")
+        check(type(info) is dict, "linkinfo_type", "linkinfo")
+        check(set(info) <= {"info_kind", "info_data"}, "linkinfo_unknown_fields", "linkinfo", set(info) - {"info_kind", "info_data"})
+        check(type(info.get("info_kind", "")) is str, "linkinfo_kind_type", "linkinfo")
         names.add(name)
         indexes.add(index)
     return rows
 
 
-def guest_link_identities(rows):
+def guest_link_identities(rows, *, rejection=None):
     result = {}
     for row in rows:
         name, flags, info = row["ifname"], row["flags"], row.get("linkinfo", {})
@@ -599,14 +628,16 @@ def guest_link_identities(rows):
         # operstate alone proves nothing. Non-sink interfaces must be admin down.
         require(sink != "other" or ("UP" not in flags and row["operstate"] == "DOWN"), "GUEST_LINK_ACTIVE")
         if sink != "other":
-            require(row["qdisc"] == "noqueue" and row.get("linkmode", "DEFAULT") == "DEFAULT"
-                and row.get("promiscuity", 0) == 0 and row.get("allmulti", 0) == 0
-                and set(flags) <= {"UP", "LOWER_UP", "LOOPBACK", "BROADCAST", "MULTICAST", "NOARP", "NO-CARRIER"},
-                "GUEST_LINK_METADATA")
+            guest_link_metadata_check(row["qdisc"] == "noqueue", "sink_qdisc", "qdisc", rejection)
+            guest_link_metadata_check(row.get("linkmode", "DEFAULT") == "DEFAULT", "sink_linkmode", "linkmode", rejection)
+            guest_link_metadata_check(row.get("promiscuity", 0) == 0, "sink_promiscuity", "promiscuity", rejection)
+            guest_link_metadata_check(row.get("allmulti", 0) == 0, "sink_allmulti", "allmulti", rejection)
+            guest_link_metadata_check(set(flags) <= {"UP", "LOWER_UP", "LOOPBACK", "BROADCAST", "MULTICAST", "NOARP", "NO-CARRIER"},
+                "sink_flags", "flags", rejection)
         # All observed metadata must stay stable across the route/qdisc reads;
         # no stats query is used, so no traffic counters need to be discarded.
         result[name] = dict(identity=row, sink=sink)
-    require("lo" in result and result["lo"]["sink"] == "loopback", "GUEST_LINK_METADATA")
+    guest_link_metadata_check("lo" in result and result["lo"]["sink"] == "loopback", "loopback_required", "row", rejection)
     return result
 
 
@@ -615,7 +646,7 @@ def guest_link_snapshot(raw):
     return guest_link_identities(guest_link_rows(raw))
 
 
-def guest_link_join(basic, loopback, dummy):
+def guest_link_join(basic, loopback, dummy, *, rejection=None):
     """Only full, matching fixed-query details can attest a kernel sink."""
     require(len(loopback) == 1 and loopback[0]["ifname"] == "lo", "GUEST_LINK_JOIN")
     require(all(row.get("linkinfo", {}).get("info_kind") == "dummy" for row in dummy), "GUEST_LINK_JOIN")
@@ -634,7 +665,7 @@ def guest_link_join(basic, loopback, dummy):
     # in the inventory, and all their metadata participates in the pair check.
     require(all("linkinfo" not in row for row in basic), "GUEST_LINK_JOIN")
     joined = [details.get(key, row) for key, row in inventory.items()]
-    value = guest_link_identities(joined)
+    value = guest_link_identities(joined, rejection=rejection)
     require(value["lo"]["sink"] == "loopback"
         and all(value[row["ifname"]]["sink"] == "dummy" for row in dummy), "GUEST_LINK_JOIN")
     return value
@@ -1165,6 +1196,12 @@ class GuestNetworkSinkObserver(GuestNetworkObserverCapture):
         self.join_error = None
         return super().query_arguments(query, args)
 
+    def parse_link_rows(self, raw, kind):
+        return guest_link_rows(raw, minimum=0 if kind == "dummy" else 1)
+
+    def join_link_rows(self, parsed):
+        return guest_link_join(*parsed)
+
     def read_links(self, read, side):
         if side == "before":
             # read() can exhaust the original deadline before constructing the
@@ -1178,11 +1215,11 @@ class GuestNetworkSinkObserver(GuestNetworkObserverCapture):
             fixed = self.NETWORK_READS[query]
             raw = read(query, fixed[0].rsplit("/", 1)[1], *fixed[1:])
             self.decode_query = query
-            parsed.append(self.decode_links(raw, lambda data: guest_link_rows(data, minimum=0 if kind == "dummy" else 1)))
+            parsed.append(self.decode_links(raw, lambda data: self.parse_link_rows(data, kind)))
         self.join_poll, self.join_error = self.polls, None
         self.join_observation = dict(status="started", side=side)
         try:
-            joined = guest_link_join(*parsed)
+            joined = self.join_link_rows(parsed)
         except BaseException as error:
             self.join_error = error
             self.join_observation["status"] = "failed"
@@ -1221,6 +1258,53 @@ class GuestNetworkSinkObserver(GuestNetworkObserverCapture):
                 and (self.join_observation["status"] != "failed" or self.join_error is error)
                 else dict(status="unobserved", side=None))
         return result
+
+
+class GuestNetworkMetadataObserver(GuestNetworkSinkObserver):
+    """Closed predicate observations, not permission to admit new metadata."""
+    REASONS = frozenset(("document_type", "row_count", "row_type", "unknown_fields", "required_missing",
+        "index_type", "index_range", "index_duplicate", "name_type", "name_shape", "name_duplicate",
+        "flags_type", "flags_count", "flag_type", "flag_shape", "flags_duplicate", "operstate_type", "operstate_value",
+        "link_type_type", "qdisc_type", "linkinfo_type", "linkinfo_unknown_fields", "linkinfo_kind_type",
+        "sink_qdisc", "sink_linkmode", "sink_promiscuity", "sink_allmulti", "sink_flags", "loopback_required"))
+    FIELDS = frozenset(("document", "row", "ifindex", "ifname", "flags", "operstate", "link_type", "qdisc",
+        "linkinfo", "linkmode", "promiscuity", "allmulti"))
+    UNKNOWN_CLASSES = {"link": "linked_device", "link_index": "linked_index", "link_netnsid": "linked_namespace",
+        "master": "master", "xdp": "xdp", "vfinfo_list": "virtual_functions", "vfinfo": "virtual_functions",
+        "altnames": "alternate_names", "stats": "statistics", "stats64": "statistics", "event": "event",
+        "info_slave_kind": "slave_kind", "info_slave_data": "slave_data"}
+
+    def __init__(self):
+        super().__init__()
+        self.metadata = self.unobserved_metadata()
+        self.metadata_error = self.metadata_poll = self.metadata_query = self.metadata_context = None
+
+    @staticmethod
+    def unobserved_metadata():
+        return dict(status="unobserved", context=None, reason=None, field=None, unknown_key_classes=[])
+
+    def metadata_rejected(self, error, reason, field, unknown):
+        require(reason in self.REASONS and field in self.FIELDS and self.metadata_context in ("rows", "join"),
+            "GUEST_LINK_DIAGNOSTIC_ENUM")
+        value = dict(status="rejected", context=self.metadata_context, reason=reason, field=field,
+            unknown_key_classes=sorted({self.UNKNOWN_CLASSES.get(key, "other_unknown") for key in unknown}))
+        require(len(json.dumps(value, separators=(",", ":")).encode()) <= 512, "GUEST_LINK_DIAGNOSTIC_BOUND")
+        self.metadata = value
+        self.metadata_error, self.metadata_poll, self.metadata_query = error, self.polls, self.last_query["name"]
+
+    def parse_link_rows(self, raw, kind):
+        self.metadata_context = "rows"
+        return guest_link_rows(raw, minimum=0 if kind == "dummy" else 1, rejection=self.metadata_rejected)
+
+    def join_link_rows(self, parsed):
+        self.metadata_context = "join"
+        return guest_link_join(*parsed, rejection=self.metadata_rejected)
+
+    def diagnostic_value(self, value, error):
+        result = super().diagnostic_value(value, error)
+        current = (self.metadata_error is error and self.metadata_poll == self.polls
+            and self.metadata_query in self.LINK_QUERIES and self.metadata_query == self.last_query["name"])
+        return dict(result, schema=8, link_metadata=dict(self.metadata) if current else self.unobserved_metadata())
 
 
 def package_uid_probe(adb_command):
@@ -1646,7 +1730,7 @@ def inside(*, avd_only=False):
     # material remain under /state, never among uploaded public evidence.
     children, logs = [], []
     diagnostic = EmulatorDiagnostic()
-    network = GuestNetworkSinkObserver()
+    network = GuestNetworkMetadataObserver()
     prior = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
     def interrupted(_s, _f):
         raise H.Interrupted("EMULATOR_INTERRUPTED")
