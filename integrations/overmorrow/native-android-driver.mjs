@@ -100,6 +100,54 @@ export function vmAddress(log, pid) {
   return { port, token: matches[0][3] };
 }
 
+const OBSERVER_SUBPHASES = new Set(['unobserved', 'logcat_read', 'vm_address', 'forward_create',
+  'forward_port', 'websocket_create', 'websocket_connect', 'get_vm', 'isolate_identity', 'get_isolate', 'isolate_wait']);
+const OBSERVER_CODES = new Set(['unknown', 'validation_failed', 'response_type_invalid', 'adb_exit',
+  'adb_signal', 'adb_output_bound', 'adb_spawn_failed', 'adb_failed', 'websocket_deadline',
+  'websocket_failed', 'vm_request_rejected', 'vm_request_deadline', 'vm_connection_closed',
+  'vm_response_invalid', 'observation_deadline', 'trial_deadline', 'interrupted']);
+
+class ObserverFailure extends Error {
+  constructor(code, exitStatus = null, signal = null) {
+    super('closed native observer failure');
+    this.observerCode = OBSERVER_CODES.has(code) ? code : 'unknown';
+    this.exitStatus = Number.isInteger(exitStatus) && exitStatus >= 0 && exitStatus <= 255 ? exitStatus : null;
+    this.signal = ['SIGKILL', 'SIGTERM'].includes(signal) ? signal : null;
+  }
+}
+
+export function adbFailure(error) {
+  // Node's own callback metadata only: never inspect/export its command,
+  // message, stdout, stderr, path or the VM service authentication URI.
+  const code = error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 'adb_output_bound'
+    : Number.isInteger(error?.code) ? 'adb_exit'
+    : ['SIGKILL', 'SIGTERM'].includes(error?.signal) ? 'adb_signal'
+    : ['ENOENT', 'EACCES', 'EMFILE', 'ENFILE'].includes(error?.code) ? 'adb_spawn_failed' : 'adb_failed';
+  return new ObserverFailure(code, error?.code, error?.signal);
+}
+
+export class ObserverDiagnostic {
+  subphase = 'unobserved';
+  waitingFor = null;
+  async at(subphase, action) {
+    assert.ok(OBSERVER_SUBPHASES.has(subphase));
+    this.subphase = subphase;
+    return action();
+  }
+  failure(error) {
+    const known = error instanceof ObserverFailure;
+    const code = known ? (OBSERVER_CODES.has(error.observerCode) ? error.observerCode : 'unknown')
+      : error?.code === 'ERR_ASSERTION' ? 'validation_failed'
+      : error instanceof TypeError ? 'response_type_invalid' : 'unknown';
+    const subphase = code === 'observation_deadline' ? this.waitingFor : this.subphase;
+    return { schema: 1, subphase: OBSERVER_SUBPHASES.has(subphase) ? subphase : 'unobserved',
+      code, adb_exit_status: known && Number.isInteger(error.exitStatus)
+        && error.exitStatus >= 0 && error.exitStatus <= 255 ? error.exitStatus : null,
+      adb_signal: known && ['SIGKILL', 'SIGTERM'].includes(error.signal) ? error.signal : null,
+      cause_established: false, raw_output_retained: false };
+  }
+}
+
 class ReadOnlyVm {
   constructor(socket) {
     this.socket = socket; this.next = 0; this.pending = new Map();
@@ -108,14 +156,14 @@ class ReadOnlyVm {
         assert.equal(typeof event.data, 'string'); assert.ok(Buffer.byteLength(event.data) <= 131072);
         const value = JSON.parse(event.data), waiting = this.pending.get(value.id);
         if (!waiting) return; this.pending.delete(value.id); clearTimeout(waiting.timer);
-        if (value.error) waiting.reject(new Error('read-only VM request rejected')); else waiting.resolve(value.result);
-      } catch { void this.close().catch(() => {}); }
+        if (value.error) waiting.reject(new ObserverFailure('vm_request_rejected')); else waiting.resolve(value.result);
+      } catch { this.rejectPending('vm_response_invalid'); void this.close().catch(() => {}); }
     });
     socket.addEventListener('close', () => this.rejectPending());
     socket.addEventListener('error', () => this.rejectPending());
   }
-  rejectPending() {
-    for (const item of this.pending.values()) { clearTimeout(item.timer); item.reject(new Error('VM connection closed')); }
+  rejectPending(code = 'vm_connection_closed') {
+    for (const item of this.pending.values()) { clearTimeout(item.timer); item.reject(new ObserverFailure(code)); }
     this.pending.clear();
   }
   async request(method, params = {}) {
@@ -123,7 +171,7 @@ class ReadOnlyVm {
     assert.ok(this.pending.size === 0 && this.socket.readyState === WebSocket.OPEN);
     const id = ++this.next;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('VM request deadline')); }, 3000);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new ObserverFailure('vm_request_deadline')); }, 3000);
       this.pending.set(id, { resolve, reject, timer });
       this.socket.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
     });
@@ -137,6 +185,52 @@ class ReadOnlyVm {
       this.socket.close();
     });
   }
+}
+
+export async function waitForObservation(check, deadline, remaining, milliseconds = 15000) {
+  const end = Math.min(deadline, Date.now() + milliseconds);
+  while (Date.now() < end) { remaining(); const value = await check(); if (value) return value; await pause(250); }
+  throw new ObserverFailure('observation_deadline');
+}
+
+export async function observeVm({ adb, waitFor, pid, diagnostic, ownForward, ownVm, Socket = WebSocket }) {
+  diagnostic.waitingFor = 'vm_address';
+  const address = await waitFor(async () => {
+    const logs = await diagnostic.at('logcat_read', () => adb(['logcat', '-d', '--pid', pid, '-s', 'flutter:I', '-t', '200']));
+    return diagnostic.at('vm_address', () => {
+      try { return vmAddress(logs, pid); } catch { return null; }
+    });
+  });
+  diagnostic.waitingFor = null;
+  ownForward(null); // A failed forward command is not confirmed cleaned up.
+  const port = await diagnostic.at('forward_create', () => adb(['forward', 'tcp:0', `tcp:${address.port}`]));
+  await diagnostic.at('forward_port', () => {
+    assert.match(port, /^[1-9]\d{3,4}$/); assert.ok(Number(port) <= 65535);
+  });
+  ownForward(`tcp:${port}`);
+  const vm = await diagnostic.at('websocket_create', () => {
+    const socket = new Socket(`ws://127.0.0.1:${port}/${address.token}/ws`);
+    const value = new ReadOnlyVm(socket); ownVm(value); return value;
+  });
+  await diagnostic.at('websocket_connect', () => new Promise((done, reject) => {
+    const timer = setTimeout(() => reject(new ObserverFailure('websocket_deadline')), 5000);
+    vm.socket.addEventListener('open', () => { clearTimeout(timer); done(); }, { once: true });
+    vm.socket.addEventListener('error', () => { clearTimeout(timer); reject(new ObserverFailure('websocket_failed')); }, { once: true });
+  }));
+  diagnostic.waitingFor = 'isolate_wait';
+  const isolate = await waitFor(async () => {
+    const machine = await diagnostic.at('get_vm', async () => {
+      const value = await vm.request('getVM'); assert.ok(value.isolates.length <= 8); return value;
+    });
+    for (const candidate of machine.isolates) {
+      await diagnostic.at('isolate_identity', () => assert.match(candidate.id, /^isolates\/[0-9]+$/));
+      const value = await diagnostic.at('get_isolate', () => vm.request('getIsolate', { isolateId: candidate.id }));
+      if (value.extensionRPCs?.includes(EXTENSION)) return candidate.id;
+    }
+    return null;
+  });
+  diagnostic.waitingFor = null;
+  return isolate;
 }
 
 async function main() {
@@ -159,15 +253,19 @@ async function main() {
       core_executed: false, overlay_proven: false, physical_device: false, production_authority: false },
     cleanup: { app_stopped: false, forward_removed: true, vm_closed: true } };
   let vm, forward, appOwned = false, interrupted = false;
+  const diagnostic = new ObserverDiagnostic();
   const started = Date.now(), deadline = started + 180000;
   const onSignal = () => { interrupted = true; };
   process.on('SIGTERM', onSignal); process.on('SIGINT', onSignal);
-  function remaining() { assert.ok(!interrupted && Date.now() < deadline, 'trial deadline/interruption'); }
+  function remaining() {
+    if (interrupted) throw new ObserverFailure('interrupted');
+    if (!(Date.now() < deadline)) throw new ObserverFailure('trial_deadline');
+  }
   async function adb(args, cleanup = false) {
     if (!cleanup) remaining();
     return new Promise((done, reject) => execFile(adbPath, ['-s', serial, ...args], {
       timeout: 8000, killSignal: 'SIGKILL', maxBuffer: 65536, encoding: 'utf8',
-    }, (error, stdout) => error ? reject(new Error('bounded adb command failed')) : done(stdout.trim())));
+    }, (error, stdout) => error ? reject(adbFailure(error)) : done(stdout.trim())));
   }
   async function control(path = '/state') {
     remaining(); assert.ok(['/state', '/phase/refresh', '/phase/short-lived'].includes(path));
@@ -183,9 +281,7 @@ async function main() {
     return value;
   }
   async function waitFor(check, milliseconds = 15000) {
-    const end = Math.min(deadline, Date.now() + milliseconds);
-    while (Date.now() < end) { remaining(); const value = await check(); if (value) return value; await pause(250); }
-    throw new Error('observation deadline');
+    return waitForObservation(check, deadline, remaining, milliseconds);
   }
   let isolate;
   async function snapshot() { remaining(); return validateSnapshot(await vm.request(EXTENSION, { isolateId: isolate })); }
@@ -234,30 +330,9 @@ async function main() {
     appOwned = true; await adb(['shell', 'am', 'start', '-W', '-n', COMPONENT]);
     const pid = await adb(['shell', 'pidof', PACKAGE]); assert.match(pid, /^[1-9]\d{0,7}$/);
     report.phase = 'read-only-observer';
-    const address = await waitFor(async () => {
-      const logs = await adb(['logcat', '-d', '--pid', pid, '-s', 'flutter:I', '-t', '200']);
-      try { return vmAddress(logs, pid); } catch { return null; }
-    });
-    report.cleanup.forward_removed = false;
-    const port = await adb(['forward', 'tcp:0', `tcp:${address.port}`]);
-    assert.match(port, /^[1-9]\d{3,4}$/); assert.ok(Number(port) <= 65535);
-    forward = `tcp:${port}`; report.cleanup.forward_removed = false;
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/${address.token}/ws`);
-    vm = new ReadOnlyVm(socket); report.cleanup.vm_closed = false;
-    await new Promise((done, reject) => {
-      const timer = setTimeout(() => reject(new Error('VM connect deadline')), 5000);
-      socket.addEventListener('open', () => { clearTimeout(timer); done(); }, { once: true });
-      socket.addEventListener('error', () => { clearTimeout(timer); reject(new Error('VM connection failed')); }, { once: true });
-    });
-    isolate = await waitFor(async () => {
-      const machine = await vm.request('getVM'); assert.ok(machine.isolates.length <= 8);
-      for (const candidate of machine.isolates) {
-        assert.match(candidate.id, /^isolates\/[0-9]+$/);
-        const value = await vm.request('getIsolate', { isolateId: candidate.id });
-        if (value.extensionRPCs?.includes(EXTENSION)) return candidate.id;
-      }
-      return null;
-    });
+    isolate = await observeVm({ adb, waitFor, pid, diagnostic,
+      ownForward(value) { forward = value; report.cleanup.forward_removed = false; },
+      ownVm(value) { vm = value; report.cleanup.vm_closed = false; } });
     report.phase = 'initial-native-products';
     const initial = await products(1); report.observations.initial = await collect(initial);
     report.checks.initial_exact_native_rows = true;
@@ -293,8 +368,9 @@ async function main() {
     report.observations.lifecycle = resumed.lifecycle;
     report.scope.mounted_widget_tables = true; report.scope.real_adb_interaction = true;
     report.phase = 'complete'; report.passed = true;
-  } catch {
+  } catch (error) {
     report.failure = 'NATIVE_TRIAL_PHASE_FAILED';
+    if (report.phase === 'read-only-observer') report.failure_diagnostic = diagnostic.failure(error);
   } finally {
     if (vm) try { await vm.close(); report.cleanup.vm_closed = true; } catch { /* retain uncertainty */ }
     if (forward) try { await adb(['forward', '--remove', forward], true); report.cleanup.forward_removed = true; } catch { /* retain uncertainty */ }
