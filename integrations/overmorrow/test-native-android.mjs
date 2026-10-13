@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { HEADERS, PACKAGE, COMPONENT, numberEqual, validateSnapshot, verifyTable, vmAddress,
-  adbFailure, ObserverDiagnostic, observeVm, waitForObservation } from './native-android-driver.mjs';
+  adbFailure, ObserverDiagnostic, observeVm, waitForObservation, startInstalledApp,
+  recordDriverFailure } from './native-android-driver.mjs';
 import { nativeFixtureState, API_PORT, CONTROL_PORT } from './native-android-fixture.mjs';
 
 const NOW = '2026-10-12T02:00:00.000Z';
@@ -256,8 +257,113 @@ test('diagnostic snapshot is frozen before cleanup and cannot be relabeled by la
   fixture.diagnostic.failure(adbFailure({ signal: 'SIGKILL' }));
   assert.equal(JSON.stringify(receipt), before);
   const source = await readFile(new URL('./native-android-driver.mjs', import.meta.url), 'utf8');
-  assert.ok(source.indexOf('report.failure_diagnostic = diagnostic.failure(error)') < source.indexOf('if (vm) try'));
-  assert.ok(source.includes("if (report.phase === 'read-only-observer')"));
+  assert.ok(source.indexOf('recordDriverFailure(report, diagnostic, error);') < source.indexOf('if (vm) try'));
+  assert.ok(source.includes("['installed-app', 'read-only-observer'].includes(report.phase)"));
   assert.ok(source.includes('timeout: 8000, killSignal: \'SIGKILL\', maxBuffer: 65536'));
   assert.ok(source.includes('deadline = started + 180000'));
+});
+
+function installedFixture(options = {}) {
+  const diagnostic = new ObserverDiagnostic(), calls = [];
+  const report = { passed: false, phase: 'installed-app', scope: { installed_android_app: false } };
+  let appOwned = false;
+  return { diagnostic, report, calls, owned: () => appOwned,
+    async run() {
+      try {
+        return await startInstalledApp({ diagnostic,
+          async adb(args) {
+            const operation = args[1] === 'pm' ? 'package_check' : args[1] === 'pidof' ? 'pidof'
+              : args[2] === 'force-stop' ? 'force_stop' : 'app_start';
+            calls.push({ operation, args, appOwned });
+            if (options.fail === operation) throw adbFailure({ code: 1, stdout: PRIVATE_TEXT, stderr: PRIVATE_TEXT });
+            if (operation === 'package_check') return options.package ?? 'package:/data/app/private/base.apk';
+            return operation === 'pidof' ? (options.pid ?? '1234') : '';
+          },
+          installed() { report.scope.installed_android_app = true; }, ownApp() { appOwned = true; },
+        });
+      } catch (error) { recordDriverFailure(report, diagnostic, error); throw error; }
+    },
+  };
+}
+test('installed-app helper preserves exact command sequence, validation and cleanup ownership', async () => {
+  const fixture = installedFixture();
+  assert.equal(await fixture.run(), '1234');
+  assert.deepEqual(fixture.calls.map(row => row.args), [
+    ['shell', 'pm', 'path', PACKAGE], ['shell', 'am', 'force-stop', PACKAGE],
+    ['shell', 'am', 'start', '-W', '-n', COMPONENT], ['shell', 'pidof', PACKAGE],
+  ]);
+  assert.deepEqual(fixture.calls.map(row => row.appOwned), [false, false, true, true]);
+  assert.equal(fixture.report.scope.installed_android_app, true);
+  assert.equal(fixture.report.passed, false); // This helper alone is not app acceptance.
+  assert.ok(!Object.hasOwn(fixture.report, 'failure_diagnostic'));
+});
+test('every installed-app command failure reports only its own closed boundary and preserves ownership', async () => {
+  for (const [phase, installed, owned, commands] of [
+    ['package_check', false, false, 1], ['force_stop', true, false, 2],
+    ['app_start', true, true, 3], ['pidof', true, true, 4],
+  ]) {
+    const fixture = installedFixture({ fail: phase });
+    await assert.rejects(fixture.run());
+    assert.equal(fixture.calls.length, commands);
+    assert.equal(fixture.report.scope.installed_android_app, installed); assert.equal(fixture.owned(), owned);
+    assert.equal(fixture.report.failure, 'NATIVE_TRIAL_PHASE_FAILED');
+    assert.equal(fixture.report.failure_diagnostic.subphase, phase);
+    assert.equal(fixture.report.failure_diagnostic.code, 'adb_exit');
+    assert.equal(fixture.report.failure_diagnostic.adb_exit_status, 1);
+    assert.ok(Buffer.byteLength(JSON.stringify(fixture.report.failure_diagnostic)) <= 512);
+    assert.ok(!JSON.stringify(fixture.report).includes('private'));
+    assert.equal(fixture.report.passed, false);
+  }
+});
+test('package and PID outputs retain their original strict rejection without exporting the value', async () => {
+  for (const [options, subphase, installed, owned] of [
+    [{ package: PRIVATE_TEXT }, 'package_check', false, false],
+    [{ pid: PRIVATE_TEXT }, 'pid_validation', true, true],
+    [{ pid: '1234\n1235' }, 'pid_validation', true, true],
+    [{ pid: '' }, 'pid_validation', true, true],
+  ]) {
+    const fixture = installedFixture(options); await assert.rejects(fixture.run());
+    assert.equal(fixture.report.scope.installed_android_app, installed); assert.equal(fixture.owned(), owned);
+    assert.equal(fixture.report.failure_diagnostic.subphase, subphase);
+    assert.equal(fixture.report.failure_diagnostic.code, 'validation_failed');
+    for (const value of ['private', '1234', '1235', 'http://']) assert.ok(!JSON.stringify(fixture.report).includes(value));
+  }
+});
+test('failure publisher binds installed and observer phases but later control failures cannot inherit their context', async () => {
+  const diagnostic = new ObserverDiagnostic();
+  await diagnostic.at('get_isolate', () => {});
+  for (const phase of ['installed-app', 'read-only-observer']) {
+    const report = { phase, passed: false };
+    recordDriverFailure(report, diagnostic, adbFailure({ signal: 'SIGKILL' }));
+    assert.equal(report.failure_diagnostic.code, 'adb_signal'); assert.equal(report.failure_diagnostic.adb_signal, 'SIGKILL');
+  }
+  for (const phase of ['initial-native-products', 'actual-refresh', 'background-resume-expiry']) {
+    const report = { phase, passed: false };
+    recordDriverFailure(report, diagnostic, new TypeError(PRIVATE_TEXT));
+    assert.deepEqual(report, { phase, passed: false, failure: 'NATIVE_TRIAL_PHASE_FAILED' });
+  }
+});
+test('interruption before the first observer query cannot inherit installed PID validation', async () => {
+  const fixture = installedFixture();
+  const pid = await fixture.run();
+  assert.equal(fixture.diagnostic.subphase, 'pid_validation');
+  fixture.report.phase = 'read-only-observer';
+  // Use the existing closed error type without exposing a new production API.
+  const Failure = adbFailure({}).constructor, interrupted = new Failure('interrupted');
+  let checks = 0;
+  try {
+    await observeVm({ pid, diagnostic: fixture.diagnostic,
+      async waitFor() { throw interrupted; },
+      async adb() { checks++; }, ownForward() { checks++; }, ownVm() { checks++; },
+    });
+    assert.fail('the pre-query interruption must propagate');
+  } catch (error) {
+    assert.equal(error, interrupted);
+    recordDriverFailure(fixture.report, fixture.diagnostic, error);
+  }
+  assert.equal(checks, 0); assert.equal(fixture.owned(), true);
+  assert.equal(fixture.report.scope.installed_android_app, true);
+  assert.equal(fixture.report.failure_diagnostic.subphase, 'unobserved');
+  assert.equal(fixture.report.failure_diagnostic.code, 'interrupted');
+  assert.equal(fixture.report.passed, false);
 });

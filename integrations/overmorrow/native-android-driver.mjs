@@ -101,7 +101,8 @@ export function vmAddress(log, pid) {
 }
 
 const OBSERVER_SUBPHASES = new Set(['unobserved', 'logcat_read', 'vm_address', 'forward_create',
-  'forward_port', 'websocket_create', 'websocket_connect', 'get_vm', 'isolate_identity', 'get_isolate', 'isolate_wait']);
+  'forward_port', 'websocket_create', 'websocket_connect', 'get_vm', 'isolate_identity', 'get_isolate', 'isolate_wait',
+  'package_check', 'force_stop', 'app_start', 'pidof', 'pid_validation']);
 const OBSERVER_CODES = new Set(['unknown', 'validation_failed', 'response_type_invalid', 'adb_exit',
   'adb_signal', 'adb_output_bound', 'adb_spawn_failed', 'adb_failed', 'websocket_deadline',
   'websocket_failed', 'vm_request_rejected', 'vm_request_deadline', 'vm_connection_closed',
@@ -146,6 +147,27 @@ export class ObserverDiagnostic {
       adb_signal: known && ['SIGKILL', 'SIGTERM'].includes(error.signal) ? error.signal : null,
       cause_established: false, raw_output_retained: false };
   }
+}
+
+export function recordDriverFailure(report, diagnostic, error) {
+  report.failure = 'NATIVE_TRIAL_PHASE_FAILED';
+  if (['installed-app', 'read-only-observer'].includes(report.phase)) {
+    report.failure_diagnostic = diagnostic.failure(error);
+  }
+}
+
+export async function startInstalledApp({ adb, diagnostic, installed, ownApp }) {
+  await diagnostic.at('package_check', async () => {
+    assert.match(await adb(['shell', 'pm', 'path', PACKAGE]), /^package:\/data\/app\/[^\r\n]+\/base\.apk$/);
+  });
+  installed();
+  await diagnostic.at('force_stop', () => adb(['shell', 'am', 'force-stop', PACKAGE]));
+  // Retain ownership before the existing launch command, including failure.
+  ownApp();
+  await diagnostic.at('app_start', () => adb(['shell', 'am', 'start', '-W', '-n', COMPONENT]));
+  const pid = await diagnostic.at('pidof', () => adb(['shell', 'pidof', PACKAGE]));
+  await diagnostic.at('pid_validation', () => assert.match(pid, /^[1-9]\d{0,7}$/));
+  return pid;
 }
 
 class ReadOnlyVm {
@@ -194,6 +216,7 @@ export async function waitForObservation(check, deadline, remaining, millisecond
 }
 
 export async function observeVm({ adb, waitFor, pid, diagnostic, ownForward, ownVm, Socket = WebSocket }) {
+  diagnostic.subphase = 'unobserved';
   diagnostic.waitingFor = 'vm_address';
   const address = await waitFor(async () => {
     const logs = await diagnostic.at('logcat_read', () => adb(['logcat', '-d', '--pid', pid, '-s', 'flutter:I', '-t', '200']));
@@ -324,11 +347,8 @@ async function main() {
     });
   }
   try {
-    assert.match(await adb(['shell', 'pm', 'path', PACKAGE]), /^package:\/data\/app\/[^\r\n]+\/base\.apk$/);
-    report.scope.installed_android_app = true;
-    await adb(['shell', 'am', 'force-stop', PACKAGE]);
-    appOwned = true; await adb(['shell', 'am', 'start', '-W', '-n', COMPONENT]);
-    const pid = await adb(['shell', 'pidof', PACKAGE]); assert.match(pid, /^[1-9]\d{0,7}$/);
+    const pid = await startInstalledApp({ adb, diagnostic,
+      installed() { report.scope.installed_android_app = true; }, ownApp() { appOwned = true; } });
     report.phase = 'read-only-observer';
     isolate = await observeVm({ adb, waitFor, pid, diagnostic,
       ownForward(value) { forward = value; report.cleanup.forward_removed = false; },
@@ -369,8 +389,7 @@ async function main() {
     report.scope.mounted_widget_tables = true; report.scope.real_adb_interaction = true;
     report.phase = 'complete'; report.passed = true;
   } catch (error) {
-    report.failure = 'NATIVE_TRIAL_PHASE_FAILED';
-    if (report.phase === 'read-only-observer') report.failure_diagnostic = diagnostic.failure(error);
+    recordDriverFailure(report, diagnostic, error);
   } finally {
     if (vm) try { await vm.close(); report.cleanup.vm_closed = true; } catch { /* retain uncertainty */ }
     if (forward) try { await adb(['forward', '--remove', forward], true); report.cleanup.forward_removed = true; } catch { /* retain uncertainty */ }
