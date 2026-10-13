@@ -137,6 +137,44 @@ class ProfileTests(unittest.TestCase):
         self.assertNotIn('MockClient', source)
         self.assertNotIn('setState(', source)
 
+    def test_read_only_product_observation_contract_and_no_raw_app_error(self):
+        source = (HERE / 'native-android-entrypoint.dart').read_text()
+        for field in ('state?.isLoading', 'state.data != null', 'state.weatherError != null',
+                      'state.data?.nativeProducts?.weather != null', 'widget is NativeProductView',
+                      'widget is ErrorWidget', "'provider': providerObservation()"):
+            self.assertIn(field, source)
+        self.assertNotIn('weatherError.toString', source)
+        self.assertNotIn('errorDesc', source)
+        self.assertNotIn('DateTime.now', source)
+        provider = (HERE / 'overlay/lib/volparossa/provider.dart').read_text()
+        driver = (HERE / 'native-android-driver.mjs').read_text()
+        for dart_enum, key in (('_Stage', 'stage'), ('_Outcome', 'outcome'),
+                               ('_Http', 'http_class'), ('_Clock', 'clock_relation')):
+            values = re.search(r'enum ' + dart_enum + r' \{([^}]+)\}', provider).group(1)
+            names = [v.strip() for v in values.split(',') if v.strip()]
+            projection = re.search(r'    ' + key + r': \[([^]]+)\]', driver).group(1)
+            self.assertEqual(names, re.findall(r"'([A-Za-z]+)'", projection))
+        self.assertIn('final observed = _LoadObservation();\n    _lastLoad = observed;', provider)
+        self.assertIn('if (closed || outcome != _Outcome.pending) return;', provider)
+        self.assertIn('providerProductDeadline - providerAbortDrain', provider)
+        self.assertIn('const providerBusyRetries = 5;', provider)
+        self.assertIn('const providerProductDeadline = Duration(seconds: 195);', provider)
+        self.assertLess(provider.index('final product = NativeProduct.parse('),
+                        provider.index('observed.productValidated = true;'))
+
+    def test_existing_23_dart_groups_preserved_with_closed_diagnostic_cases(self):
+        tests = list((HERE / 'overlay/test').glob('*_test.dart'))
+        # 22 declarations; the unchanged responsive UI declaration is run at
+        # two widths, producing the existing 23 hosted Flutter test cases.
+        self.assertEqual(sum(len(re.findall(r'\btest(?:Widgets)?\s*\(', path.read_text()))
+                             for path in tests), 22)
+        self.assertIn('for (final width in [390.0, 900.0])',
+                      (HERE / 'overlay/test/volparossa_ui_test.dart').read_text())
+        provider = (HERE / 'overlay/test/volparossa_provider_test.dart').read_text()
+        for case in ('beforeAcquired', 'atOrAfterExpiry', 'private-transport', 'private-stream',
+                     'observationBeforeLate', 'expect(providerObservation(), newer)', 'busyLimit'):
+            self.assertIn(case, provider)
+
 
 class FilesTests(unittest.TestCase):
     def setUp(self):

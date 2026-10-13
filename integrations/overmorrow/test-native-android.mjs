@@ -513,7 +513,7 @@ test('failure publisher keeps historical startup schema and resets product-phase
     diagnostic.beginProducts(1);
     recordDriverFailure(report, diagnostic, new TypeError(PRIVATE_TEXT));
     assert.equal(report.failure, 'NATIVE_TRIAL_PHASE_FAILED');
-    assert.equal(report.failure_diagnostic.schema, 2);
+    assert.equal(report.failure_diagnostic.schema, 3);
     assert.equal(report.failure_diagnostic.subphase, 'unobserved');
     assert.equal(report.failure_diagnostic.progress.weather_requests_observed, null);
   }
@@ -695,7 +695,7 @@ async function rejectedProducts(fixture) {
   recordDriverFailure(fixture.report, fixture.diagnostic, failure);
   assert.equal(fixture.report.passed, false);
   const receipt = fixture.report.failure_diagnostic;
-  assert.equal(receipt.schema, 2); assert.equal(receipt.acceptance_evidence, false);
+  assert.equal(receipt.schema, 3); assert.equal(receipt.acceptance_evidence, false);
   assert.equal(receipt.cause_established, false); assert.equal(receipt.raw_output_retained, false);
   assert.ok(Buffer.byteLength(JSON.stringify(receipt)) <= 2048);
   for (const raw of ['private-token', 'http://', '/private/', 'Expires ', 'Temperature']) {
@@ -899,7 +899,7 @@ test('missing value, expiry consumption, real lifecycle, hidden tables and no-ex
     if (stage === 'expired_tables') assert.equal(receipt.progress.tables_remaining, 1);
   }
 });
-test('schema2 is a fixed bounded projection, cannot echo arbitrary data, and optional diagnosis cannot mask failure', () => {
+test('schema3 retains bounded progress, cannot echo arbitrary data, and optional diagnosis cannot mask failure', () => {
   const diagnostic = new ObserverDiagnostic(); diagnostic.beginProducts(1);
   const keys = Object.keys(diagnostic.productFailure(new Error()).progress);
   for (const invalid of [PRIVATE_TEXT, {}, [], NaN, Infinity, -1, 999999, 1.5]) {
@@ -916,4 +916,124 @@ test('schema2 is a fixed bounded projection, cannot echo arbitrary data, and opt
   diagnostic.productFailure = () => { throw new Error(PRIVATE_TEXT); };
   recordDriverFailure(report, diagnostic, new Error(PRIVATE_TEXT));
   assert.deepEqual(report, { phase: 'actual-refresh', passed: false, failure: 'NATIVE_TRIAL_PHASE_FAILED' });
+});
+
+function appDiagnostic() {
+  const product = () => ({ stage: 'complete', outcome: 'success', http_class: 'ok',
+    clock_relation: 'withinWindow', attempts: 1, response_received: true,
+    status_accepted: true, body_complete: true, json_decoded: true, product_validated: true });
+  return { schema: 1, provider: { schema: 1, weather: product(), air_quality: product() },
+    app: { home: 'single', loading: false, has_data: true, has_error: false,
+      has_weather: true, has_air_quality: true, weather_view_mounted: true,
+      air_quality_view_mounted: true, framework_error_mounted: false } };
+}
+
+test('actual snapshot-to-failure path separates request, response, parsing, clocks and mounted app state', async () => {
+  for (const [outcome, clock, stage, received, decoded] of [
+    ['transport', 'unknown', 'request', false, false],
+    ['httpStatus', 'unknown', 'headers', true, false],
+    ['jsonEncoding', 'unknown', 'decode', true, false],
+    ['schema', 'unknown', 'validate', true, true],
+    ['futureAcquired', 'beforeAcquired', 'validate', true, true],
+    ['expired', 'atOrAfterExpiry', 'validate', true, true],
+    ['success', 'withinWindow', 'complete', true, true],
+  ]) {
+    const observed = appDiagnostic();
+    for (const key of ['weather', 'air_quality']) Object.assign(observed.provider[key], {
+      outcome, clock_relation: clock, stage, response_received: received,
+      http_class: !received ? 'unobserved' : outcome === 'httpStatus' ? 'serverError' : 'ok',
+      status_accepted: received && outcome !== 'httpStatus', body_complete: stage !== 'headers' && received,
+      json_decoded: decoded, product_validated: outcome === 'success',
+    });
+    Object.assign(observed.app, { has_data: outcome === 'success', has_error: outcome !== 'success',
+      has_weather: outcome === 'success', has_air_quality: outcome === 'success',
+      weather_view_mounted: false, air_quality_view_mounted: false });
+    const fixture = productExerciseFixture({ snapshot(value) { value.tables = []; value.labels = []; value.diagnostic = observed; } });
+    const { receipt } = await rejectedProducts(fixture);
+    assert.equal(receipt.subphase, 'products_unobserved');
+    assert.equal(receipt.progress.weather_requests_observed, 1);
+    assert.equal(receipt.last_snapshot.snapshot_subphase, 'product_snapshot');
+    assert.deepEqual(receipt.last_snapshot.provider.weather, observed.provider.weather);
+    assert.deepEqual(receipt.last_snapshot.app, observed.app);
+    assert.deepEqual(fixture.report.checks, {}); // Even parser success cannot supply absent native UI.
+  }
+});
+
+test('diagnostic projection requires exact closed shapes and bounds; never exports raw values', () => {
+  const diagnostic = new ObserverDiagnostic(); diagnostic.beginProducts(1);
+  const render = value => { diagnostic.observeProducts({ diagnostic: value }); return diagnostic.productFailure(new Error(PRIVATE_TEXT)); };
+  const nulls = [null, [], {}, PRIVATE_TEXT, true, 123];
+  for (const value of [...nulls, { ...appDiagnostic(), extra: PRIVATE_TEXT }, { ...appDiagnostic(), schema: 2 }]) {
+    assert.equal(render(value).last_snapshot, null);
+  }
+  for (const key of Object.keys(appDiagnostic().provider.weather)) {
+    for (const invalid of [...nulls, -1, 7, 1.5, NaN, Infinity]) {
+      if (typeof invalid === 'boolean' && ['response_received', 'status_accepted', 'body_complete', 'json_decoded', 'product_validated'].includes(key)) continue;
+      const value = appDiagnostic(); value.provider.weather[key] = invalid;
+      const receipt = render(value);
+      assert.equal(receipt.last_snapshot.provider.weather, null);
+      assert.deepEqual(receipt.last_snapshot.provider.air_quality, value.provider.air_quality);
+      assert.ok(!JSON.stringify(receipt).includes(PRIVATE_TEXT));
+    }
+    const value = appDiagnostic(); delete value.provider.weather[key];
+    assert.equal(render(value).last_snapshot.provider.weather, null);
+  }
+  for (const [target, field] of [['provider', 'provider'], ['app', 'app']]) {
+    const value = appDiagnostic(); value[target][PRIVATE_TEXT] = PRIVATE_TEXT;
+    assert.equal(render(value).last_snapshot[field], null);
+  }
+  const value = appDiagnostic(); value.provider.weather[PRIVATE_TEXT] = PRIVATE_TEXT;
+  assert.equal(render(value).last_snapshot.provider.weather, null);
+  for (const home of ['absent', 'multiple']) {
+    const value = appDiagnostic(); value.app.home = home;
+    for (const key of ['loading', 'has_data', 'has_error', 'has_weather', 'has_air_quality']) value.app[key] = null;
+    assert.deepEqual(render(value).last_snapshot.app, value.app);
+    value.app.has_error = false; assert.equal(render(value).last_snapshot.app, null);
+  }
+  for (const key of Object.keys(appDiagnostic().app)) {
+    const value = appDiagnostic(); value.app[key] = PRIVATE_TEXT;
+    assert.equal(render(value).last_snapshot.app, null);
+  }
+  const minimal = appDiagnostic(); minimal.provider.weather.attempts = 0;
+  assert.equal(render(minimal).last_snapshot.provider.weather.attempts, 0);
+  minimal.provider.weather.attempts = 6;
+  assert.equal(render(minimal).last_snapshot.provider.weather.attempts, 6);
+  diagnostic.appObservation = { snapshot_subphase: PRIVATE_TEXT, provider: { weather: PRIVATE_TEXT, air_quality: {} }, app: PRIVATE_TEXT };
+  assert.ok(!JSON.stringify(diagnostic.productFailure(new Error())).includes(PRIVATE_TEXT));
+});
+
+test('new snapshot failures, invalid optional data and phase transitions cannot retain stale app observations', async () => {
+  const primary = new Error(PRIVATE_TEXT);
+  const fixture = productExerciseFixture({ snapshot(value, report, diagnostic) {
+    value.tables = []; value.labels = [];
+    if (diagnostic.progress.collection_attempts === 1) value.diagnostic = appDiagnostic();
+    else throw primary;
+  } });
+  const failure = await rejectedProducts(fixture);
+  assert.equal(failure.failure, primary); assert.equal(failure.receipt.last_snapshot, null);
+  const diagnostic = new ObserverDiagnostic(); diagnostic.beginProducts(1);
+  diagnostic.observeProducts({ diagnostic: appDiagnostic() });
+  assert.ok(diagnostic.productFailure(primary).last_snapshot);
+  diagnostic.beginProducts(2); assert.equal(diagnostic.productFailure(primary).last_snapshot, null);
+  diagnostic.observeProducts({ diagnostic: appDiagnostic() });
+  diagnostic.observeProducts({ get diagnostic() { throw primary; } });
+  assert.equal(diagnostic.productFailure(primary).last_snapshot, null);
+  const succeeds = productExerciseFixture({ snapshot(value) { value.diagnostic = { secret: PRIVATE_TEXT }; } });
+  await succeeds.run(); assert.equal(succeeds.report.passed, true);
+  assert.ok(!JSON.stringify(succeeds.report).includes(PRIVATE_TEXT));
+});
+
+test('read-only outcomes are not final UI acceptance, and worst-case closed receipt remains bounded', async () => {
+  const observed = appDiagnostic();
+  Object.assign(observed.app, { loading: true, has_error: true, framework_error_mounted: true });
+  for (const item of Object.values(observed.provider).filter(value => typeof value === 'object')) {
+    Object.assign(item, { stage: 'unobserved', outcome: 'futureAcquired', http_class: 'serverError',
+      clock_relation: 'atOrAfterExpiry', attempts: 6 });
+  }
+  const fixture = productExerciseFixture({ snapshot(value) { value.diagnostic = observed; } });
+  await fixture.run(); assert.equal(fixture.report.passed, true);
+  assert.equal(fixture.report.scope.mounted_widget_tables, true);
+  // The contradictory synthetic diagnostic cannot override actual assertion results.
+  fixture.diagnostic.subphase = 'background_pause';
+  assert.ok(Buffer.byteLength(JSON.stringify(fixture.diagnostic.productFailure(adbFailure({ signal: 'SIGKILL' })))) <= 2048);
 });

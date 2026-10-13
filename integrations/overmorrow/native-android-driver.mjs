@@ -164,6 +164,7 @@ export class ObserverDiagnostic {
   }
   beginProducts(expected) {
     this.subphase = 'unobserved'; this.waitingFor = null;
+    this.appObservation = null;
     this.progress = { expected_requests_per_product: expected, collection_attempts: 0, refresh_search_attempts: 0 };
   }
   note(values) {
@@ -171,13 +172,32 @@ export class ObserverDiagnostic {
     // operation's exception. No values are exported without the closed projection.
     try { Object.assign(this.progress, values()); } catch { /* retain unknown */ }
   }
+  observeProducts(snapshot) {
+    this.appObservation = null;
+    try {
+      const value = snapshot?.diagnostic;
+      if (!exactKeys(value, ['schema', 'provider', 'app']) || value.schema !== 1) return;
+      const provider = exactKeys(value.provider, ['schema', 'weather', 'air_quality']) && value.provider.schema === 1
+        ? { weather: projectProviderObservation(value.provider.weather), air_quality: projectProviderObservation(value.provider.air_quality) } : null;
+      this.appObservation = {
+        snapshot_subphase: OBSERVER_SUBPHASES.has(this.subphase) ? this.subphase : 'unobserved',
+        provider, app: projectAppObservation(value.app),
+      };
+    } catch { /* Optional observation cannot change the real snapshot outcome. */ }
+  }
   productFailure(error) {
     const value = this.progress ?? {};
     // Null means no valid bounded observation; zero is an observed zero.
     // Never coerce, round, clamp or echo an out-of-contract value.
     const count = (key, max) => Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= max ? value[key] : null;
     const flag = key => typeof value[key] === 'boolean' ? value[key] : null;
-    return { ...this.failure(error), schema: 2, acceptance_evidence: false,
+    const last = this.appObservation;
+    const lastSnapshot = exactKeys(last, ['snapshot_subphase', 'provider', 'app'])
+      ? { snapshot_subphase: OBSERVER_SUBPHASES.has(last.snapshot_subphase) ? last.snapshot_subphase : 'unobserved',
+        provider: exactKeys(last.provider, ['weather', 'air_quality'])
+          ? { weather: projectProviderObservation(last.provider.weather), air_quality: projectProviderObservation(last.provider.air_quality) } : null,
+        app: projectAppObservation(last.app) } : null;
+    return { ...this.failure(error), schema: 3, acceptance_evidence: false,
       progress: {
         expected_requests_per_product: count('expected_requests_per_product', 3),
         weather_requests_observed: count('weather_requests_observed', 3),
@@ -188,8 +208,36 @@ export class ObserverDiagnostic {
         weather_metadata_matches: count('weather_metadata_matches', 6), air_quality_metadata_matches: count('air_quality_metadata_matches', 6),
         expiry_labels_matched: count('expiry_labels_matched', 2), expired_labels_observed: count('expired_labels_observed', 2),
         tables_remaining: count('tables_remaining', 4),
-      } };
+      }, last_snapshot: lastSnapshot };
   }
+}
+
+function projectProviderObservation(value) {
+  const enums = {
+    stage: ['unobserved', 'request', 'headers', 'body', 'decode', 'validate', 'complete'],
+    outcome: ['unobserved', 'pending', 'transport', 'httpStatus', 'contentType', 'contentLength',
+      'bodyTooLarge', 'bodyStream', 'jsonEncoding', 'schema', 'futureAcquired', 'expired',
+      'success', 'busy', 'busyLimit', 'deadline', 'areaMismatch'],
+    http_class: ['unobserved', 'ok', 'busy', 'redirect', 'clientError', 'serverError', 'other'],
+    clock_relation: ['unknown', 'beforeAcquired', 'atOrAfterExpiry', 'withinWindow'],
+  };
+  const flags = ['response_received', 'status_accepted', 'body_complete', 'json_decoded', 'product_validated'];
+  if (!exactKeys(value, [...Object.keys(enums), 'attempts', ...flags])
+      || Object.entries(enums).some(([key, allowed]) => !allowed.includes(value[key]))
+      || !Number.isInteger(value.attempts) || value.attempts < 0 || value.attempts > 6
+      || flags.some(key => typeof value[key] !== 'boolean')) return null;
+  // Copy only fixed typed fields. This is the last attempt in the current load,
+  // not a request history, timestamp, provider assertion or acceptance flag.
+  return Object.fromEntries([...Object.keys(enums), 'attempts', ...flags].map(key => [key, value[key]]));
+}
+
+function projectAppObservation(value) {
+  const state = ['loading', 'has_data', 'has_error', 'has_weather', 'has_air_quality'];
+  const widgets = ['weather_view_mounted', 'air_quality_view_mounted', 'framework_error_mounted'];
+  if (!exactKeys(value, ['home', ...state, ...widgets]) || !['absent', 'single', 'multiple'].includes(value.home)
+      || state.some(key => value.home === 'single' ? typeof value[key] !== 'boolean' : value[key] !== null)
+      || widgets.some(key => typeof value[key] !== 'boolean')) return null;
+  return Object.fromEntries(['home', ...state, ...widgets].map(key => [key, value[key]]));
 }
 
 export function recordDriverFailure(report, diagnostic, error) {
@@ -408,7 +456,14 @@ export async function readFixtureControl({ remaining, diagnostic, fetchControl =
 // The production sequence is shared with inert contract tests. Injectable I/O
 // is a test seam, never an alternate native acceptance path. Keep the original
 // exact predicates, commands, attempt counts and wait budgets here.
-export async function exerciseNativeProducts({ report, diagnostic, control, waitFor, snapshot, adb, remaining, sleep = pause }) {
+export async function exerciseNativeProducts({ report, diagnostic, control, waitFor, snapshot: readSnapshot, adb, remaining, sleep = pause }) {
+  async function snapshot() {
+    // A failed or malformed new read must not inherit an earlier observation.
+    diagnostic.observeProducts(null);
+    const value = await readSnapshot();
+    diagnostic.observeProducts(value);
+    return value;
+  }
   async function swipe(value) {
     const { width, height } = value.screen, x = Math.round(width * .5);
     await diagnostic.at('swipe', () => adb(['shell', 'input', 'swipe', String(x), String(Math.round(height * .78)),

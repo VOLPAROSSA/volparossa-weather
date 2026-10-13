@@ -4,6 +4,16 @@ import 'dart:math' as math;
 
 typedef JsonObject = Map<String, dynamic>;
 
+enum ProductClockRejection { futureAcquired, expired }
+
+// A closed first-failed freshness predicate, not payload/error text or a new
+// clock authority. Still a FormatException with the same public message.
+class ProductClockException extends FormatException {
+  final ProductClockRejection reason;
+  const ProductClockException(this.reason)
+    : super('Invalid VOLPAROSSA product');
+}
+
 void requireProduct(bool condition) {
   if (!condition) throw const FormatException('Invalid VOLPAROSSA product');
 }
@@ -154,11 +164,16 @@ class NativeProduct {
           originalExpiry.isAfter(acquired) &&
           originalExpiry.difference(acquired).inMilliseconds <= 1800000 &&
           !originalExpiry.isAfter(run.add(const Duration(hours: 72))) &&
-          utc(freshness['expires_at']) == expires &&
-          !now.isBefore(acquired) &&
-          now.isBefore(expires) &&
-          freshness['stale'] == false,
+          utc(freshness['expires_at']) == expires,
     );
+    // Preserve the original conjunction's order and strict boundaries.
+    if (now.isBefore(acquired)) {
+      throw const ProductClockException(ProductClockRejection.futureAcquired);
+    }
+    if (!now.isBefore(expires)) {
+      throw const ProductClockException(ProductClockRejection.expired);
+    }
+    requireProduct(freshness['stale'] == false);
     final units = object(original['units']);
     final implemented = airQuality
         ? <String, String>{'pm2_5': 'ug/m3', 'pm10': 'ug/m3'}

@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'main.dart' as app;
 import 'volparossa/profile.dart';
+import 'volparossa/provider.dart';
 import 'volparossa/views.dart';
 
 class _Lifecycle extends WidgetsBindingObserver {
@@ -32,6 +33,9 @@ Map<String, Object?> _snapshot(_Lifecycle lifecycle) {
   final tables = <Map<String, Object?>>[];
   final labels = <String>[];
   final refresh = <Map<String, Object?>>[];
+  var homes = 0;
+  app.MyHomePageState? home;
+  var weatherView = false, airQualityView = false, frameworkError = false;
   var visited = 0;
   final root = WidgetsBinding.instance.rootElement;
   if (root == null) throw const FormatException('No mounted app');
@@ -39,6 +43,18 @@ Map<String, Object?> _snapshot(_Lifecycle lifecycle) {
   void visit(Element element) {
     if (++visited > 25000) throw const FormatException('Widget traversal bound');
     final widget = element.widget;
+    if (element is StatefulElement && element.state is app.MyHomePageState) {
+      homes++;
+      home = element.state as app.MyHomePageState;
+    }
+    if (widget is NativeProductView) {
+      if (widget.airQuality) {
+        airQualityView = true;
+      } else {
+        weatherView = true;
+      }
+    }
+    if (widget is ErrorWidget) frameworkError = true;
     if (widget is Text && widget.data != null) {
       final text = widget.data!;
       if (text.length > 1024 || labels.length >= 2048) {
@@ -104,6 +120,9 @@ Map<String, Object?> _snapshot(_Lifecycle lifecycle) {
   }
   visit(root);
   if (refresh.length > 1) throw const FormatException('Duplicate refresh button');
+  // Observe existing state only. Neither parsing success nor a mounted widget
+  // is a substitute for the driver's exact native rows/lifecycle acceptance.
+  final state = homes == 1 ? home : null;
   return {
     'schema': 1, 'kind': 'overmorrow-native-mounted-ui',
     'package': 'org.volparossa.weather.trial', 'platform': 'android',
@@ -112,6 +131,20 @@ Map<String, Object?> _snapshot(_Lifecycle lifecycle) {
     'lifecycle': lifecycle.observed,
     'current_lifecycle': WidgetsBinding.instance.lifecycleState?.name,
     'screen': {'width': view.physicalSize.width, 'height': view.physicalSize.height},
+    'diagnostic': {
+      'schema': 1, 'provider': providerObservation(),
+      'app': {
+        'home': homes == 0 ? 'absent' : homes == 1 ? 'single' : 'multiple',
+        'loading': state?.isLoading,
+        'has_data': state == null ? null : state.data != null,
+        'has_error': state == null ? null : state.weatherError != null,
+        'has_weather': state == null ? null : state.data?.nativeProducts?.weather != null,
+        'has_air_quality': state == null ? null : state.data?.nativeProducts?.airQuality != null,
+        'weather_view_mounted': weatherView,
+        'air_quality_view_mounted': airQualityView,
+        'framework_error_mounted': frameworkError,
+      },
+    },
   };
 }
 
