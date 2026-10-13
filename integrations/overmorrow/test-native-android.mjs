@@ -96,7 +96,8 @@ test('VM address is one loopback service from bounded log text, never arbitrary 
 test('driver owns exact Android component and uses only observation RPC methods', async () => {
   assert.equal(COMPONENT, 'org.volparossa.weather.trial/com.marotidev.overmorrow.MainActivity');
   const source = await readFile(new URL('./native-android-driver.mjs', import.meta.url), 'utf8');
-  assert.ok(source.includes("['getVM', 'getIsolate', EXTENSION].includes(method)"));
+  assert.ok(source.includes("['getVM', EXTENSION].includes(method)"));
+  assert.ok(!source.includes("vm.request('getIsolate'"));
   assert.ok(source.includes("['shell', 'input', 'tap'"));
   assert.ok(source.includes("['shell', 'input', 'keyevent', 'KEYCODE_HOME']"));
   assert.ok(source.includes('pixel_visibility_proven: false'));
@@ -107,9 +108,10 @@ test('driver owns exact Android component and uses only observation RPC methods'
 // These transports are inert EventTargets, not a VM/app success substitute.
 const PRIVATE_TEXT = 'private-token http://127.0.0.1:43212/private/ /private/owner';
 const VM_LINE = 'The Dart VM service is listening on http://127.0.0.1:34567/private-token/';
+const EXTENSION = 'ext.volparossa.native_snapshot';
 const flush = () => new Promise(done => setImmediate(done));
 function observerFixture(options = {}) {
-  const diagnostic = options.diagnostic ?? new ObserverDiagnostic(), calls = [], owned = [];
+  const diagnostic = options.diagnostic ?? new ObserverDiagnostic(), calls = [], owned = [], requests = [];
   let vm;
   class Socket extends EventTarget {
     readyState = WebSocket.CONNECTING;
@@ -123,15 +125,16 @@ function observerFixture(options = {}) {
       });
     }
     send(raw) {
-      const request = JSON.parse(raw); calls.push(request.method);
+      const request = JSON.parse(raw); calls.push(request.method); requests.push(request);
       setImmediate(() => {
         if (options.pending === request.method) return;
         if (options.close === request.method) { this.close(); return; }
         const result = request.method === 'getVM' ? (options.machine ?? { isolates: [{ id: 'isolates/12' }] })
-          : { extensionRPCs: ['ext.volparossa.native_snapshot'] };
-        const data = options.malformed === request.method ? PRIVATE_TEXT
+          : (Object.hasOwn(options, 'snapshot') ? options.snapshot : snapshot());
+        let data = options.malformed === request.method ? PRIVATE_TEXT
           : JSON.stringify({ jsonrpc: '2.0', id: request.id,
             ...(options.reject === request.method ? { error: { message: PRIVATE_TEXT } } : { result }) });
+        if (options.message) data = options.message(request, data);
         this.dispatchEvent(new MessageEvent('message', { data }));
       });
     }
@@ -145,11 +148,13 @@ function observerFixture(options = {}) {
       }
       return args[0] === 'logcat' ? (options.log ?? VM_LINE) : (options.port ?? '45678');
     },
-    waitFor: check => waitForObservation(check, Date.now() + 180000, () => {}, options.wait ?? 15000),
+    waitFor: check => waitForObservation(check, Date.now() + 180000,
+      options.remaining ?? (() => {}), options.wait ?? 15000),
     ownForward(value) { owned.push(value === null ? 'forward-unconfirmed' : 'forward-owned'); },
     ownVm(value) { vm = value; owned.push('vm-owned'); },
   };
-  return { diagnostic, calls, owned, run: () => observeVm(context),
+  return { diagnostic, calls, owned, requests, run: () => observeVm(context),
+    get vm() { return vm; },
     async close() { if (vm) await vm.close(); } };
 }
 async function rejectedObserver(fixture) {
@@ -171,10 +176,168 @@ async function rejectedObserver(fixture) {
 test('observer production sequence uses only read-only RPCs and transfers cleanup ownership before connection', async () => {
   const fixture = observerFixture();
   assert.equal(await fixture.run(), 'isolates/12');
-  assert.deepEqual(fixture.calls, ['logcat', 'forward', 'getVM', 'getIsolate']);
+  assert.deepEqual(fixture.calls, ['logcat', 'forward', 'getVM', EXTENSION]);
   assert.deepEqual(fixture.owned, ['forward-unconfirmed', 'forward-owned', 'vm-owned']);
   assert.equal(fixture.diagnostic.waitingFor, null);
   await fixture.close();
+});
+
+// Exact pinned Dart serializers, not arbitrary JSON-RPC error-code retries.
+function missingExtension(request) {
+  return { code: -32601, message: 'Method not found',
+    data: { request: { method: request.method, params: request.params } } };
+}
+function snapshotPending() {
+  return { code: -32000, message: 'Server error', data: { details: 'Snapshot not ready' } };
+}
+function errorMessage(request, error) {
+  return JSON.stringify({ jsonrpc: '2.0', id: request.id, error });
+}
+test('readiness retries only the exact absent extension and own pending snapshot until validated', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100 });
+  let attempts = 0, settled = false;
+  const fixture = observerFixture({ message(request, normal) {
+    if (request.method !== EXTENSION || ++attempts > 2) return normal;
+    return errorMessage(request, attempts === 1 ? missingExtension(request) : snapshotPending());
+  } });
+  const result = fixture.run().then(value => { settled = true; return value; });
+  for (let i = 0; i < 8; i++) await flush();
+  assert.equal(attempts, 1); assert.equal(settled, false);
+  t.mock.timers.tick(250);
+  for (let i = 0; i < 8; i++) await flush();
+  assert.equal(attempts, 2); assert.equal(settled, false);
+  t.mock.timers.tick(250);
+  assert.equal(await result, 'isolates/12');
+  assert.equal(attempts, 3);
+  assert.deepEqual(fixture.calls, ['logcat', 'forward', ...Array(3).fill(['getVM', EXTENSION]).flat()]);
+  assert.ok(fixture.requests.filter(row => row.method === EXTENSION)
+    .every(row => JSON.stringify(row.params) === '{"isolateId":"isolates/12"}'));
+  await fixture.close();
+});
+test('near-match errors, wrong RPC context and unexpected envelope data remain fatal and redacted', async () => {
+  const variants = [
+    request => ({ ...missingExtension(request), code: -32602 }),
+    request => ({ ...missingExtension(request), message: PRIVATE_TEXT }),
+    request => ({ ...missingExtension(request), data: null }),
+    request => ({ ...missingExtension(request), data: { request: { method: 'getVM', params: request.params } } }),
+    request => ({ ...missingExtension(request), data: { request: { method: EXTENSION, params: { isolateId: 'isolates/99' } } } }),
+    request => ({ ...missingExtension(request), data: { request: { method: EXTENSION, params: { ...request.params, extra: PRIVATE_TEXT } } } }),
+    request => ({ ...missingExtension(request), data: { ...missingExtension(request).data, details: PRIVATE_TEXT } }),
+    () => ({ ...snapshotPending(), code: -32001 }),
+    () => ({ ...snapshotPending(), message: 'Extension error' }),
+    () => ({ ...snapshotPending(), data: { details: PRIVATE_TEXT } }),
+    () => ({ ...snapshotPending(), data: { details: 'Snapshot not ready', extra: PRIVATE_TEXT } }),
+    () => ({ ...snapshotPending(), extra: PRIVATE_TEXT }),
+    () => null, () => [], () => false,
+  ];
+  for (const variant of variants) {
+    const fixture = observerFixture({ message: (request, normal) => request.method === EXTENSION
+      ? errorMessage(request, variant(request)) : normal });
+    const receipt = await rejectedObserver(fixture);
+    assert.equal(receipt.subphase, 'native_snapshot'); assert.equal(receipt.code, 'vm_request_rejected');
+    assert.equal(fixture.requests.length, 2);
+  }
+  for (const error of [missingExtension, snapshotPending]) {
+    const fixture = observerFixture({ message: request => errorMessage(request, error(request)) });
+    const receipt = await rejectedObserver(fixture);
+    assert.equal(receipt.subphase, 'get_vm'); assert.equal(receipt.code, 'vm_request_rejected');
+    assert.equal(fixture.requests.length, 1);
+  }
+  for (const change of [{ extra: PRIVATE_TEXT }, { result: snapshot() }, { jsonrpc: '1.0' }]) {
+    const fixture = observerFixture({ message: (request, normal) => request.method === EXTENSION
+      ? JSON.stringify({ jsonrpc: '2.0', id: request.id, error: snapshotPending(), ...change }) : normal });
+    const receipt = await rejectedObserver(fixture);
+    assert.equal(receipt.subphase, 'native_snapshot');
+    assert.equal(receipt.code, Object.hasOwn(change, 'extra') ? 'vm_request_rejected' : 'vm_response_invalid');
+  }
+});
+test('extension readiness validates the same snapshot identity, bounds and shape without claiming final tables', async () => {
+  for (const value of [null, [], {}, { ...snapshot(), package: 'other' }, { ...snapshot(), profile: false },
+    { ...snapshot(), origin: PRIVATE_TEXT }, { ...snapshot(), tables: Array(5).fill({}) },
+    { ...snapshot(), labels: [PRIVATE_TEXT.repeat(100)] }]) {
+    const receipt = await rejectedObserver(observerFixture({ snapshot: value }));
+    assert.equal(receipt.subphase, 'native_snapshot'); assert.equal(receipt.code, 'validation_failed');
+  }
+  // Empty tables are valid only as readiness, not a replacement for collect/verifyTable.
+  const fixture = observerFixture({ snapshot: snapshot() });
+  assert.equal(await fixture.run(), 'isolates/12');
+  const source = await readFile(new URL('./native-android-driver.mjs', import.meta.url), 'utf8');
+  assert.ok(source.includes('verifyTable(table, expected.products[table.product])'));
+  await fixture.close();
+});
+test('VM type, byte bound, JSON and envelope errors have distinct closed codes at the actual request', async () => {
+  for (const [data, code] of [[new Uint8Array([1]), 'vm_response_type'],
+    [new Blob([PRIVATE_TEXT]), 'vm_response_type'], ['x'.repeat(131073), 'vm_response_bound'],
+    ['é'.repeat(65537), 'vm_response_bound'], [PRIVATE_TEXT, 'vm_response_json'],
+    ['null', 'vm_response_invalid'], ['[]', 'vm_response_invalid']]) {
+    const fixture = observerFixture({ message: (request, normal) => request.method === EXTENSION ? data : normal });
+    const receipt = await rejectedObserver(fixture);
+    assert.equal(receipt.code, code); assert.equal(receipt.subphase, 'native_snapshot');
+    assert.equal(fixture.vm.socket.readyState, WebSocket.CLOSED);
+  }
+  for (const extra of [0, 1]) {
+    const fixture = observerFixture({ message(request, normal) {
+      return request.method === EXTENSION ? normal + ' '.repeat(131072 - Buffer.byteLength(normal) + extra) : normal;
+    } });
+    if (extra) assert.equal((await rejectedObserver(fixture)).code, 'vm_response_bound');
+    else { assert.equal(await fixture.run(), 'isolates/12'); await fixture.close(); }
+  }
+});
+test('readiness remains within 15s even for exact pending errors or a late valid snapshot', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100 });
+  for (const error of [missingExtension, snapshotPending]) {
+    const fixture = observerFixture({ message: (request, normal) => request.method === EXTENSION
+      ? errorMessage(request, error(request)) : normal });
+    const result = rejectedObserver(fixture);
+    for (let i = 0; i < 8; i++) await flush();
+    t.mock.timers.tick(15000);
+    const receipt = await result;
+    assert.equal(receipt.code, 'observation_deadline'); assert.equal(receipt.subphase, 'isolate_wait');
+    assert.equal(fixture.requests.length, 2);
+  }
+  const fixture = observerFixture({ message(request, normal) {
+    if (request.method === EXTENSION) t.mock.timers.setTime(Date.now() + 15000);
+    return normal;
+  } });
+  const receipt = await rejectedObserver(fixture);
+  assert.equal(receipt.code, 'observation_deadline'); assert.equal(receipt.subphase, 'isolate_wait');
+});
+test('selected snapshot isolate and VM stay identical for subsequent lifecycle observations', async () => {
+  const fixture = observerFixture({ machine: { isolates: [{ id: 'isolates/11' }, { id: 'isolates/12' }] },
+    message: (request, normal) => request.params.isolateId === 'isolates/11'
+      ? errorMessage(request, missingExtension(request)) : normal });
+  const isolate = await fixture.run(); assert.equal(isolate, 'isolates/12');
+  assert.equal(fixture.owned.filter(value => value === 'vm-owned').length, 1);
+  const vm = fixture.vm;
+  await resumeInstalledApp({ async adb(args) { assert.deepEqual(args, ['shell', 'am', 'start', '-n', COMPONENT]); },
+    async waitFor(check) { assert.equal(await check(), null); },
+    async snapshot() { return validateSnapshot(await vm.request(EXTENSION, { isolateId: isolate })); } });
+  assert.equal(fixture.vm, vm);
+  assert.deepEqual(fixture.requests.at(-1).params, { isolateId: 'isolates/12' });
+  await fixture.close();
+});
+test('pending extension errors outside readiness remain rejected and never become lifecycle observations', async () => {
+  let ready = false;
+  const fixture = observerFixture({ message: (request, normal) => ready && request.method === EXTENSION
+    ? errorMessage(request, snapshotPending()) : normal });
+  const isolate = await fixture.run(); ready = true;
+  await assert.rejects(fixture.vm.request(EXTENSION, { isolateId: isolate }), error => {
+    assert.equal(error.observerCode, 'vm_request_rejected');
+    assert.equal(error.extensionPending, true);
+    assert.ok(!JSON.stringify(fixture.diagnostic.failure(error)).includes('Snapshot not ready'));
+    return true;
+  });
+  await fixture.close();
+});
+test('interruption during a successful snapshot response remains fatal before readiness returns', async () => {
+  let interrupted = false;
+  const Failure = adbFailure({}).constructor;
+  const fixture = observerFixture({ remaining() { if (interrupted) throw new Failure('interrupted'); },
+    message(request, normal) { if (request.method === EXTENSION) interrupted = true; return normal; } });
+  const receipt = await rejectedObserver(fixture);
+  assert.equal(receipt.code, 'interrupted'); assert.equal(receipt.subphase, 'native_snapshot');
+  assert.equal(fixture.requests.length, 2);
+  assert.deepEqual(fixture.owned, ['forward-unconfirmed', 'forward-owned', 'vm-owned']);
 });
 test('ADB metadata is a closed bounded classification and never carries raw callback text', () => {
   const diagnostic = new ObserverDiagnostic();
@@ -204,12 +367,12 @@ test('each existing observer boundary reports its own failing subphase without s
     [{ construct: new Error(PRIVATE_TEXT) }, 'websocket_create', 'unknown'],
     [{ connect: 'error' }, 'websocket_connect', 'websocket_failed'],
     [{ reject: 'getVM' }, 'get_vm', 'vm_request_rejected'],
-    [{ machine: null, reject: 'getIsolate' }, 'get_isolate', 'vm_request_rejected'],
+    [{ reject: EXTENSION }, 'native_snapshot', 'vm_request_rejected'],
     [{ machine: { isolates: Array(9).fill({ id: 'isolates/12' }) } }, 'get_vm', 'validation_failed'],
     [{ machine: { isolates: null } }, 'get_vm', 'response_type_invalid'],
     [{ machine: { isolates: [{ id: PRIVATE_TEXT }] } }, 'isolate_identity', 'validation_failed'],
-    [{ malformed: 'getVM' }, 'get_vm', 'vm_response_invalid'],
-    [{ close: 'getIsolate' }, 'get_isolate', 'vm_connection_closed'],
+    [{ malformed: 'getVM' }, 'get_vm', 'vm_response_json'],
+    [{ close: EXTENSION }, 'native_snapshot', 'vm_connection_closed'],
   ]) {
     const receipt = await rejectedObserver(observerFixture(options));
     assert.equal(receipt.subphase, subphase); assert.equal(receipt.code, code);
@@ -230,7 +393,7 @@ test('original WebSocket 5s and VM request 3s deadlines remain bounded and disti
   for (const [options, milliseconds, subphase, code] of [
     [{ connect: 'pending' }, 5000, 'websocket_connect', 'websocket_deadline'],
     [{ pending: 'getVM' }, 3000, 'get_vm', 'vm_request_deadline'],
-    [{ pending: 'getIsolate' }, 3000, 'get_isolate', 'vm_request_deadline'],
+    [{ pending: EXTENSION }, 3000, 'native_snapshot', 'vm_request_deadline'],
   ]) {
     const fixture = observerFixture(options), result = rejectedObserver(fixture);
     for (let i = 0; i < 5; i++) await flush();
@@ -416,7 +579,7 @@ test('one actual helper launch polls absent PID then continues into the unchange
   assert.ok(fixture.calls.filter(row => row.operation === 'pidof').every(row => row.appOwned));
   const observer = observerFixture({ pid, diagnostic: fixture.diagnostic });
   assert.equal(await observer.run(), 'isolates/12');
-  assert.deepEqual(observer.calls, ['logcat', 'forward', 'getVM', 'getIsolate']);
+  assert.deepEqual(observer.calls, ['logcat', 'forward', 'getVM', EXTENSION]);
   await observer.close(); assert.equal(fixture.report.passed, false);
 });
 test('PID polling does not hide transport errors, missing metadata, killed commands or forged absence', async () => {

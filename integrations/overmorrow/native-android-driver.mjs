@@ -101,12 +101,13 @@ export function vmAddress(log, pid) {
 }
 
 const OBSERVER_SUBPHASES = new Set(['unobserved', 'logcat_read', 'vm_address', 'forward_create',
-  'forward_port', 'websocket_create', 'websocket_connect', 'get_vm', 'isolate_identity', 'get_isolate', 'isolate_wait',
+  'forward_port', 'websocket_create', 'websocket_connect', 'get_vm', 'isolate_identity', 'get_isolate', 'native_snapshot', 'isolate_wait',
   'package_check', 'force_stop', 'app_start', 'pidof', 'pid_validation']);
 const OBSERVER_CODES = new Set(['unknown', 'validation_failed', 'response_type_invalid', 'adb_exit',
   'adb_signal', 'adb_output_bound', 'adb_spawn_failed', 'adb_failed', 'websocket_deadline',
   'websocket_failed', 'vm_request_rejected', 'vm_request_deadline', 'vm_connection_closed',
-  'vm_response_invalid', 'observation_deadline', 'trial_deadline', 'interrupted']);
+  'vm_response_invalid', 'vm_response_type', 'vm_response_bound', 'vm_response_json',
+  'observation_deadline', 'trial_deadline', 'interrupted']);
 
 class ObserverFailure extends Error {
   constructor(code, exitStatus = null, signal = null) {
@@ -203,16 +204,57 @@ export async function resumeInstalledApp({ adb, waitFor, snapshot }) {
   });
 }
 
+function exactKeys(value, keys) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+}
+
+function extensionNotReady(value, waiting) {
+  // Flutter's pinned Dart a0daa5004ec02c0638ba6e50791ba9338a87374c:
+  // runtime/vm/{service.cc,json_stream.cc,json_stream.h} serializes a missing
+  // method with the exact echoed request; sdk/lib/developer/extension.dart
+  // serializes our entrypoint's fixed error as Server error/data.details.
+  // Neither arbitrary -32000 errors nor other RPCs become retry authority.
+  if (waiting.method !== EXTENSION || !exactKeys(waiting.params, ['isolateId'])
+      || !exactKeys(value, ['jsonrpc', 'id', 'error']) || value.jsonrpc !== '2.0'
+      || !exactKeys(value.error, ['code', 'message', 'data'])) return false;
+  const error = value.error;
+  if (error.code === -32601 && error.message === 'Method not found'
+      && exactKeys(error.data, ['request'])
+      && exactKeys(error.data.request, ['method', 'params'])
+      && error.data.request.method === EXTENSION
+      && exactKeys(error.data.request.params, ['isolateId'])
+      && error.data.request.params.isolateId === waiting.params.isolateId) return true;
+  return error.code === -32000 && error.message === 'Server error'
+    && exactKeys(error.data, ['details']) && error.data.details === 'Snapshot not ready';
+}
+
 class ReadOnlyVm {
   constructor(socket) {
     this.socket = socket; this.next = 0; this.pending = new Map();
     socket.addEventListener('message', event => {
       try {
-        assert.equal(typeof event.data, 'string'); assert.ok(Buffer.byteLength(event.data) <= 131072);
-        const value = JSON.parse(event.data), waiting = this.pending.get(value.id);
-        if (!waiting) return; this.pending.delete(value.id); clearTimeout(waiting.timer);
-        if (value.error) waiting.reject(new ObserverFailure('vm_request_rejected')); else waiting.resolve(value.result);
-      } catch { this.rejectPending('vm_response_invalid'); void this.close().catch(() => {}); }
+        if (typeof event.data !== 'string') throw new ObserverFailure('vm_response_type');
+        if (Buffer.byteLength(event.data) > 131072) throw new ObserverFailure('vm_response_bound');
+        let value;
+        try { value = JSON.parse(event.data); } catch { throw new ObserverFailure('vm_response_json'); }
+        assert.ok(value !== null && typeof value === 'object' && !Array.isArray(value));
+        const waiting = this.pending.get(value.id);
+        if (!waiting) return;
+        assert.equal(value.jsonrpc, '2.0');
+        assert.notEqual(Object.hasOwn(value, 'error'), Object.hasOwn(value, 'result'));
+        let failure;
+        if (Object.hasOwn(value, 'error')) {
+          failure = new ObserverFailure('vm_request_rejected');
+          // In-memory predicate only: never retain error text or request data.
+          failure.extensionPending = extensionNotReady(value, waiting);
+        }
+        this.pending.delete(value.id); clearTimeout(waiting.timer);
+        if (failure) waiting.reject(failure); else waiting.resolve(value.result);
+      } catch (error) {
+        this.rejectPending(error instanceof ObserverFailure ? error.observerCode : 'vm_response_invalid');
+        void this.close().catch(() => {});
+      }
     });
     socket.addEventListener('close', () => this.rejectPending());
     socket.addEventListener('error', () => this.rejectPending());
@@ -222,12 +264,12 @@ class ReadOnlyVm {
     this.pending.clear();
   }
   async request(method, params = {}) {
-    assert.ok(['getVM', 'getIsolate', EXTENSION].includes(method));
+    assert.ok(['getVM', EXTENSION].includes(method));
     assert.ok(this.pending.size === 0 && this.socket.readyState === WebSocket.OPEN);
     const id = ++this.next;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(new ObserverFailure('vm_request_deadline')); }, 3000);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve, reject, timer, method, params });
       this.socket.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
     });
   }
@@ -287,8 +329,17 @@ export async function observeVm({ adb, waitFor, pid, diagnostic, ownForward, own
     });
     for (const candidate of machine.isolates) {
       await diagnostic.at('isolate_identity', () => assert.match(candidate.id, /^isolates\/[0-9]+$/));
-      const value = await diagnostic.at('get_isolate', () => vm.request('getIsolate', { isolateId: candidate.id }));
-      if (value.extensionRPCs?.includes(EXTENSION)) return candidate.id;
+      try {
+        await diagnostic.at('native_snapshot', async () => {
+          // A full getIsolate also serializes every library. Read only the
+          // existing bounded extension instead; readiness is not UI acceptance.
+          validateSnapshot(await vm.request(EXTENSION, { isolateId: candidate.id }));
+        });
+        return candidate.id;
+      } catch (error) {
+        if (!(error instanceof ObserverFailure && error.observerCode === 'vm_request_rejected'
+            && error.extensionPending === true)) throw error;
+      }
     }
     return null;
   });
