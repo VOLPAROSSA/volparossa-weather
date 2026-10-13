@@ -1612,7 +1612,7 @@ class EmulatorDiagnostics(unittest.TestCase):
                         if streams and not reaches_install:
                             raw = (proof / "guest-network-diagnostic.json").read_bytes()
                             value = json.loads(raw)
-                            self.assertEqual(value["schema"], 8)
+                            self.assertEqual(value["schema"], 9)
                             self.assertEqual(value["last_query"], dict(name="link_before",
                                 outcome="returned" if streams == "malformed" else "command_failed"))
                             stream = value["query_streams"]
@@ -1669,7 +1669,7 @@ class EmulatorDiagnostics(unittest.TestCase):
                 self.assertEqual((proof / "emulator-boundary.json").exists(), reaches_install)
                 if reaches_install:
                     boundary = json.loads((proof / "emulator-boundary.json").read_text())
-                    self.assertEqual(boundary["schema"], 4)
+                    self.assertEqual(boundary["schema"], 5)
                     self.assertTrue(boundary["guest_no_usable_egress"])
                     self.assertEqual(boundary["package_uid_probe"]["verified"], package_uid == b"10000")
                     self.assertFalse(boundary["package_uid_probe"]["app_pid_observed"])
@@ -2409,7 +2409,7 @@ class GuestNetworkObserverTests(unittest.TestCase):
         tree = ast.parse((ROOT / "scripts/prepare_hosted_android_ci.py").read_text())
         inside = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "inside")
         code = ast.unparse(inside)
-        self.assertIn("network = GuestNetworkMetadataObserver()", code)
+        self.assertIn("network = GuestNetworkUnlinkedObserver()", code)
         self.assertLess(code.index("network.enforce"), code.index("adb_command('install'"))
         self.assertLess(code.index("adb_command('install'"), code.index("package_uid_probe(adb_command)"))
         self.assertLess(code.index("package_uid_probe(adb_command)"), code.index("adb_command('reverse'"))
@@ -3017,6 +3017,211 @@ class GuestNetworkMetadataTests(unittest.TestCase):
         self.assertEqual(value["link_metadata"]["reason"], "unknown_fields")
         self.assertGreater(value["families"]["ipv4"]["routes"], 1000)
         self.assertGreater(value["families"]["ipv6"]["routes"], 1000)
+
+
+class GuestNetworkUnlinkedTests(unittest.TestCase):
+    """Inert metadata only; no claim about trial33's unseen link value."""
+    @staticmethod
+    def down(**changes):
+        return dict(dict(ifindex=17, ifname="private-canary", flags=["NOARP"], operstate="DOWN",
+            link_type="ipip", qdisc="noop", link=None), **changes)
+
+    def overrides(self, row=None):
+        basic = json.loads(GuestNetworkSinkObserverTests.projections()[0])
+        return {("query", "link_" + side): json.dumps([*basic, self.down() if row is None else row]).encode()
+            for side in ("before", "after")}
+
+    def failure(self, overrides, *, observer=None, error_type=ValueError):
+        observer = observer or M.GuestNetworkUnlinkedObserver()
+        with tempfile.TemporaryDirectory() as directory:
+            proof = Path(directory)
+            with self.assertRaises(error_type) as caught:
+                GuestNetworkSinkObserverTests().run_gate(proof, overrides=overrides, diagnostic=observer)
+            raw = (proof / "guest-network-diagnostic.json").read_bytes()
+            value = json.loads(raw)
+            self.assertEqual(value["schema"], 9)
+            self.assertLessEqual(len(raw), 2048)
+            self.assertLessEqual(len(json.dumps(value["link_relation"], separators=(",", ":")).encode()), 256)
+            self.assertFalse(value["gate_passed"] or value["cause_established"] or value["raw_text_exported"])
+            self.assertEqual((proof / "guest-network-diagnostic.json").stat().st_mode & 0o777, 0o600)
+            for secret in (b"private-canary", b"sink-private", b"/system/", b"private-stderr"):
+                self.assertNotIn(secret, raw)
+        return value, caught.exception, observer
+
+    def test_null_down_other_is_retained_without_new_queries_or_sink_authority(self):
+        observer = M.GuestNetworkUnlinkedObserver()
+        with tempfile.TemporaryDirectory() as directory:
+            run = GuestNetworkSinkObserverTests().run_gate
+            old, old_calls = run(Path(directory), diagnostic=M.GuestNetworkMetadataObserver())
+            new, new_calls = run(Path(directory), diagnostic=observer, overrides=self.overrides())
+        self.assertEqual(old_calls, new_calls)
+        self.assertEqual(new["schema"], 5)
+        self.assertEqual(new["observer"]["link_observation"], "all-basic-and-fixed-sink-details-down-null-link")
+        new["schema"] = old["schema"]
+        new["observer"]["link_observation"] = old["observer"]["link_observation"]
+        self.assertEqual(new, old)
+        for side in ("before", "after"):
+            self.assertEqual(observer.link_observations[side][0][-1], self.down())
+        for route in (b"default dev private-canary\n", b"local 127.0.0.1 dev private-canary\n"):
+            changed = self.overrides()
+            changed[("query", "ipv4")] = route
+            receipt, error, _ = self.failure(changed)
+            self.assertEqual(str(error), "GUEST_NETWORK_STILL_ACTIVE")
+            self.assertEqual(receipt["typed"]["ipv4"]["rejected"], 1)
+
+    def test_empty_dummy_set_can_include_only_down_unlinked_other(self):
+        basic = json.loads(GuestNetworkSinkObserverTests.projections()[0])
+        overrides = {("query", "link_" + side): json.dumps([basic[0], self.down()]).encode()
+            for side in ("before", "after")}
+        overrides.update({("query", "dummy_" + side): b"[]" for side in ("before", "after")})
+        overrides.update({("query", "qdisc_" + side): b"qdisc noqueue 0: dev lo root\n" for side in ("before", "after")})
+        overrides.update({("query", "ipv4"): b"local 127.0.0.0/8 dev lo table local\n",
+            ("query", "ipv6"): b"local ::1 dev lo table local\n"})
+        with tempfile.TemporaryDirectory() as directory:
+            result, _ = GuestNetworkSinkObserverTests().run_gate(Path(directory), overrides=overrides,
+                diagnostic=M.GuestNetworkUnlinkedObserver())
+        self.assertEqual(result["route_counts"]["ipv4"]["dummy"], 0)
+
+    def test_every_nonnull_type_is_rejected_with_closed_actual_query_diagnostic(self):
+        for linked, kind in (("private-canary", "string"), ("NONE", "string"), ("if17", "string"),
+                (False, "boolean"), (True, "boolean"), (0, "integer"), (17, "integer"),
+                (0.0, "number"), ([], "array"), ({"private-canary": "private-canary"}, "object")):
+            for query in ("link_before", "link_after"):
+                with self.subTest(linked=linked, query=query):
+                    overrides = self.overrides()
+                    original = json.loads(overrides[("query", query)])
+                    original[-1]["link"] = linked
+                    overrides[("query", query)] = json.dumps(original).encode()
+                    value, error, _ = self.failure(overrides)
+                    self.assertEqual(str(error), "GUEST_LINK_METADATA")
+                    self.assertEqual(value["link_relation"], dict(status="rejected", context="link", reason="non_null",
+                        value_kind=kind, admin_down=True, operstate_down=True, sink="other"))
+                    self.assertEqual(value["last_query"], dict(name=query, outcome="returned"))
+                    self.assertEqual(value["link_decode_query"], query)
+                    self.assertEqual(value["query_streams"]["stdout_bytes"], len(overrides[("query", query)]))
+
+    def test_null_requires_both_down_states_and_excludes_all_sink_contexts(self):
+        for changes in (dict(flags=["UP"]), dict(operstate="UNKNOWN"), dict(operstate="UP"),
+                dict(flags=["UP"], operstate="UP")):
+            value, error, _ = self.failure(self.overrides(self.down(**changes)))
+            relation = value["link_relation"]
+            self.assertEqual((str(error), relation["reason"], relation["value_kind"]),
+                ("GUEST_LINK_METADATA", "not_down", "null"))
+            self.assertEqual(relation["admin_down"], "UP" not in changes.get("flags", []))
+            self.assertEqual(relation["operstate_down"], changes.get("operstate", "DOWN") == "DOWN")
+        for changes, sink in ((dict(ifname="lo"), "loopback"), (dict(link_type="loopback"), "loopback"),
+                (dict(flags=["LOOPBACK"]), "loopback"), (dict(linkinfo={"info_kind": "dummy"}), "dummy")):
+            rows = [self.down(**changes)]  # No duplicate lo hides the link predicate.
+            value, _, _ = self.failure({("query", "link_before"): json.dumps(rows).encode()})
+            self.assertEqual((value["link_relation"]["reason"], value["link_relation"]["sink"]), ("sink", sink))
+        for query, index, sink in (("loopback_before", 1, "loopback"), ("dummy_before", 2, "dummy")):
+            rows = json.loads(GuestNetworkSinkObserverTests.projections()[index])
+            rows[0].update(link=None, flags=[f for f in rows[0]["flags"] if f != "UP"], operstate="DOWN")
+            value, _, _ = self.failure({("query", query): json.dumps(rows).encode()})
+            self.assertEqual((value["link_relation"]["reason"], value["link_relation"]["sink"]), ("sink", sink))
+            self.assertEqual(value["last_query"]["name"], query)
+
+    def test_basic_dummy_cannot_evade_full_details_or_promote_null_link_to_sink(self):
+        basic, lo, dummy = (json.loads(raw) for raw in GuestNetworkSinkObserverTests.projections())
+        basic[1].update(link=None, flags=["NOARP"], operstate="DOWN")
+        dummy[0].update(flags=["NOARP"], operstate="DOWN")
+        overrides = {("query", "link_before"): json.dumps(basic).encode(),
+            ("query", "dummy_before"): json.dumps(dummy).encode()}
+        _, error, _ = self.failure(overrides)
+        self.assertEqual(str(error), "GUEST_LINK_JOIN")  # Missing exact link field cannot be erased.
+        dummy[0]["link"] = None
+        overrides[("query", "dummy_before")] = json.dumps(dummy).encode()
+        value, error, _ = self.failure(overrides)
+        self.assertEqual((str(error), value["link_relation"]["sink"]), ("GUEST_LINK_METADATA", "dummy"))
+
+    def test_full_snapshot_keeps_presence_type_and_other_unknown_guards(self):
+        for mutation in ("remove_link", "remove_row", "change_mtu"):
+            overrides = self.overrides()
+            rows = json.loads(overrides[("query", "link_after")])
+            if mutation == "remove_link": del rows[-1]["link"]
+            elif mutation == "remove_row": rows.pop()
+            else: rows[-1]["mtu"] = 1400
+            overrides[("query", "link_after")] = json.dumps(rows).encode()
+            value, error, _ = self.failure(overrides)
+            self.assertEqual(str(error), "GUEST_LINK_CHANGED")
+            self.assertEqual(value["link_relation"], M.GuestNetworkUnlinkedObserver.unobserved_relation())
+        for key in ("link_index", "link_netnsid", "master", "xdp", "vfinfo_list", "private-canary"):
+            value, error, _ = self.failure(self.overrides(self.down(**{key: None})))
+            self.assertEqual(str(error), "GUEST_LINK_METADATA")
+            self.assertEqual(value["link_metadata"]["reason"], "unknown_fields")
+
+    def test_relation_is_not_reused_for_other_query_poll_error_or_parse_failure(self):
+        value, error, observer = self.failure(self.overrides(self.down(link="private-canary")))
+        for condition in ("error", "poll", "query"):
+            with patch.object(observer, "polls", observer.polls + (condition == "poll")), \
+                    patch.object(observer, "last_query", dict(name="dummy_before" if condition == "query" else "link_before")):
+                result = observer.diagnostic_value({}, ValueError("GUEST_LINK_METADATA") if condition == "error" else error)
+                self.assertEqual(result["link_relation"], observer.unobserved_relation())
+        for raw in (b"[private-canary", b'[{"link":null,"link":null}]', b"x" * 65537, b"\xff"):
+            value, _, _ = self.failure({("query", "link_before"): raw}, observer=observer)
+            self.assertEqual(value["link_relation"], observer.unobserved_relation())
+        for diagnostic_error in (OSError("private-canary"), KeyboardInterrupt()):
+            with patch.object(observer, "relation_rejected", side_effect=diagnostic_error):
+                value, error, _ = self.failure(self.overrides(self.down(link=False)), observer=observer)
+            self.assertEqual(str(error), "GUEST_LINK_METADATA")
+            self.assertEqual(value["link_relation"], observer.unobserved_relation())
+
+    def test_historical_readers_still_reject_even_down_null_and_current_bound_is_unchanged(self):
+        raw = self.overrides()[("query", "link_before")]
+        for observer in (M.GuestNetworkSinkObserver(), M.GuestNetworkMetadataObserver()):
+            with self.assertRaisesRegex(ValueError, "GUEST_LINK_METADATA"):
+                observer.parse_link_rows(raw, "link")
+        with self.assertRaisesRegex(ValueError, "GUEST_LINK_METADATA"):
+            M.guest_link_snapshot(raw)
+        row = json.loads(GuestNetworkSinkObserverTests.projections()[0])[0]
+        row.update({key: "private-canary" for key in M.GuestNetworkMetadataObserver.UNKNOWN_CLASSES})
+        row["private-canary"] = "private-canary"
+        route = b"default via 10.0.2.2 dev private-canary\n"
+        routes = route * (65536 // len(route))
+        value, _, _ = self.failure({("query", "ipv4"): routes, ("query", "ipv6"): routes,
+            ("query", "link_after"): json.dumps([row]).encode()})
+        self.assertGreater(value["families"]["ipv4"]["routes"], 1000)
+        for linked in (False, None):
+            overrides = self.overrides()
+            rows = json.loads(overrides[("query", "link_after")])
+            rows[-1].update(link=linked, operstate="UNKNOWN")
+            overrides.update({("query", "ipv4"): routes, ("query", "ipv6"): routes,
+                ("query", "link_after"): json.dumps(rows).encode()})
+            value, _, _ = self.failure(overrides)
+            self.assertEqual(value["link_relation"]["status"], "rejected")
+            self.assertGreater(value["families"]["ipv6"]["routes"], 1000)
+
+    def test_new_profile_still_binds_deadline_failure_to_current_poll(self):
+        observer = M.GuestNetworkUnlinkedObserver()
+        after_sleep, reads, ticks = [False], [], iter((109.9, 110.1))
+        basic, lo, dummy = GuestNetworkSinkObserverTests.projections()
+        raw = iter((self.overrides()[("query", "link_before")], lo, dummy,
+            GuestNetworkIsolationTests.QDISC + b"qdisc clsact ffff: dev sink-private parent ffff:fff1\n"))
+        def clock():
+            return next(ticks, 110.1) if after_sleep[0] else 100.0
+        def adb(*args, **kwargs):
+            if args[:2] == ("shell", "svc"): return b""
+            for argv, value in GuestNetworkObserverTests.GUARDS.values():
+                if args == ("shell", *argv): return value
+            query, fixed = GuestNetworkSinkObserverTests.READS[len(reads)]
+            self.assertEqual(args, ("shell", "/system/xbin/su", "0", *fixed))
+            reads.append(query)
+            value = next(raw)
+            observer.record_streams(value, b"", {"stdout", "stderr"}, 0)
+            return value
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(M, "PROOF", Path(directory)), patch.object(M.time, "monotonic", side_effect=clock), \
+                    patch.object(M.time, "sleep", side_effect=lambda _: after_sleep.__setitem__(0, True)), \
+                    self.assertRaisesRegex(ValueError, "GUEST_QDISC_UNSAFE"):
+                observer.enforce(adb, 1000)
+            value = json.loads((Path(directory) / "guest-network-diagnostic.json").read_text())
+        self.assertEqual(value["schema"], 9)
+        self.assertEqual(value["polls"], 2)
+        self.assertEqual(value["last_query"], dict(name=None, outcome="unobserved"))
+        self.assertEqual(value["query_streams"], observer.unobserved_streams())
+        self.assertEqual(value["link_decode"], observer.unobserved_link_decode())
+        self.assertEqual(value["link_relation"], observer.unobserved_relation())
+        self.assertEqual(reads, ["link_before", "loopback_before", "dummy_before", "qdisc_before"])
 
 
 class AvdPreflight(unittest.TestCase):

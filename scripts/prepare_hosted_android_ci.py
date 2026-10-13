@@ -570,7 +570,35 @@ def guest_link_metadata_check(condition, reason, field, rejection, unknown=()):
     raise error
 
 
-def guest_link_rows(raw, *, minimum=1, rejection=None):
+def guest_down_unlinked(row, context, rejection):
+    """Only a literal absent lower device on an explicitly down non-sink.
+
+    AOSP android-16.0.0_r1 ip/ipaddress.c:1119-1135 prints JSON null for
+    IFLA_LINK=0; nonzero same-netns links use ll_idx_n2a (possibly `ifN`).
+    This does not establish the unseen value/state in the original SDK trial.
+    https://android.googlesource.com/platform/external/iproute2/+/refs/tags/android-16.0.0_r1/ip/ipaddress.c#1119
+    """
+    value = row["link"]
+    sink = ("loopback" if context == "loopback" or row["ifname"] == "lo"
+        or row["link_type"] == "loopback" or "LOOPBACK" in row["flags"] else "dummy"
+        if context == "dummy" or row.get("linkinfo", {}).get("info_kind") == "dummy" else "other")
+    admin_down, operstate_down = "UP" not in row["flags"], row["operstate"] == "DOWN"
+    reason = "non_null" if value is not None else "sink" if sink != "other" else "not_down"
+    if value is None and sink == "other" and admin_down and operstate_down:
+        return
+    error = ValueError("GUEST_LINK_METADATA")
+    if rejection is not None:
+        try:
+            value_kind = {type(None): "null", str: "string", bool: "boolean", int: "integer",
+                float: "number", list: "array", dict: "object"}[type(value)]
+            rejection(error, dict(status="rejected", context=context, reason=reason, value_kind=value_kind,
+                admin_down=admin_down, operstate_down=operstate_down, sink=sink))
+        except BaseException:
+            pass  # Diagnostics cannot turn the original rejection into admission.
+    raise error
+
+
+def guest_link_rows(raw, *, minimum=1, rejection=None, unlinked_context=None, unlinked_rejection=None):
     """Bounded RTNL objects; sink authority is checked separately below."""
     require(len(raw) <= 65536, "GUEST_LINK_BOUND")
     rows = json.loads(raw.decode("ascii"), object_pairs_hook=H.unique)
@@ -582,6 +610,9 @@ def guest_link_rows(raw, *, minimum=1, rejection=None):
         "promiscuity allmulti min_mtu max_mtu num_tx_queues num_rx_queues gso_max_size gso_max_segs "
         "tso_max_size tso_max_segs gro_max_size gso_ipv4_max_size gro_ipv4_max_size "
         "inet6_addr_gen_mode linkinfo").split())
+    if unlinked_context is not None:
+        require(unlinked_context in ("link", "loopback", "dummy"), "GUEST_LINK_METADATA")
+        allowed.add("link")
     names, indexes = set(), set()
     for row in rows:
         check(type(row) is dict, "row_type", "row")
@@ -610,6 +641,8 @@ def guest_link_rows(raw, *, minimum=1, rejection=None):
         check(type(info) is dict, "linkinfo_type", "linkinfo")
         check(set(info) <= {"info_kind", "info_data"}, "linkinfo_unknown_fields", "linkinfo", set(info) - {"info_kind", "info_data"})
         check(type(info.get("info_kind", "")) is str, "linkinfo_kind_type", "linkinfo")
+        if unlinked_context is not None and "link" in row:
+            guest_down_unlinked(row, unlinked_context, unlinked_rejection)
         names.add(name)
         indexes.add(index)
     return rows
@@ -624,8 +657,9 @@ def guest_link_identities(rows, *, rejection=None):
         dummy = (kind == "dummy" and row["link_type"] == "ether" and info.get("info_data", {}) == {}
             and "NOARP" in flags and "LOOPBACK" not in flags)
         sink = "loopback" if loopback else "dummy" if dummy else "other"
-        # No master/link/XDP/VF/unknown attributes are admitted above. UNKNOWN
-        # operstate alone proves nothing. Non-sink interfaces must be admin down.
+        # No master/XDP/VF/unknown attributes are admitted above. Only the new
+        # profile admits a null link on down non-sinks; sinks never gain that
+        # exception. UNKNOWN operstate alone proves nothing.
         require(sink != "other" or ("UP" not in flags and row["operstate"] == "DOWN"), "GUEST_LINK_ACTIVE")
         if sink != "other":
             guest_link_metadata_check(row["qdisc"] == "noqueue", "sink_qdisc", "qdisc", rejection)
@@ -1307,6 +1341,47 @@ class GuestNetworkMetadataObserver(GuestNetworkSinkObserver):
         return dict(result, schema=8, link_metadata=dict(self.metadata) if current else self.unobserved_metadata())
 
 
+class GuestNetworkUnlinkedObserver(GuestNetworkMetadataObserver):
+    """Profile 5: retain null-link metadata only on verified down non-sinks."""
+    RELATION_FIELDS = frozenset(("status", "context", "reason", "value_kind", "admin_down", "operstate_down", "sink"))
+    def __init__(self):
+        super().__init__()
+        self.relation = self.unobserved_relation()
+        self.relation_error = self.relation_poll = self.relation_query = None
+
+    @staticmethod
+    def unobserved_relation():
+        return dict(status="unobserved")
+
+    def relation_rejected(self, error, value):
+        require(set(value) == self.RELATION_FIELDS and value["status"] == "rejected"
+            and value["context"] in ("link", "loopback", "dummy")
+            and value["reason"] in ("non_null", "sink", "not_down")
+            and value["value_kind"] in ("null", "string", "boolean", "integer", "number", "array", "object")
+            and type(value["admin_down"]) is bool and type(value["operstate_down"]) is bool
+            and value["sink"] in ("loopback", "dummy", "other"), "GUEST_LINK_DIAGNOSTIC_ENUM")
+        require(len(json.dumps(value, separators=(",", ":")).encode()) <= 256, "GUEST_LINK_DIAGNOSTIC_BOUND")
+        self.relation = value
+        self.relation_error, self.relation_poll, self.relation_query = error, self.polls, self.last_query["name"]
+
+    def parse_link_rows(self, raw, kind):
+        self.metadata_context = "rows"
+        return guest_link_rows(raw, minimum=0 if kind == "dummy" else 1, rejection=self.metadata_rejected,
+            unlinked_context=kind, unlinked_rejection=self.relation_rejected)
+
+    def observation_complete(self, adb_command, deadline, boundary):
+        result = super().observation_complete(adb_command, deadline, boundary)
+        result["schema"] = 5
+        result["observer"]["link_observation"] = "all-basic-and-fixed-sink-details-down-null-link"
+        return result
+
+    def diagnostic_value(self, value, error):
+        result = super().diagnostic_value(value, error)
+        current = (self.relation_error is error and self.relation_poll == self.polls
+            and self.relation_query in self.LINK_QUERIES and self.relation_query == self.last_query["name"])
+        return dict(result, schema=9, link_relation=dict(self.relation) if current else self.unobserved_relation())
+
+
 def package_uid_probe(adb_command):
     # AOSP run-as rejects system/non-debuggable packages and drops real,
     # effective and saved IDs to the package UID before exec. This observes
@@ -1730,7 +1805,7 @@ def inside(*, avd_only=False):
     # material remain under /state, never among uploaded public evidence.
     children, logs = [], []
     diagnostic = EmulatorDiagnostic()
-    network = GuestNetworkMetadataObserver()
+    network = GuestNetworkUnlinkedObserver()
     prior = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
     def interrupted(_s, _f):
         raise H.Interrupted("EMULATOR_INTERRUPTED")
