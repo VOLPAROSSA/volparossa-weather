@@ -38,7 +38,7 @@ export function numberEqual(actual, expected) {
 }
 
 export function validateSnapshot(value) {
-  assert.ok(value && value.schema === 1 && value.kind === 'overmorrow-native-mounted-ui');
+  assert.ok(value && value.schema === 2 && value.kind === 'overmorrow-native-mounted-ui');
   assert.equal(value.package, PACKAGE); assert.equal(value.platform, 'android');
   assert.equal(value.profile, true); assert.equal(value.origin, ORIGIN);
   assert.ok(Array.isArray(value.tables) && value.tables.length <= 4);
@@ -51,7 +51,11 @@ export function validateSnapshot(value) {
     && value.screen[key] >= 200 && value.screen[key] <= 4096));
   assert.ok(Array.isArray(value.refresh) && value.refresh.length <= 1);
   for (const button of value.refresh) {
+    assert.ok(exactKeys(button, ['enabled', 'visible', 'hit_testable', 'x', 'y', 'scroll']));
     assert.ok(['enabled', 'visible', 'hit_testable'].every(key => typeof button[key] === 'boolean'));
+    assert.ok(exactKeys(button.scroll, ['ancestors', 'idle']));
+    assert.ok(Number.isInteger(button.scroll.ancestors) && button.scroll.ancestors >= 0 && button.scroll.ancestors <= 16);
+    assert.ok(button.scroll.ancestors === 0 ? button.scroll.idle === null : typeof button.scroll.idle === 'boolean');
     assert.ok(Number.isFinite(button.x) && Number.isFinite(button.y));
     if (button.visible) assert.ok(button.x > 0 && button.x < value.screen.width
       && button.y > 0 && button.y < value.screen.height);
@@ -105,7 +109,7 @@ const OBSERVER_SUBPHASES = new Set(['unobserved', 'logcat_read', 'vm_address', '
   'package_check', 'force_stop', 'app_start', 'pidof', 'pid_validation',
   'control_request', 'control_status', 'control_body', 'control_decode', 'control_schema',
   'product_counts', 'product_count_wait', 'product_snapshot', 'product_metadata', 'product_tables',
-  'products_unobserved', 'swipe', 'swipe_settle', 'refresh_snapshot', 'refresh_target', 'refresh_unobserved',
+  'products_unobserved', 'swipe', 'swipe_settle', 'refresh_snapshot', 'refresh_target', 'refresh_unobserved', 'refresh_wait', 'post_tap_snapshot',
   'tap', 'missing_values', 'expiry_snapshot', 'expiry_labels', 'expiry_wait', 'before_background',
   'background_home', 'background_snapshot', 'background_wait', 'background_pause', 'resume_start', 'resume_snapshot', 'resume_wait',
   'expired_labels', 'expired_tables', 'final_requests', 'clock_window', 'clock_guest_read',
@@ -384,6 +388,34 @@ export async function waitForObservation(check, deadline, remaining, millisecond
   throw new ObserverFailure('observation_deadline');
 }
 
+export async function tapNativeRefresh({ diagnostic, waitFor, snapshot, swipe, adb, remaining }) {
+  let previous = null, attempts = 0;
+  diagnostic.waitingFor = 'refresh_wait';
+  const target = await waitFor(async () => {
+    attempts++;
+    diagnostic.note(() => ({ refresh_search_attempts: attempts }));
+    const value = await diagnostic.at('refresh_snapshot', snapshot), button = value.refresh[0];
+    diagnostic.subphase = 'refresh_target';
+    const ready = button?.enabled && button.visible && button.hit_testable && button.scroll?.idle === true;
+    const candidate = ready ? { x: button.x, y: button.y, width: value.screen.width, height: value.screen.height,
+      ancestors: button.scroll.ancestors } : null;
+    // isScrollingNotifier covers drag/ballistic activity; equal unrounded
+    // physical coordinates across separate polls also reject moving layouts.
+    // Neither observation invokes the callback or repairs the app's state.
+    if (candidate && previous && Object.keys(candidate).every(key => candidate[key] === previous[key])) return candidate;
+    previous = candidate;
+    if (attempts >= 16) {
+      diagnostic.subphase = 'refresh_unobserved';
+      throw new Error('actual stationary refresh target not reachable');
+    }
+    if (!button || (!button.visible && button.scroll?.idle === true)) await swipe(value);
+    return null;
+  });
+  diagnostic.waitingFor = null;
+  remaining();
+  await diagnostic.at('tap', () => adb(['shell', 'input', 'tap', String(Math.round(target.x)), String(Math.round(target.y))]));
+}
+
 export async function observeVm({ adb, waitFor, pid, diagnostic, ownForward, ownVm, Socket = WebSocket }) {
   diagnostic.subphase = 'unobserved';
   diagnostic.waitingFor = 'vm_address';
@@ -557,18 +589,7 @@ export async function exerciseNativeProducts({ report, diagnostic, control, wait
     throw new Error('mounted native products not observed');
   }
   async function tapRefresh() {
-    for (let attempt = 0; attempt < 16; attempt++) {
-      diagnostic.note(() => ({ refresh_search_attempts: attempt + 1 }));
-      const value = await diagnostic.at('refresh_snapshot', snapshot), button = value.refresh[0];
-      diagnostic.subphase = 'refresh_target';
-      if (button?.enabled && button.visible && button.hit_testable) {
-        await diagnostic.at('tap', () => adb(['shell', 'input', 'tap', String(Math.round(button.x)), String(Math.round(button.y))]));
-        return;
-      }
-      await swipe(value);
-    }
-    diagnostic.subphase = 'refresh_unobserved';
-    throw new Error('actual refresh target not reachable');
+    await tapNativeRefresh({ diagnostic, waitFor, snapshot, swipe, adb, remaining });
   }
   async function products(count, prepared) {
     diagnostic.waitingFor = 'product_count_wait';
@@ -579,7 +600,15 @@ export async function exerciseNativeProducts({ report, diagnostic, control, wait
       assert.ok(value.calls.weather <= count && value.calls.air_quality <= count);
       assert.equal(value.phase, prepared.phase);
       assert.deepEqual(value.products, prepared.products);
-      return value.calls.weather === count && value.calls.air_quality === count ? value : null;
+      if (value.calls.weather === count && value.calls.air_quality === count) return value;
+      if (count > 1) {
+        // Optional post-input state explains a pending count without replacing
+        // the primary control/timeout failure, invoking app code or making GETs.
+        try { await diagnostic.at('post_tap_snapshot', snapshot); }
+        catch { /* Missing observation stays unknown; the real waiter remains. */ }
+        finally { diagnostic.subphase = 'product_counts'; }
+      }
+      return null;
     });
     diagnostic.waitingFor = null;
     return result;

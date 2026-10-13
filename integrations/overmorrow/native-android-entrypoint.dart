@@ -105,6 +105,20 @@ Map<String, Object?> _snapshot(_Lifecycle lifecycle) {
             }
             return false;
           });
+          // A child can be hit-testable while a bouncing ScrollPosition is
+          // settling. Read every enclosing position; never stop or move it.
+          var scrollAncestors = 0, ancestorsVisited = 0;
+          var scrollIdle = true;
+          element.visitAncestorElements((ancestor) {
+            if (++ancestorsVisited > 256) throw const FormatException('Ancestor observation bound');
+            if (ancestor is StatefulElement && ancestor.state is ScrollableState) {
+              if (++scrollAncestors > 16) throw const FormatException('Scroll observation bound');
+              final position = (ancestor.state as ScrollableState).position;
+              scrollIdle = scrollIdle && position.hasPixels && position.hasContentDimensions &&
+                  !position.isScrollingNotifier.value;
+            }
+            return true;
+          });
           refresh.add({
             'enabled': widget.onPressed != null,
             'hit_testable': hitTestable,
@@ -112,6 +126,7 @@ Map<String, Object?> _snapshot(_Lifecycle lifecycle) {
             'visible': topLeft.dx >= 0 && topLeft.dy >= 0 &&
                 (topLeft.dx + box.size.width) * scale <= physical.width &&
                 (topLeft.dy + box.size.height) * scale <= physical.height,
+            'scroll': {'ancestors': scrollAncestors, 'idle': scrollAncestors == 0 ? null : scrollIdle},
           });
         }
       }
@@ -124,7 +139,7 @@ Map<String, Object?> _snapshot(_Lifecycle lifecycle) {
   // is a substitute for the driver's exact native rows/lifecycle acceptance.
   final state = homes == 1 ? home : null;
   return {
-    'schema': 1, 'kind': 'overmorrow-native-mounted-ui',
+    'schema': 2, 'kind': 'overmorrow-native-mounted-ui',
     'package': 'org.volparossa.weather.trial', 'platform': 'android',
     'profile': volparossaProfile, 'origin': volparossaNativeOrigin,
     'tables': tables, 'labels': labels, 'refresh': refresh,

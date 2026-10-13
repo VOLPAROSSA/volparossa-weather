@@ -131,11 +131,21 @@ class ProfileTests(unittest.TestCase):
         self.assertIn('WidgetsBinding.instance.rootElement', source)
         self.assertIn('widget is DataTable', source)
         self.assertIn('hitTestInView(hit, center, view.viewId)', source)
+        self.assertIn("'schema': 2, 'kind': 'overmorrow-native-mounted-ui'", source)
+        self.assertIn('ancestor.state is ScrollableState', source)
+        self.assertIn('position.hasPixels && position.hasContentDimensions', source)
+        self.assertIn('!position.isScrollingNotifier.value', source)
+        self.assertIn('++ancestorsVisited > 256', source)
+        self.assertIn('++scrollAncestors > 16', source)
+        self.assertIn("'idle': scrollAncestors == 0 ? null : scrollIdle", source)
+        self.assertIn("'x': center.dx * scale, 'y': center.dy * scale", source)
         self.assertIn('kDebugMode', source)
         self.assertNotIn('onPressed()', source)
         self.assertNotIn('updateLocation(', source)
         self.assertNotIn('MockClient', source)
         self.assertNotIn('setState(', source)
+        for operation in ('jumpTo(', 'animateTo(', 'goIdle(', 'goBallistic(', 'ensureVisible('):
+            self.assertNotIn(operation, source)
 
     def test_read_only_product_observation_contract_and_no_raw_app_error(self):
         source = (HERE / 'native-android-entrypoint.dart').read_text()

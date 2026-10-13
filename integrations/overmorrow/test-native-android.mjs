@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { HEADERS, PACKAGE, COMPONENT, numberEqual, validateSnapshot, verifyTable, vmAddress,
   adbFailure, ObserverDiagnostic, observeVm, waitForObservation, startInstalledApp, resumeInstalledApp,
   recordDriverFailure, readFixtureControl, exerciseNativeProducts, productClockWindow,
-  phaseClockReady, prepareNativePhase } from './native-android-driver.mjs';
+  phaseClockReady, prepareNativePhase, tapNativeRefresh } from './native-android-driver.mjs';
 import { nativeFixtureState, API_PORT, CONTROL_PORT } from './native-android-fixture.mjs';
 
 const NOW = '2026-10-12T02:00:00.000Z';
@@ -26,7 +26,7 @@ function table(product, quality = false) {
         : `${sample.precipitation.start_at} → ${sample.precipitation.end_at}`] : [])]) };
 }
 function snapshot(tables = []) {
-  return { schema: 1, kind: 'overmorrow-native-mounted-ui', package: PACKAGE, platform: 'android',
+  return { schema: 2, kind: 'overmorrow-native-mounted-ui', package: PACKAGE, platform: 'android',
     profile: true, origin: 'http://127.0.0.1:43210', tables, labels: [], refresh: [],
     lifecycle: ['resumed'], current_lifecycle: 'resumed', screen: { width: 1080, height: 1920 } };
 }
@@ -120,12 +120,125 @@ test('wrong app/profile/origin and unbounded data rejected', () => {
     assert.throws(() => validateSnapshot({ ...snapshot(), ...change }));
   }
 });
+function refreshButton() {
+  return { x: 540, y: 1800, enabled: true, visible: true, hit_testable: true, scroll: { ancestors: 1, idle: true } };
+}
 test('visible refresh is bounded and carries independent hit-test observation', () => {
-  const value = snapshot(); value.refresh = [{ x: 500, y: 900, enabled: true, visible: true, hit_testable: true }];
+  const value = snapshot(); value.refresh = [refreshButton()];
   validateSnapshot(value);
   delete value.refresh[0].hit_testable; assert.throws(() => validateSnapshot(value));
   value.refresh[0].hit_testable = false; value.refresh[0].x = -2;
   assert.throws(() => validateSnapshot(value));
+});
+test('refresh snapshot v2 requires exact bounded ancestor-idle evidence; historical v1 is not readiness', () => {
+  for (const change of [value => { value.schema = 1; }, value => { delete value.refresh[0].scroll; },
+    value => { value.refresh[0].extra = 'private'; }, value => { value.refresh[0].scroll.extra = 'private'; },
+    value => { value.refresh[0].scroll.ancestors = 17; }, value => { value.refresh[0].scroll.ancestors = -1; },
+    value => { value.refresh[0].scroll.ancestors = 1.5; }, value => { value.refresh[0].scroll.ancestors = '1'; },
+    value => { value.refresh[0].scroll.idle = null; }, value => { value.refresh[0].scroll.idle = 'true'; },
+    value => { value.refresh[0].scroll.ancestors = 0; }]) {
+    const value = snapshot(); value.refresh = [refreshButton()]; change(value);
+    assert.throws(() => validateSnapshot(value));
+  }
+  const value = snapshot(); value.refresh = [{ ...refreshButton(), scroll: { ancestors: 0, idle: null } }];
+  validateSnapshot(value); // Explicit unknown, never affirmative idle.
+});
+function refreshExercise(options = {}) {
+  const diagnostic = new ObserverDiagnostic(); diagnostic.beginProducts(2);
+  const events = []; let reads = 0;
+  const context = { diagnostic, remaining: options.remaining ?? (() => {}),
+    waitFor: check => waitForObservation(check, options.deadline ?? Date.now() + 180000, context.remaining),
+    async snapshot() {
+      const value = snapshot(); value.refresh = [refreshButton()];
+      await options.read?.(value, ++reads); events.push(['snapshot', reads]);
+      return validateSnapshot(value);
+    },
+    async swipe() { events.push(['swipe']); },
+    async adb(args) { events.push(['adb', ...args]); await options.adb?.(args); },
+  };
+  return { context, events, diagnostic, run: () => tapNativeRefresh(context) };
+}
+test('refresh waits for every ancestor idle and two exact physical targets before one real tap', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100 });
+  const value = refreshExercise({ read(value, n) {
+    value.refresh[0].scroll = { ancestors: 2, idle: n !== 1 };
+    value.refresh[0].x = 539.6;
+  } });
+  const result = value.run(); await flush();
+  assert.ok(!value.events.some(row => row[0] === 'adb'));
+  t.mock.timers.tick(250); await flush();
+  assert.ok(!value.events.some(row => row[0] === 'adb'));
+  t.mock.timers.tick(250); await result;
+  assert.deepEqual(value.events.filter(row => row[0] === 'adb'), [['adb', 'shell', 'input', 'tap', '540', '1800']]);
+  assert.ok(!value.events.some(row => row[0] === 'swipe'));
+  assert.equal(value.diagnostic.progress.refresh_search_attempts, 3);
+});
+test('moving or unknown-idle targets exhaust the same sixteen observations without taps or scroll-stopping input', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100 });
+  for (const mode of ['moving', 'scrolling', 'unknown', 'disabled', 'covered']) {
+    const value = refreshExercise({ read(value, n) {
+      const button = value.refresh[0];
+      if (mode === 'moving') button.x += n / 100;
+      if (mode === 'scrolling') button.scroll.idle = false;
+      if (mode === 'unknown') button.scroll = { ancestors: 0, idle: null };
+      if (mode === 'disabled') button.enabled = false;
+      if (mode === 'covered') button.hit_testable = false;
+    } });
+    const result = assert.rejects(value.run()); await flush();
+    for (let i = 1; i < 16; i++) { t.mock.timers.tick(250); await flush(); }
+    await result;
+    assert.equal(value.diagnostic.progress.refresh_search_attempts, 16);
+    assert.ok(value.events.every(row => row[0] === 'snapshot'));
+  }
+});
+test('readiness that moves, loses idle or changes dimensions must establish a new stable pair', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100 });
+  for (const mode of ['subpixel', 'dimensions', 'ancestor', 'lost-idle']) {
+    const value = refreshExercise({ read(value, n) {
+      if (n >= 2 && mode === 'subpixel') value.refresh[0].x += 0.1;
+      if (n >= 2 && mode === 'dimensions') value.screen.width += 1;
+      if (n >= 2 && mode === 'ancestor') value.refresh[0].scroll.ancestors = 2;
+      if (n === 2 && mode === 'lost-idle') value.refresh[0].scroll.idle = false;
+    } });
+    const result = value.run(); await flush();
+    t.mock.timers.tick(250); await flush();
+    assert.ok(!value.events.some(row => row[0] === 'adb'));
+    t.mock.timers.tick(250); await flush();
+    if (mode === 'lost-idle') {
+      assert.ok(!value.events.some(row => row[0] === 'adb')); t.mock.timers.tick(250);
+    }
+    await result;
+    assert.equal(value.events.filter(row => row[0] === 'adb').length, 1);
+  }
+});
+test('stationary target returned at timeout, global deadline or interruption cannot be tapped', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100 });
+  const Failure = adbFailure({}).constructor;
+  for (const [elapsed, global, code] of [[15000, 180000, 'observation_deadline'], [1000, 1000, 'trial_deadline']]) {
+    let finish; const deadline = Date.now() + global;
+    const value = refreshExercise({ deadline,
+      remaining() { if (Date.now() >= deadline) throw new Failure('trial_deadline'); },
+      async read(value, n) { if (n === 2) await new Promise(resolve => { finish = resolve; }); } });
+    const result = assert.rejects(value.run(), error => error.observerCode === code); await flush();
+    t.mock.timers.tick(250); await flush();
+    t.mock.timers.tick(elapsed - 250); finish(); await result;
+    assert.ok(!value.events.some(row => row[0] === 'adb'));
+  }
+  let interrupted = false, finish;
+  const primary = new Failure('interrupted');
+  const value = refreshExercise({ remaining() { if (interrupted) throw primary; },
+    async read(value, n) { if (n === 2) await new Promise(resolve => { finish = resolve; }); } });
+  const result = assert.rejects(value.run(), error => error === primary); await flush();
+  t.mock.timers.tick(250); await flush(); interrupted = true; finish(); await result;
+  assert.ok(!value.events.some(row => row[0] === 'adb'));
+});
+test('real tap failure is returned once without retry or direct provider calls', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100 });
+  const primary = adbFailure({ code: 1 }), value = refreshExercise({ adb() { throw primary; } });
+  const result = assert.rejects(value.run(), error => error === primary); await flush();
+  t.mock.timers.tick(250); await result;
+  assert.equal(value.events.filter(row => row[0] === 'adb').length, 1);
+  assert.equal(value.diagnostic.subphase, 'tap');
 });
 test('VM address is one loopback service from bounded log text, never arbitrary authority', () => {
   const line = 'I/flutter ( 1234): The Dart VM service is listening on http://127.0.0.1:34567/Ab_c-123=/';
@@ -912,9 +1025,13 @@ function productExerciseFixture(options = {}) {
     async waitFor(check, milliseconds = 15000) {
       events.push(['wait', milliseconds]);
       options.beforeWait?.(report, diagnostic);
-      const result = await check();
-      if (!result) throw new (adbFailure({}).constructor)('observation_deadline');
-      return result;
+      // Only the new stationary-target waiter needs successive synthetic
+      // snapshots; real-time tests above exercise its actual deadline helper.
+      for (let i = 0; i < (diagnostic.waitingFor === 'refresh_wait' ? 16 : 1); i++) {
+        const result = await check();
+        if (result) return result;
+      }
+      throw new (adbFailure({}).constructor)('observation_deadline');
     },
     async snapshot() {
       events.push(['snapshot', report.phase, diagnostic.subphase]);
@@ -922,7 +1039,7 @@ function productExerciseFixture(options = {}) {
       const value = snapshot(resumed ? [] : [table(products.weather), table(products.air_quality, true)]);
       value.labels = resumed ? Array(2).fill('Expired — refresh required; values are hidden')
         : Object.values(products).flatMap(productMetadata);
-      value.refresh = [{ x: 540, y: 1800, enabled: true, visible: true, hit_testable: true }];
+      value.refresh = [refreshButton()];
       if (background && !resumed) { value.current_lifecycle = 'paused'; value.lifecycle = ['resumed', 'hidden', 'paused']; }
       if (resumed) value.lifecycle = ['resumed', 'inactive', 'hidden', 'paused', 'resumed'];
       options.snapshot?.(value, report, diagnostic);
@@ -949,7 +1066,7 @@ test('actual product sequence retains exact initial/refresh/expiry gates, comman
   assert.deepEqual(fixture.report.observations.requests, { weather: 3, air_quality: 3 });
   assert.equal(fixture.report.observations.initial.weather.rows, 4);
   assert.equal(fixture.report.observations.refresh.air_quality.rows, 5);
-  assert.deepEqual(fixture.events.filter(row => row[0] === 'wait').map(row => row[1]), [15000, 15000, 15000, 15000, 15000, 3000, 15000, 15000]);
+  assert.deepEqual(fixture.events.filter(row => row[0] === 'wait').map(row => row[1]), [15000, 15000, 15000, 15000, 15000, 15000, 15000, 3000, 15000, 15000]);
   assert.deepEqual(fixture.events.filter(row => row[0] === 'control').map(row => row.slice(1)),
     [['/state', 'GET'], ['/phase/refresh', 'POST'], ['/state', 'GET'], ['/phase/short-lived', 'POST'], ['/state', 'GET'], ['/state', 'GET']]);
   assert.deepEqual(fixture.events.filter(row => row[0] === 'adb').map(row => row.slice(1)), [
@@ -1189,6 +1306,73 @@ function appDiagnostic() {
       has_weather: true, has_air_quality: true, weather_view_mounted: true,
       air_quality_view_mounted: true, framework_error_mounted: false } };
 }
+
+test('post-tap pending counts retain fresh closed app state, never a stale pre-tap snapshot or synthetic GET', async () => {
+  for (const mode of ['current', 'missing', 'failure']) {
+    const value = productExerciseFixture({ snapshot(observation, report, diagnostic) {
+      observation.diagnostic = appDiagnostic();
+      if (diagnostic.subphase === 'post_tap_snapshot') {
+        if (mode === 'failure') throw new Error(PRIVATE_TEXT);
+        if (mode === 'missing') delete observation.diagnostic;
+        else observation.diagnostic.app.loading = true;
+      }
+    } });
+    const original = value.context.adb;
+    value.context.adb = async args => {
+      if (args[2] === 'tap') { value.events.push(['adb', ...args]); return; }
+      return original(args);
+    };
+    const { receipt } = await rejectedProducts(value);
+    assert.equal(receipt.subphase, 'product_count_wait');
+    assert.equal(receipt.code, 'observation_deadline');
+    assert.deepEqual(value.state.status().calls, { weather: 1, air_quality: 1 });
+    assert.equal(value.events.filter(row => row[0] === 'adb' && row[3] === 'tap').length, 1);
+    assert.equal(value.events.filter(row => row[0] === 'snapshot' && row[2] === 'post_tap_snapshot').length, 1);
+    if (mode === 'current') {
+      assert.equal(receipt.last_snapshot.snapshot_subphase, 'post_tap_snapshot');
+      assert.equal(receipt.last_snapshot.app.loading, true);
+    } else assert.equal(receipt.last_snapshot, null);
+    assert.equal(value.report.checks.initial_exact_native_rows, true);
+    assert.equal(value.report.checks.actual_tap_refresh_and_missing_values, undefined);
+  }
+});
+test('optional post-tap observation cannot extend count deadline or mask interruption/control failure', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100 });
+  const Failure = adbFailure({}).constructor;
+  for (const mode of ['deadline', 'interrupted', 'control']) {
+    let finish, interrupted = false;
+    const primary = new Failure('interrupted');
+    const value = productExerciseFixture({ control(result, path, report) {
+      if (mode === 'control' && path === '/state' && report.phase === 'actual-refresh') result.calls.weather = 3;
+    } });
+    const originalRead = value.context.snapshot, originalWait = value.context.waitFor, originalAdb = value.context.adb;
+    value.context.adb = async args => args[2] === 'tap' ? value.events.push(['adb', ...args]) : originalAdb(args);
+    value.context.snapshot = async () => {
+      if (value.diagnostic.subphase === 'post_tap_snapshot') await new Promise(resolve => { finish = resolve; });
+      return originalRead();
+    };
+    value.context.waitFor = (check, milliseconds) => value.report.phase === 'actual-refresh'
+      && value.diagnostic.waitingFor === 'product_count_wait'
+      ? waitForObservation(check, Date.now() + 180000, () => { if (interrupted) throw primary; })
+      : originalWait(check, milliseconds);
+    const result = rejectedProducts(value); await flush();
+    if (mode === 'control') {
+      const { receipt } = await result;
+      assert.equal(finish, undefined); assert.equal(receipt.subphase, 'product_counts');
+      assert.equal(receipt.code, 'validation_failed');
+    } else {
+      assert.equal(typeof finish, 'function');
+      if (mode === 'deadline') t.mock.timers.tick(15000);
+      else interrupted = true;
+      finish();
+      const { receipt, failure } = await result;
+      assert.equal(receipt.code, mode === 'deadline' ? 'observation_deadline' : 'interrupted');
+      if (mode === 'interrupted') assert.equal(failure, primary);
+    }
+    assert.deepEqual(value.state.status().calls, { weather: 1, air_quality: 1 });
+    assert.equal(value.events.filter(row => row[0] === 'adb' && row[3] === 'tap').length, 1);
+  }
+});
 
 test('actual snapshot-to-failure path separates request, response, parsing, clocks and mounted app state', async () => {
   for (const [outcome, clock, stage, received, decoded] of [
