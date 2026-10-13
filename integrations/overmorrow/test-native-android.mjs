@@ -5,13 +5,16 @@ import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { HEADERS, PACKAGE, COMPONENT, numberEqual, validateSnapshot, verifyTable, vmAddress,
   adbFailure, ObserverDiagnostic, observeVm, waitForObservation, startInstalledApp, resumeInstalledApp,
-  recordDriverFailure, readFixtureControl, exerciseNativeProducts } from './native-android-driver.mjs';
+  recordDriverFailure, readFixtureControl, exerciseNativeProducts, productClockWindow,
+  phaseClockReady, prepareNativePhase } from './native-android-driver.mjs';
 import { nativeFixtureState, API_PORT, CONTROL_PORT } from './native-android-fixture.mjs';
 
 const NOW = '2026-10-12T02:00:00.000Z';
 function fixture() {
   const state = nativeFixtureState(NOW);
-  return { state, weather: state.product(false, NOW), air_quality: state.product(true, NOW) };
+  state.setPhase('initial', NOW);
+  const prepared = state.status();
+  return { state, prepared, weather: state.product(false), air_quality: state.product(true) };
 }
 function table(product, quality = false) {
   return { product: quality ? 'air_quality' : 'weather', headers: HEADERS[quality ? 'air_quality' : 'weather'],
@@ -38,13 +41,50 @@ test('fixture separates loopback API/control and makes no core claim', () => {
 test('fixture phases require real prior requests and preserve missing values', () => {
   const state = nativeFixtureState(NOW);
   assert.throws(() => state.setPhase('refresh'));
-  state.product(false, NOW); state.product(true, NOW); state.setPhase('refresh');
-  const weather = state.product(false, NOW); state.product(true, NOW);
+  assert.throws(() => state.product(false));
+  state.setPhase('initial', NOW);
+  state.product(false); state.product(true); state.setPhase('refresh', NOW);
+  const weather = state.product(false); state.product(true);
   assert.equal(weather.forecast.samples[0].temperature_2m, null);
-  state.setPhase('short-lived');
-  const short = state.product(false, NOW); state.product(true, NOW);
+  state.setPhase('short-lived', NOW);
+  const short = state.product(false); state.product(true);
   assert.equal(Date.parse(short.freshness.expires_at) - Date.parse(NOW), 4500);
-  assert.throws(() => state.product(false, NOW)); assert.throws(() => state.setPhase('initial'));
+  assert.throws(() => state.product(false)); assert.throws(() => state.setPhase('initial'));
+});
+test('native acquisition is once per prepared phase, immutable across clock advance and caller mutation', t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse(NOW) });
+  const state = nativeFixtureState();
+  assert.equal(state.status().phase, null); assert.throws(() => state.product(false));
+  for (const [index, phase] of ['initial', 'refresh', 'short-lived'].entries()) {
+    const actualAcquisition = new Date().toISOString();
+    state.setPhase(phase);
+    const prepared = state.status(), before = JSON.stringify(prepared.products);
+    assert.deepEqual(prepared.calls, { weather: index, air_quality: index });
+    assert.ok(Object.values(prepared.products).every(product => product.forecast.source.acquired_at === actualAcquisition));
+    assert.throws(() => state.setPhase(phase));
+    t.mock.timers.tick(500);
+    const weather = state.product(false);
+    assert.deepEqual(weather, prepared.products.weather);
+    weather.forecast.source.acquired_at = 'changed';
+    prepared.products.air_quality.forecast.source.acquired_at = 'changed';
+    assert.deepEqual(state.product(true), JSON.parse(before).air_quality);
+    assert.equal(JSON.stringify(state.status().products), before);
+    assert.throws(() => state.product(false)); assert.throws(() => state.product(true));
+    if (phase === 'short-lived') {
+      assert.equal(Date.parse(state.status().products.weather.freshness.expires_at) - Date.parse(actualAcquisition), 4500);
+      t.mock.timers.tick(5000);
+      assert.throws(() => state.setPhase(phase)); // Expiry grants no re-preparation.
+      assert.equal(JSON.stringify(state.status().products), before);
+    }
+  }
+  assert.deepEqual(state.status().calls, { weather: 3, air_quality: 3 });
+});
+test('a failed acquisition also consumes its one phase preparation without a usable response', () => {
+  const state = nativeFixtureState(NOW);
+  assert.throws(() => state.setPhase('initial', 'invalid'));
+  assert.throws(() => state.setPhase('initial', NOW)); assert.throws(() => state.setPhase('refresh', NOW));
+  assert.throws(() => state.product(false)); assert.throws(() => state.product(true));
+  assert.deepEqual(state.status().calls, { weather: 0, air_quality: 0 });
 });
 test('exact ordered weather and independent AQ rows pass', () => {
   const values = fixture();
@@ -688,6 +728,146 @@ function controlResponse(value, status = 200) {
   const bytes = Buffer.from(typeof value === 'string' ? value : JSON.stringify(value));
   return { status, body: (async function* () { yield bytes; })() };
 }
+function clockFixture(options = {}) {
+  const diagnostic = new ObserverDiagnostic(), state = nativeFixtureState(NOW), events = [];
+  const context = { diagnostic, remaining: options.remaining ?? (() => {}), clock: options.clock ?? Date.now,
+    async control(path) {
+      events.push(['control', path]); state.setPhase(path.slice('/phase/'.length));
+      return state.status();
+    },
+    waitFor: check => waitForObservation(check, options.deadline ?? Date.now() + 180000, context.remaining),
+    async adb(args) {
+      events.push(['adb', ...args]); assert.deepEqual(args, ['shell', '/system/bin/date', '+%s%3N']);
+      return options.read ? options.read() : String(Date.now());
+    },
+  };
+  return { state, context, events, diagnostic, run: () => prepareNativePhase(context, 'initial') };
+}
+test('clock window binds latest acquisition and every original/publication expiry of both products', () => {
+  const { prepared } = fixture(), now = Date.parse(NOW), iso = delta => new Date(now + delta).toISOString();
+  prepared.products.air_quality.forecast.source.acquired_at = iso(250);
+  assert.equal(productClockWindow(prepared.products).acquired, now + 250);
+  for (const name of ['weather', 'air_quality']) for (const kind of ['original', 'publication']) {
+    const products = structuredClone(prepared.products), product = products[name];
+    if (kind === 'original') product.forecast.freshness.expires_at = iso(1500);
+    else product.delivery.publication_expires_at = iso(1500);
+    product.freshness.expires_at = iso(1500);
+    assert.deepEqual(productClockWindow(products), { acquired: now + 250, expires: now + 1500 });
+  }
+  for (const change of [value => { delete value.air_quality; }, value => { value.extra = {}; },
+    value => { value.weather.forecast.source.acquired_at = PRIVATE_TEXT; },
+    value => { value.weather.forecast.source.acquired_at = '2026-02-30T02:00:00.000Z'; },
+    value => { value.weather.forecast.freshness.expires_at = NOW; },
+    value => { value.weather.freshness.expires_at = iso(2000); },
+    value => { value.air_quality.forecast.source.acquired_at = iso(120000); }]) {
+    const products = structuredClone(prepared.products); change(products);
+    assert.throws(() => productClockWindow(products));
+  }
+});
+test('one real phase preparation waits for guest acquisition readiness without a product request or clock write', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.parse(NOW) });
+  const value = clockFixture({ read: () => String(Date.now() - 200) });
+  let settled = false;
+  const pending = value.run().then(result => { settled = true; return result; });
+  await flush(); assert.equal(settled, false);
+  assert.deepEqual(value.state.status().calls, { weather: 0, air_quality: 0 });
+  const before = JSON.stringify(value.state.status().products);
+  t.mock.timers.tick(250);
+  const prepared = await pending;
+  assert.equal(value.diagnostic.waitingFor, null);
+  assert.equal(JSON.stringify(prepared.products), before);
+  assert.deepEqual(value.events, [['control', '/phase/initial'],
+    ['adb', 'shell', '/system/bin/date', '+%s%3N'], ['adb', 'shell', '/system/bin/date', '+%s%3N']]);
+  assert.deepEqual(value.state.product(false), prepared.products.weather);
+  assert.deepEqual(value.state.product(true), prepared.products.air_quality);
+  await assert.rejects(value.run()); // Even caller retry cannot reacquire this phase.
+});
+test('clock barrier rejects malformed reads and command failures without raw data or re-preparation', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse(NOW) });
+  for (const raw of ['', PRIVATE_TEXT, {}, [], '0', '-1234567890123', '12345678901234',
+    `${Date.now()}\n`, ` ${Date.now()}`, '1e12', '1234567890000.0']) {
+    const value = clockFixture({ read: () => raw });
+    await assert.rejects(value.run());
+    const report = value.diagnostic.failure(new Error(PRIVATE_TEXT));
+    assert.equal(report.subphase, 'clock_guest_decode');
+    assert.ok(!JSON.stringify(report).includes(PRIVATE_TEXT));
+    assert.deepEqual(value.state.status().calls, { weather: 0, air_quality: 0 });
+  }
+  const primary = adbFailure({ code: 1 });
+  const value = clockFixture({ read() { throw primary; } });
+  await assert.rejects(value.run(), error => error === primary);
+  assert.equal(value.diagnostic.failure(primary).subphase, 'clock_guest_read');
+  assert.equal(value.events.filter(row => row[0] === 'control').length, 1);
+});
+test('host and guest expiry and host rollback fail rather than renewing or backdating prepared products', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse(NOW) });
+  const { prepared } = fixture(), window = productClockWindow(prepared.products);
+  for (const [host, guest, code, reads] of [
+    [window.expires, window.acquired, 'clock_expired', 0],
+    [window.acquired - 1, window.acquired, 'clock_host_before_acquisition', 0],
+    [window.acquired, window.expires, 'clock_expired', 1],
+  ]) {
+    const value = clockFixture({ clock: () => host, read: () => String(guest) });
+    await assert.rejects(phaseClockReady(value.context, prepared.products), error => error.observerCode === code);
+    assert.equal(value.events.length, reads);
+  }
+  let host = window.acquired;
+  const late = clockFixture({ clock: () => host, read() { host = window.expires; return String(window.acquired); } });
+  await assert.rejects(phaseClockReady(late.context, prepared.products), error => error.observerCode === 'clock_expired');
+  assert.equal(await phaseClockReady(clockFixture({ clock: () => window.acquired,
+    read: () => String(window.acquired) }).context, prepared.products), true); // Equality is unchanged.
+});
+test('clock waiter preserves 15s/global bounds and post-await interruption instead of late readiness', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.parse(NOW) });
+  for (const global of [180000, 1000]) {
+    let finish;
+    const deadline = Date.now() + global, Failure = adbFailure({}).constructor;
+    const value = clockFixture({ deadline, remaining() {
+      if (Date.now() >= deadline) throw new Failure('trial_deadline');
+    }, read: () => new Promise(resolve => { finish = resolve; }) });
+    const result = assert.rejects(value.run(), error => error.observerCode === (global === 1000 ? 'trial_deadline' : 'observation_deadline'));
+    await flush(); t.mock.timers.tick(Math.min(global, 15000)); finish(String(Date.now())); await result;
+    assert.equal(value.events.filter(row => row[0] === 'control').length, 1);
+    assert.deepEqual(value.state.status().calls, { weather: 0, air_quality: 0 });
+  }
+  let interrupted = false, finish;
+  const primary = new (adbFailure({}).constructor)('interrupted');
+  const value = clockFixture({ remaining() { if (interrupted) throw primary; },
+    read: () => new Promise(resolve => { finish = resolve; }) });
+  const result = assert.rejects(value.run(), error => error === primary);
+  await flush(); interrupted = true; finish(String(Date.now())); await result;
+  assert.equal(value.diagnostic.failure(primary).code, 'interrupted');
+  assert.deepEqual(value.state.status().calls, { weather: 0, air_quality: 0 });
+});
+test('short-lived products expire during a lagging-guest wait without re-preparation or extra requests', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.parse(NOW) });
+  const value = clockFixture({ read: () => String(Date.now() - 5000) });
+  for (const phase of ['initial', 'refresh']) {
+    value.state.setPhase(phase); value.state.product(false); value.state.product(true);
+  }
+  const result = assert.rejects(prepareNativePhase(value.context, 'short-lived'), error => error.observerCode === 'clock_expired');
+  await flush();
+  const original = JSON.stringify(value.state.status().products);
+  t.mock.timers.tick(4500); await result;
+  assert.equal(JSON.stringify(value.state.status().products), original);
+  assert.deepEqual(value.state.status().calls, { weather: 2, air_quality: 2 });
+  assert.deepEqual(value.events.filter(row => row[0] === 'control'), [['control', '/phase/short-lived']]);
+  assert.throws(() => value.state.setPhase('short-lived'));
+});
+test('initial preparation and actual installed helper launch remain ordered with no launch on barrier failure', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.parse(NOW) });
+  const value = clockFixture(), installed = installedFixture();
+  const prepared = await value.run();
+  assert.deepEqual(prepared.calls, { weather: 0, air_quality: 0 });
+  assert.equal(await installed.run(), '1234'); assert.equal(installed.owned(), true);
+  assert.equal(installed.calls.filter(row => row.operation === 'app_start').length, 1);
+  const failed = clockFixture({ read: () => PRIVATE_TEXT }), untouched = installedFixture();
+  await assert.rejects((async () => { await failed.run(); return untouched.run(); })());
+  assert.equal(untouched.calls.length, 0); assert.equal(untouched.owned(), false);
+  const source = await readFile(new URL('./native-android-driver.mjs', import.meta.url), 'utf8');
+  assert.ok(source.indexOf('const initialPrepared = await prepareNativePhase') < source.indexOf('const pid = await startInstalledApp'));
+  assert.ok(!source.includes('set-time') && !source.includes('date -s'));
+});
 async function rejectedProducts(fixture) {
   let failure;
   try { await fixture.run(); } catch (error) { failure = error; }
@@ -711,18 +891,19 @@ function productMetadata(product) {
 // No server, app or native process. Run the actual driver sequence against the
 // synthetic fixture's products to test its predicates, not to claim UI proof.
 function productExerciseFixture(options = {}) {
-  const { state } = fixture(), diagnostic = new ObserverDiagnostic(), events = [];
+  const { state, prepared } = fixture(), diagnostic = new ObserverDiagnostic(), events = [];
   const report = { phase: 'read-only-observer', passed: false, checks: {}, observations: {},
     scope: { mounted_widget_tables: false, real_adb_interaction: false } };
-  let resumed = false;
-  const context = { report, diagnostic, remaining() { options.remaining?.(report, diagnostic); },
+  let resumed = false, background = false;
+  const context = { report, diagnostic, initialPrepared: prepared, clock: () => Date.parse(NOW),
+    remaining() { options.remaining?.(report, diagnostic); },
     async control(path) {
       return readFixtureControl({ remaining: context.remaining, diagnostic, async fetchControl(url, init) {
         const path = new URL(url).pathname;
         events.push(['control', path, init.method]);
         assert.equal(new URL(url).origin, 'http://127.0.0.1:43211');
         assert.equal(init.redirect, 'error'); assert.ok(init.signal instanceof AbortSignal);
-        if (path !== '/state') state.setPhase(path.slice('/phase/'.length));
+        if (path !== '/state') state.setPhase(path.slice('/phase/'.length), NOW);
         const value = state.status();
         options.control?.(value, path, report, diagnostic);
         return controlResponse(value);
@@ -742,13 +923,16 @@ function productExerciseFixture(options = {}) {
       value.labels = resumed ? Array(2).fill('Expired — refresh required; values are hidden')
         : Object.values(products).flatMap(productMetadata);
       value.refresh = [{ x: 540, y: 1800, enabled: true, visible: true, hit_testable: true }];
+      if (background && !resumed) { value.current_lifecycle = 'paused'; value.lifecycle = ['resumed', 'hidden', 'paused']; }
       if (resumed) value.lifecycle = ['resumed', 'inactive', 'hidden', 'paused', 'resumed'];
       options.snapshot?.(value, report, diagnostic);
       return validateSnapshot(value);
     },
     async adb(args) {
       events.push(['adb', ...args]); options.adb?.(args, report, diagnostic);
-      if (args[2] === 'tap') { state.product(false, NOW); state.product(true, NOW); }
+      if (args[1] === '/system/bin/date') { assert.deepEqual(args, ['shell', '/system/bin/date', '+%s%3N']); return String(Date.parse(NOW)); }
+      if (args[2] === 'tap') { state.product(false); state.product(true); }
+      if (args[3] === 'KEYCODE_HOME') background = true;
       if (args[1] === 'am') { assert.deepEqual(args, ['shell', 'am', 'start', '-n', COMPONENT]); resumed = true; }
     },
     async sleep(ms) { events.push(['sleep', ms]); options.sleep?.(ms, report, diagnostic); },
@@ -765,13 +949,90 @@ test('actual product sequence retains exact initial/refresh/expiry gates, comman
   assert.deepEqual(fixture.report.observations.requests, { weather: 3, air_quality: 3 });
   assert.equal(fixture.report.observations.initial.weather.rows, 4);
   assert.equal(fixture.report.observations.refresh.air_quality.rows, 5);
-  assert.deepEqual(fixture.events.filter(row => row[0] === 'wait').map(row => row[1]), [15000, 15000, 15000, 3000, 15000]);
+  assert.deepEqual(fixture.events.filter(row => row[0] === 'wait').map(row => row[1]), [15000, 15000, 15000, 15000, 15000, 3000, 15000, 15000]);
   assert.deepEqual(fixture.events.filter(row => row[0] === 'control').map(row => row.slice(1)),
     [['/state', 'GET'], ['/phase/refresh', 'POST'], ['/state', 'GET'], ['/phase/short-lived', 'POST'], ['/state', 'GET'], ['/state', 'GET']]);
   assert.deepEqual(fixture.events.filter(row => row[0] === 'adb').map(row => row.slice(1)), [
-    ['shell', 'input', 'tap', '540', '1800'], ['shell', 'input', 'tap', '540', '1800'],
-    ['shell', 'input', 'keyevent', 'KEYCODE_HOME'], ['shell', 'am', 'start', '-n', COMPONENT]]);
+    ['shell', '/system/bin/date', '+%s%3N'], ['shell', 'input', 'tap', '540', '1800'],
+    ['shell', '/system/bin/date', '+%s%3N'], ['shell', 'input', 'tap', '540', '1800'],
+    ['shell', '/system/bin/date', '+%s%3N'],
+    ['shell', 'input', 'keyevent', 'KEYCODE_HOME'], ['shell', '/system/bin/date', '+%s%3N'],
+    ['shell', 'am', 'start', '-n', COMPONENT]]);
   assert.deepEqual(fixture.events.filter(row => row[0] === 'sleep'), [['sleep', 6000]]);
+});
+test('changed product bytes after preparation fail before native acceptance or lifecycle claims', async () => {
+  for (const phase of ['initial-native-products', 'actual-refresh', 'background-resume-expiry']) {
+    const value = productExerciseFixture({ control(result, path, report) {
+      if (path === '/state' && report.phase === phase) result.products.air_quality.forecast.samples[0].pm2_5 += 1;
+    } });
+    const { receipt } = await rejectedProducts(value);
+    assert.equal(receipt.subphase, 'product_counts');
+    assert.equal(value.report.scope.mounted_widget_tables, false);
+    assert.ok(!value.events.some(row => row.includes('KEYCODE_HOME')));
+  }
+});
+test('pre-HOME requires both exact short-lived tables, no expired label and both new expiry labels', async () => {
+  for (const change of [value => { value.tables.pop(); }, value => { value.tables[0].rows[0][1] = '900'; },
+    value => { value.labels.push('Expired — refresh required; values are hidden'); },
+    value => { value.labels = value.labels.filter(label => !label.startsWith('Expires ')); }]) {
+    const value = productExerciseFixture({ snapshot(value, report, diagnostic) {
+      if (diagnostic.subphase === 'before_background') change(value);
+    } });
+    const { receipt } = await rejectedProducts(value);
+    assert.equal(receipt.subphase, 'before_background');
+    assert.ok(!value.events.some(row => row.includes('KEYCODE_HOME')));
+    assert.equal(value.report.checks.real_android_background_resume, undefined);
+  }
+});
+test('TTL spent observing short-lived UI cannot become background expiry proof', async () => {
+  for (const expired of ['host', 'guest']) {
+    let homeReady = false;
+    const value = productExerciseFixture({ snapshot(value, report, diagnostic) {
+      if (diagnostic.subphase === 'before_background') homeReady = true;
+    } });
+    const original = value.context.adb;
+    value.context.clock = () => Date.parse(NOW) + (homeReady && expired === 'host' ? 4500 : 0);
+    value.context.adb = async args => homeReady && expired === 'guest' && args[1] === '/system/bin/date'
+      ? String(Date.parse(NOW) + 4500) : original(args);
+    const { receipt } = await rejectedProducts(value);
+    assert.equal(receipt.subphase, 'clock_validity'); assert.equal(receipt.code, 'clock_expired');
+    assert.ok(!value.events.some(row => row.includes('KEYCODE_HOME')));
+    assert.deepEqual(value.state.status().calls, { weather: 3, air_quality: 3 });
+    assert.equal(Date.parse(value.state.status().products.weather.freshness.expires_at) - Date.parse(NOW), 4500);
+  }
+});
+test('HOME latency crossing original expiry fails before the background sleep or resume', async () => {
+  for (const expired of ['host', 'guest']) {
+    let homeSent = false;
+    const value = productExerciseFixture({ adb(args) { if (args[3] === 'KEYCODE_HOME') homeSent = true; } });
+    const original = value.context.adb;
+    value.context.clock = () => Date.parse(NOW) + (homeSent && expired === 'host' ? 4500 : 0);
+    value.context.adb = async args => homeSent && expired === 'guest' && args[1] === '/system/bin/date'
+      ? String(Date.parse(NOW) + 4500) : original(args);
+    const { receipt } = await rejectedProducts(value);
+    assert.equal(receipt.code, 'clock_expired'); assert.equal(receipt.subphase, 'clock_validity');
+    assert.equal(value.events.filter(row => row.includes('KEYCODE_HOME')).length, 1);
+    assert.ok(!value.events.some(row => row[0] === 'sleep' && row[1] === 6000 || row[0] === 'adb' && row[2] === 'am'));
+    assert.deepEqual(value.state.status().calls, { weather: 3, air_quality: 3 });
+    assert.equal(value.events.filter(row => row[0] === 'control' && row[1].startsWith('/phase/')).length, 2);
+    assert.equal(value.report.checks.real_android_background_resume, undefined);
+  }
+});
+test('background must actually be observed before expiry; HOME and old lifecycle history are insufficient', async () => {
+  for (const change of [value => { value.current_lifecycle = 'resumed'; },
+    value => { value.current_lifecycle = 'inactive'; }, value => { value.lifecycle = ['resumed']; }]) {
+    const value = productExerciseFixture({ snapshot(value, report, diagnostic) {
+      if (diagnostic.subphase === 'background_snapshot') change(value);
+    } });
+    const { receipt } = await rejectedProducts(value);
+    assert.equal(receipt.code, 'observation_deadline'); assert.equal(receipt.subphase, 'background_wait');
+    assert.ok(!value.events.some(row => row[0] === 'sleep' && row[1] === 6000));
+    assert.deepEqual(value.state.status().calls, { weather: 3, air_quality: 3 });
+  }
+  const hidden = productExerciseFixture({ snapshot(value, report, diagnostic) {
+    if (diagnostic.subphase === 'background_snapshot') value.current_lifecycle = 'hidden';
+  } });
+  await hidden.run(); assert.equal(hidden.report.passed, true);
 });
 test('control request/status/body/decode/schema failures preserve the primary exception and redact output', async () => {
   const primary = new Error(PRIVATE_TEXT), value = fixture().state.status();
@@ -782,6 +1043,7 @@ test('control request/status/body/decode/schema failures preserve the primary ex
     ['control_body', async () => controlResponse('x'.repeat(65537))],
     ['control_decode', async () => controlResponse(PRIVATE_TEXT)],
     ['control_schema', async () => controlResponse({ ...value, core_executed: true })],
+    ['control_schema', async () => controlResponse({ ...value, schema: 1 })],
   ]) {
     const diagnostic = new ObserverDiagnostic(); diagnostic.beginProducts(1);
     let failure;
@@ -854,7 +1116,7 @@ test('16 mounted collection attempts retain exact tables and all six metadata fi
 test('snapshot/swipe/tap/background/resume failures bind actual awaited operation and preserve identity', async () => {
   const primary = adbFailure({ signal: 'SIGKILL' });
   for (const stage of ['product_snapshot', 'swipe', 'refresh_snapshot', 'tap', 'expiry_snapshot',
-    'before_background', 'background_home', 'background_pause', 'resume_start', 'resume_snapshot']) {
+    'before_background', 'background_home', 'background_snapshot', 'background_pause', 'resume_start', 'resume_snapshot']) {
     const fail = diagnostic => { if (diagnostic.subphase === stage) throw primary; };
     const fixture = productExerciseFixture({ snapshot(value, report, diagnostic) {
       fail(diagnostic); if (stage === 'swipe') value.labels = [];
@@ -875,7 +1137,7 @@ test('refresh target cannot be inferred, and phase reset prevents stale initial 
 test('missing value, expiry consumption, real lifecycle, hidden tables and no-extra-fetch remain required', async () => {
   for (const stage of ['missing_values', 'expiry_wait', 'before_background', 'resume_wait', 'expired_labels', 'expired_tables', 'final_requests']) {
     const fixture = productExerciseFixture({ control(value, path, report) {
-      if (stage === 'missing_values' && report.phase === 'actual-refresh' && path === '/state') {
+      if (stage === 'missing_values' && report.phase === 'actual-refresh') {
         value.products.weather.forecast.samples[0].temperature_2m = 12;
       }
       if (stage === 'final_requests' && report.phase === 'background-resume-expiry' && value.calls.weather === 3

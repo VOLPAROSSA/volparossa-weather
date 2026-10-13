@@ -16,24 +16,36 @@ export const PHASES = Object.freeze(['initial', 'refresh', 'short-lived']);
 
 export function nativeFixtureState(now = new Date().toISOString()) {
   const { base, query } = tableProducts(now);
-  let phase = 'initial';
+  let phase = null, prepared;
   const calls = { weather: 0, air_quality: 0 }, products = { weather: null, air_quality: null };
   return {
     base, query,
-    setPhase(next) {
+    setPhase(next, at = new Date().toISOString()) {
+      assert.ok(PHASES.includes(next));
       assert.equal(PHASES.indexOf(next), PHASES.indexOf(phase) + 1, 'fixture phase order');
       assert.deepEqual(calls, { weather: PHASES.indexOf(next), air_quality: PHASES.indexOf(next) });
+      // Reserve this one preparation even if acquisition fails. Neither a GET
+      // nor a retry may recreate products, backdate acquisition or extend TTL.
       phase = next;
+      prepared = null;
+      const pair = {};
+      for (const quality of [false, true]) {
+        const name = quality ? 'air_quality' : 'weather';
+        const mode = phase === 'short-lived' ? 'short-lived' : phase === 'refresh' && !quality ? 'missing' : 'valid';
+        pair[name] = JSON.stringify(responseProduct(base, quality, mode, at));
+      }
+      prepared = pair;
+      for (const name of Object.keys(products)) products[name] = JSON.parse(prepared[name]);
     },
-    product(quality, at = new Date().toISOString()) {
+    product(quality) {
       const name = quality ? 'air_quality' : 'weather';
-      assert.ok(calls[name] < 3, 'fixture request bound');
-      const mode = phase === 'short-lived' ? 'short-lived' : phase === 'refresh' && !quality ? 'missing' : 'valid';
-      const product = responseProduct(base, quality, mode, at);
-      calls[name] += 1; products[name] = product;
-      return product;
+      assert.ok(prepared && calls[name] === PHASES.indexOf(phase), 'one prepared response per phase');
+      calls[name] += 1;
+      // A private serialized pair is immutable even if a caller changes its
+      // returned object. Request counters still count only actual API requests.
+      return JSON.parse(prepared[name]);
     },
-    status() { return structuredClone({ schema: 1, phase, calls, products,
+    status() { return structuredClone({ schema: 2, phase, calls, products,
       synthetic_weather: true, synthetic_air_quality: true, core_executed: false, overlay_proven: false }); },
   };
 }
@@ -84,7 +96,7 @@ async function main() {
         assert.equal(request.headers['transfer-encoding'], undefined);
         assert.ok(request.headers['content-length'] === undefined || request.headers['content-length'] === '0');
         if (request.method === 'POST') {
-          assert.ok(['/phase/refresh', '/phase/short-lived'].includes(request.url));
+          assert.ok(PHASES.map(phase => `/phase/${phase}`).includes(request.url));
           state.setPhase(request.url.slice('/phase/'.length));
         } else { assert.equal(request.method, 'GET'); assert.equal(request.url, '/state'); }
         const body = JSON.stringify(state.status()); assert.ok(Buffer.byteLength(body) <= 65536);
