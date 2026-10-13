@@ -86,7 +86,7 @@ void main() {
       final late = Completer<http.Response>();
       final older = NativeProviderClient(origin, clock: () => now,
         createClient: () => MockClient((request) async => request.url.path.endsWith('air-quality')
-          ? http.Response('', 503) : late.future)).load();
+          ? http.Response('', 503) : await late.future)).load();
       expect((providerObservation()['weather'] as Map)['outcome'], 'pending');
       expect((providerObservation()['air_quality'] as Map)['outcome'], 'unobserved');
       await NativeProviderClient(origin, clock: () => now,
