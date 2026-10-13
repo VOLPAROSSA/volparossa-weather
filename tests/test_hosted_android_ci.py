@@ -1461,9 +1461,10 @@ class EmulatorDiagnostics(unittest.TestCase):
         # and in-memory AVD config. Never create /state or execute a native tool.
         real_popen, real_open = subprocess.Popen, open
         path_open, path_mkdir = Path.open, Path.mkdir
-        original_drain = M.drain_children
-        for accepted, failed_write in ((False, False), (False, True), (True, False)):
-            with self.subTest(accepted=accepted, failed_write=failed_write), tempfile.TemporaryDirectory() as directory:
+        original_drain, original_sleep = M.drain_children, M.time.sleep
+        for accepted, failed_write, query_fails in ((False, False, False), (False, True, False),
+                (True, False, False), (False, False, True)):
+            with self.subTest(accepted=accepted, failed_write=failed_write, query_fails=query_fails), tempfile.TemporaryDirectory() as directory:
                 proof, children, calls = Path(directory), [], []
                 now, link_reads = [100.0], [0]
                 def popen(argv, **kwargs):
@@ -1498,7 +1499,10 @@ class EmulatorDiagnostics(unittest.TestCase):
                                 rows = json.loads(GuestNetworkIsolationTests.links())
                                 rows[1]["linkinfo"] = {}  # An ordinary active interface is not yet safe.
                                 outputs[tuple(args[1:])] = json.dumps(rows).encode()
-                        code = "import sys;sys.stdout.buffer.write(" + repr(outputs[tuple(args[1:])]) + ")"
+                        if query_fails and tuple(args[1:]) == ("tc", "qdisc", "show"):
+                            code = "print('Permission denied: private-canary');raise SystemExit(9)"
+                        else:
+                            code = "import sys;sys.stdout.buffer.write(" + repr(outputs[tuple(args[1:])]) + ")"
                     child = real_popen([sys.executable, "-I", "-c", code], **kwargs)
                     children.append(child)
                     return child
@@ -1515,18 +1519,31 @@ class EmulatorDiagnostics(unittest.TestCase):
                         raise OSError("private-write-error")
                     return original_write(path, raw)
                 def drain(owned):
-                    self.assertEqual(owned, children)
-                    self.assertEqual(len(owned), 17 if accepted else 11)
-                    self.assertEqual((proof / "guest-network-diagnostic.json").exists(), not accepted and not failed_write)
-                    self.assertEqual(json.loads((proof / "emulator-diagnostic.json").read_text())["phase"],
-                        "apk_install" if accepted else "guest_network")
-                    return original_drain(owned)
+                    try:
+                        self.assertEqual(owned, children)
+                        self.assertEqual(len(owned), 17 if accepted else 11)
+                        self.assertEqual((proof / "guest-network-diagnostic.json").exists(), not accepted and not failed_write)
+                        self.assertEqual(json.loads((proof / "emulator-diagnostic.json").read_text())["phase"],
+                            "apk_install" if accepted else "guest_network")
+                        if query_fails:
+                            raw = (proof / "guest-network-diagnostic.json").read_bytes()
+                            self.assertEqual(json.loads(raw)["last_query"],
+                                dict(name="qdisc_before", outcome="command_failed"))
+                            self.assertNotIn(b"private-canary", raw)
+                    finally:
+                        drained = original_drain(owned)
+                    return drained
+                def sleep(seconds):
+                    if seconds == 0.25:  # Only accelerate the fixture's network polling.
+                        now[0] += 0.25 if accepted else 11
+                    else:
+                        original_sleep(seconds)  # subprocess.wait also uses time.sleep.
                 with self.guarded_inside(proof, popen), patch.object(M, "open", side_effect=private_open, create=True), \
                         patch.object(Path, "open", config_open), patch.object(Path, "mkdir", mkdir), \
                         patch.object(M.H, "write", side_effect=write), patch.object(M, "drain_children", side_effect=drain), \
                         patch.object(M.time, "monotonic", side_effect=lambda: now[0]), \
-                        patch.object(M.time, "sleep", side_effect=lambda _: now.__setitem__(0, now[0] + (0.25 if accepted else 11))), \
-                        self.assertRaises(subprocess.CalledProcessError if accepted else ValueError):
+                        patch.object(M.time, "sleep", side_effect=sleep), \
+                        self.assertRaises(subprocess.CalledProcessError if accepted or query_fails else ValueError):
                     M.inside()
                 cleanup = json.loads((proof / "emulator-cleanup.json").read_text())
                 self.assertTrue(cleanup["direct_children_reaped"] and cleanup["private_avd_removed"])
@@ -1739,10 +1756,12 @@ class GuestNetworkIsolationTests(unittest.TestCase):
             link_type="ether", qdisc="noqueue", operstate="UNKNOWN", mtu=1500, linkinfo=dict(info_kind="dummy"))]).encode()
 
     def run_gate(self, proof, *, links=None, qdisc=None, routes=None, after=None, after_qdisc=None,
-            late=False, prefix=(), settle=False):
+            late=False, prefix=(), settle=False, fail_at=None, diagnostic=None):
         values = [self.links() if links is None else links, self.QDISC if qdisc is None else qdisc,
             *(routes or (self.V4, self.V6)), self.QDISC if after_qdisc is None else after_qdisc,
             self.links() if after is None else after]
+        if fail_at is not None:
+            values[fail_at[0]] = fail_at[1]
         values = [*prefix, *values]
         calls, now = [], [100.0]
         def adb(*args, **kwargs):
@@ -1759,7 +1778,7 @@ class GuestNetworkIsolationTests(unittest.TestCase):
             return value
         with patch.object(M, "PROOF", proof), patch.object(M.time, "monotonic", side_effect=lambda: now[0]), \
                 patch.object(M.time, "sleep", side_effect=lambda _: now.__setitem__(0, now[0] + (0.25 if settle else 11))):
-            value = M.GuestNetworkIsolation().enforce(adb, 1000)
+            value = (diagnostic or M.GuestNetworkIsolation()).enforce(adb, 1000)
         return value, calls
 
     def test_positive_kernel_sink_not_name_and_truthful_boundary(self):
@@ -1884,10 +1903,68 @@ class GuestNetworkIsolationTests(unittest.TestCase):
             raw = (Path(root) / "guest-network-diagnostic.json").read_bytes()
             self.assertLessEqual(len(raw), 2048)
             value = json.loads(raw)
-            self.assertEqual(value["schema"], 2)
+            self.assertEqual(value["schema"], 3)
             self.assertEqual(value["typed"]["ipv4"]["rejected"], len(raw_routes.splitlines()))
             for private in (b"sink-private", b"10.0.2.2"):
                 self.assertNotIn(private, raw)
+
+    def test_all_six_query_failures_identify_only_the_same_exception(self):
+        names = ("link_before", "qdisc_before", "ipv4", "ipv6", "qdisc_after", "link_after")
+        self.assertEqual(M.GuestNetworkIsolation.QUERIES, frozenset(names))
+        for index, name in enumerate(names):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as root:
+                error = subprocess.CalledProcessError(1, "private-argv", output=b"private-address-token")
+                with self.assertRaises(subprocess.CalledProcessError) as failure:
+                    self.run_gate(Path(root), fail_at=(index, error))
+                self.assertIs(failure.exception, error)
+                raw = (Path(root) / "guest-network-diagnostic.json").read_bytes()
+                value = json.loads(raw)
+                self.assertEqual(value["schema"], 3)
+                self.assertEqual(value["last_query"], dict(name=name, outcome="command_failed"))
+                self.assertEqual(value["failure"], "command_exit")
+                self.assertFalse(value["gate_passed"])
+                self.assertLessEqual(len(raw), 2048)
+                self.assertNotIn(b"private-", raw)
+
+    def test_returned_query_is_not_parser_or_gate_acceptance(self):
+        for name, kwargs in (("link_before", dict(links=b"[]")),
+                ("qdisc_before", dict(qdisc=b"private raw text"))):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as root:
+                with self.assertRaises(ValueError): self.run_gate(Path(root), **kwargs)
+                raw = (Path(root) / "guest-network-diagnostic.json").read_bytes()
+                value = json.loads(raw)
+                self.assertEqual(value["last_query"], dict(name=name, outcome="returned"))
+                self.assertFalse(value["gate_passed"])
+                self.assertNotIn(b"private raw text", raw)
+
+    def test_stale_failure_and_unrecognized_query_never_leak_or_claim_command_failure(self):
+        observed = subprocess.CalledProcessError(1, "private-argv")
+        # Even an otherwise identical error is not the same propagated failure.
+        later = subprocess.CalledProcessError(1, "private-argv")
+        with tempfile.TemporaryDirectory() as root, patch.object(M, "PROOF", Path(root)):
+            diagnostic = M.GuestNetworkIsolation()
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.run_gate(Path(root), fail_at=(1, observed), diagnostic=diagnostic)
+            diagnostic.publish_failure(later)
+            path = Path(root) / "guest-network-diagnostic.json"
+            self.assertEqual(json.loads(path.read_bytes())["last_query"], dict(name=None, outcome="unobserved"))
+            for query in (dict(name="private-path", outcome="returned"),
+                    dict(name="link_before", outcome="private-output")):
+                diagnostic.last_query = query
+                diagnostic.publish_failure(later)
+                raw = path.read_bytes()
+                self.assertEqual(json.loads(raw)["last_query"], dict(name=None, outcome="unobserved"))
+                self.assertNotIn(b"private-", raw)
+
+    def test_latest_poll_query_replaces_prior_returned_observation(self):
+        rows = json.loads(self.links()); rows[1]["linkinfo"] = {}
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.run_gate(Path(root), prefix=[json.dumps(rows).encode()], settle=True,
+                    fail_at=(1, subprocess.CalledProcessError(1, "private")))
+            value = json.loads((Path(root) / "guest-network-diagnostic.json").read_bytes())
+            self.assertEqual(value["polls"], 2)
+            self.assertEqual(value["last_query"], dict(name="qdisc_before", outcome="command_failed"))
 
 
 class AvdPreflight(unittest.TestCase):

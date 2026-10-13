@@ -766,9 +766,13 @@ class GuestNetworkIsolation(GuestNetworkDiagnostic):
     Paired RTNL metadata plus tc qdisc observations exclude visible redirect
     ambiguity; no guest permissions, routes or interfaces are modified here.
     """
+    QUERIES = frozenset(("link_before", "qdisc_before", "ipv4", "ipv6", "qdisc_after", "link_after"))
+
     def __init__(self):
         super().__init__()
         self.typed = dict(status="unobserved", ipv4=None, ipv6=None)
+        self.last_query = dict(name=None, outcome="unobserved")
+        self.query_error = None
 
     @staticmethod
     def error_category(error):
@@ -789,11 +793,20 @@ class GuestNetworkIsolation(GuestNetworkDiagnostic):
             self.stage = "routes"
             route_end = min(stop, time.monotonic() + 10)
             last_rejection = ValueError("GUEST_NETWORK_STILL_ACTIVE")
-            def read(*args):
+            def read(query, *args):
                 remaining = route_end - time.monotonic()
                 if remaining <= 0:
                     raise last_rejection
-                return adb_command("shell", *args, seconds=min(20, remaining))
+                self.last_query = dict(name=query, outcome="started")
+                self.query_error = None
+                try:
+                    raw = adb_command("shell", *args, seconds=min(20, remaining))
+                except BaseException as error:
+                    self.query_error = error
+                    self.last_query["outcome"] = "command_failed"
+                    raise
+                self.last_query["outcome"] = "returned"
+                return raw
             while True:
                 if time.monotonic() >= route_end:
                     raise last_rejection
@@ -801,16 +814,16 @@ class GuestNetworkIsolation(GuestNetworkDiagnostic):
                 self.families, self.family = self.unobserved(), None
                 self.typed = dict(status="unknown", ipv4=None, ipv6=None)
                 try:
-                    links = guest_link_snapshot(read("ip", "-details", "-json", "link", "show"))
-                    qdiscs = guest_qdisc_snapshot(read("tc", "qdisc", "show"), links)
+                    links = guest_link_snapshot(read("link_before", "ip", "-details", "-json", "link", "show"))
+                    qdiscs = guest_qdisc_snapshot(read("qdisc_before", "tc", "qdisc", "show"), links)
                     routes = {}
                     for name, flag in self.FAMILIES:
                         self.family = name
-                        routes[name] = read("ip", flag, "route", "show", "table", "all")
+                        routes[name] = read(name, "ip", flag, "route", "show", "table", "all")
                         self.families[name] = guest_route_observation(routes[name])
                     self.family = None
-                    after_qdiscs = guest_qdisc_snapshot(read("tc", "qdisc", "show"), links)
-                    after_links = guest_link_snapshot(read("ip", "-details", "-json", "link", "show"))
+                    after_qdiscs = guest_qdisc_snapshot(read("qdisc_after", "tc", "qdisc", "show"), links)
+                    after_links = guest_link_snapshot(read("link_after", "ip", "-details", "-json", "link", "show"))
                     require(links == after_links, "GUEST_LINK_CHANGED")
                     require(qdiscs == after_qdiscs, "GUEST_QDISC_CHANGED")
                     self.typed = dict(status="verified", ipv4=guest_typed_routes(routes["ipv4"], 4, links),
@@ -844,9 +857,17 @@ class GuestNetworkIsolation(GuestNetworkDiagnostic):
             if self.family is not None:
                 self.families[self.family] = self.unobserved()[self.family]
                 self.families[self.family].update(outcome="unknown", error=category)
-            value = dict(schema=2, kind="hosted-android-guest-network-diagnostic", stage=self.stage,
+            query = dict(name=None, outcome="unobserved")
+            if (self.last_query.get("name") in self.QUERIES
+                    and self.last_query.get("outcome") in ("started", "returned", "command_failed")
+                    and (self.last_query["outcome"] != "command_failed" or self.query_error is error)):
+                query = dict(name=self.last_query["name"], outcome=self.last_query["outcome"])
+            # Returned means only that the fixed command returned, not that its
+            # parser or network gate accepted it. Failed is bound to this exact
+            # exception; never attribute an earlier command's failure here.
+            value = dict(schema=3, kind="hosted-android-guest-network-diagnostic", stage=self.stage,
                 failure=category, polls=self.polls, families=self.families, snapshot="last_poll",
-                typed=self.typed, rejection_counts_overlap=True, device_category_basis="fixed_name_convention_only",
+                typed=self.typed, last_query=query, rejection_counts_overlap=True, device_category_basis="fixed_name_convention_only",
                 gate_passed=False, cause_established=False, raw_text_exported=False)
             raw = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
             require(len(raw) <= self.MAX_RECEIPT, "GUEST_NETWORK_DIAGNOSTIC_BOUND")

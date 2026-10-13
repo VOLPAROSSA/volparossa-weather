@@ -392,7 +392,7 @@ seconds and peaks at 3,622,367,232 bytes RSS, below 4 GiB. Inner and outer clean
 KVM restoration and unchanged host network namespace pass. There is no app or
 network-boundary success report. Separate component CI passes 314 tests.
 
-The next candidate distinguishes usable routes from positively identified kernel
+Candidate `fae274e0` distinguishes usable routes from positively identified kernel
 dummy sinks. Android 16's
 [netd](https://android.googlesource.com/platform/system/netd/+/refs/tags/android-16.0.0_r1/server/RouteController.cpp)
 installs direct IPv4/IPv6 default routes for its dummy network; a familiar name
@@ -419,6 +419,33 @@ The separate schema-2 failure diagnostic keeps only bounded last-poll counts,
 never names, addresses or raw output. SDK inputs, permissions, resource limits,
 cleanup and full installed-app acceptance are unchanged. This candidate has not
 yet passed an actual installed-app trial.
+
+The [twenty-seventh attempt](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38323147074)
+on `fae274e0c372b58ab64d2ee50d9d517707fa5e3a` fails at `guest_network`:
+an ADB command returns exit 1 with a complete 39-byte response and an observed
+access-denied marker. Both route families remain unobserved in the first poll.
+The retained reports cannot distinguish the first link query from the following
+qdisc query; neither the failing command nor its underlying policy cause is
+established. No network-boundary or installed-app success report is produced.
+
+Both APK builds pass, including the clean strict-offline rebuild, with matching
+74,366,059-byte receipt SHA256
+`8ed9df95945ec4b5a0104011f0316c5aa2cf492747bf1e8a088de3a4d19c6978`.
+The installed phase lasts 42.040 seconds and peaks at 3,580,866,560 bytes RSS,
+below 4 GiB. Inner/outer process and private-state cleanup, KVM restoration and
+unchanged host network namespace pass. Original artifact SHA256 is
+`73f5894f5ed4b0494dc10a668cdcbb709112fd1ddd6404714394f28a150aa4fb`;
+all 45 members, fifteen step logs and input bindings are checked. Separate
+component CI passes 322 tests; the failed run exports no APK binary.
+
+The diagnostic-only follow-up records the last fixed query as `link_before`,
+`qdisc_before`, `ipv4`, `ipv6`, `qdisc_after` or `link_after`, with its command
+outcome. A failed-command label is bound to the same propagated exception;
+`returned` does not mean that parsing or route admission passed. Diagnostic
+schema 3 retains the 2 KiB limit and exports no arguments, addresses, interface
+names or raw responses. Boundary schema 2, query order, rights, deadlines,
+resource limits, cleanup and app acceptance remain unchanged. This diagnoses a
+failure location; it does not fix the observed denial or prove mobile operation.
 
 The [native preparer](prepare_native_android.py) modifies only a disposable
 Android stage, using package `org.volparossa.weather.trial`. Its test-only
