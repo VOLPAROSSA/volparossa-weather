@@ -785,6 +785,18 @@ class GuestNetworkIsolation(GuestNetworkDiagnostic):
                 return codes[str(error)]
         return GuestNetworkDiagnostic.error_category(error)
 
+    def observation_start(self, adb_command, deadline):
+        pass  # Historical shell-only observer has no additional authority.
+
+    def query_arguments(self, query, args):
+        return ("shell", *args)
+
+    def observation_complete(self, adb_command, deadline, boundary):
+        return boundary
+
+    def diagnostic_value(self, value, error):
+        return value
+
     def enforce(self, adb_command, stop):
         try:
             adb_command("shell", "svc", "wifi", "disable")
@@ -793,6 +805,7 @@ class GuestNetworkIsolation(GuestNetworkDiagnostic):
             self.stage = "routes"
             route_end = min(stop, time.monotonic() + 10)
             last_rejection = ValueError("GUEST_NETWORK_STILL_ACTIVE")
+            self.observation_start(adb_command, route_end)
             def read(query, *args):
                 remaining = route_end - time.monotonic()
                 if remaining <= 0:
@@ -800,7 +813,7 @@ class GuestNetworkIsolation(GuestNetworkDiagnostic):
                 self.last_query = dict(name=query, outcome="started")
                 self.query_error = None
                 try:
-                    raw = adb_command("shell", *args, seconds=min(20, remaining))
+                    raw = adb_command(*self.query_arguments(query, args), seconds=min(20, remaining))
                 except BaseException as error:
                     self.query_error = error
                     self.last_query["outcome"] = "command_failed"
@@ -831,12 +844,13 @@ class GuestNetworkIsolation(GuestNetworkDiagnostic):
                     last_rejection = ValueError("GUEST_NETWORK_STILL_ACTIVE")
                     require(time.monotonic() < route_end, "GUEST_NETWORK_STILL_ACTIVE")
                     if not self.typed["ipv4"]["rejected"] and not self.typed["ipv6"]["rejected"]:
-                        return dict(schema=2, api=36, architecture="x86_64", kvm_required=True,
+                        boundary = dict(schema=2, api=36, architecture="x86_64", kvm_required=True,
                             scope="controlled-pinned-emulator-routing-fixture",
                             guest_wifi_disabled=True, guest_mobile_data_disabled=True,
                             guest_no_usable_egress=True, guest_route_policy="direct-loopback-or-verified-kernel-dummy",
                             paired_link_and_qdisc_observations=True, route_counts=self.typed,
                             reverse_ports=[43210], fixture_control_reversed=False, host_network_namespace_isolated=True)
+                        return self.observation_complete(adb_command, route_end, boundary)
                 except ValueError as error:
                     if str(error) not in {"GUEST_LINK_ACTIVE", "GUEST_LINK_CHANGED",
                             "GUEST_QDISC_UNSAFE", "GUEST_QDISC_CHANGED"}:
@@ -869,6 +883,7 @@ class GuestNetworkIsolation(GuestNetworkDiagnostic):
                 failure=category, polls=self.polls, families=self.families, snapshot="last_poll",
                 typed=self.typed, last_query=query, rejection_counts_overlap=True, device_category_basis="fixed_name_convention_only",
                 gate_passed=False, cause_established=False, raw_text_exported=False)
+            value = self.diagnostic_value(value, error)
             raw = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
             require(len(raw) <= self.MAX_RECEIPT, "GUEST_NETWORK_DIAGNOSTIC_BOUND")
             H.write(part, raw)
@@ -882,16 +897,120 @@ class GuestNetworkIsolation(GuestNetworkDiagnostic):
                 pass
 
 
+class GuestNetworkObserver(GuestNetworkIsolation):
+    """Fixed reads by an explicitly privileged disposable-fixture observer.
+
+    AOSP android-16.0.0_r1 system/extras/su/su.cpp accepts root/shell callers
+    and directly execs the supplied argv. system/sepolicy/private/su.te gives
+    userdebug/eng shell a transition to the EXISTING PERMISSIVE su domain.
+    We do not alter that policy, globally disable SELinux, or privilege the app.
+    This is not production authority or protection from a compromised kernel.
+    """
+    NETWORK_READS = {
+        "link_before": ("/system/bin/ip", "-details", "-json", "link", "show"),
+        "qdisc_before": ("/system/bin/tc", "qdisc", "show"),
+        "ipv4": ("/system/bin/ip", "-4", "route", "show", "table", "all"),
+        "ipv6": ("/system/bin/ip", "-6", "route", "show", "table", "all"),
+        "qdisc_after": ("/system/bin/tc", "qdisc", "show"),
+        "link_after": ("/system/bin/ip", "-details", "-json", "link", "show"),
+    }
+    GUARDS = (
+        ("build_type", ("/system/bin/getprop", "ro.build.type"), (b"userdebug", b"eng")),
+        ("debuggable", ("/system/bin/getprop", "ro.debuggable"), (b"1",)),
+        ("shell_uid", ("/system/bin/id", "-u"), (b"2000",)),
+        ("shell_context", ("/system/bin/id", "-Z"), (b"u:r:shell:s0",)),
+        ("selinux", ("/system/bin/getenforce",), (b"Enforcing",)),
+        ("observer_uid", ("/system/xbin/su", "0", "/system/bin/id", "-u"), (b"0",)),
+        ("observer_context", ("/system/xbin/su", "0", "/system/bin/id", "-Z"), (b"u:r:su:s0",)),
+    )
+
+    def __init__(self):
+        super().__init__()
+        self.observer = dict(before="unobserved", after="unobserved", guard=None, outcome="unobserved")
+        self.guard_error = None
+
+    @staticmethod
+    def error_category(error):
+        if type(error) is ValueError:
+            category = {"GUEST_OBSERVER_REJECTED": "observer_rejected",
+                "GUEST_OBSERVER_BOUND": "observer_bound", "GUEST_OBSERVER_DEADLINE": "observer_deadline",
+                "GUEST_OBSERVER_QUERY": "observer_query"}.get(str(error))
+            if category:
+                return category
+        return GuestNetworkIsolation.error_category(error)
+
+    def check_observer(self, adb_command, deadline, phase):
+        self.stage = "observer_" + phase
+        self.last_query = dict(name=None, outcome="unobserved")
+        self.query_error = self.guard_error = None
+        self.family = None
+        self.observer[phase] = "checking"
+        for name, argv, expected in self.GUARDS:
+            self.observer.update(guard=name, outcome="started")
+            try:
+                remaining = deadline - time.monotonic()
+                require(remaining > 0, "GUEST_OBSERVER_DEADLINE")
+                raw = adb_command("shell", *argv, seconds=min(20, remaining))
+                self.observer["outcome"] = "returned"
+                require(time.monotonic() < deadline, "GUEST_OBSERVER_DEADLINE")
+                require(len(raw) <= 128, "GUEST_OBSERVER_BOUND")
+                require(raw in tuple(value + end for value in expected for end in (b"", b"\n", b"\r\n")),
+                    "GUEST_OBSERVER_REJECTED")
+            except BaseException as error:
+                self.guard_error = error
+                self.observer["outcome"] = "failed"
+                raise
+        self.observer.update({phase: "verified", "guard": None, "outcome": "verified"})
+
+    def observation_start(self, adb_command, deadline):
+        self.check_observer(adb_command, deadline, "before")
+        self.stage = "routes"
+
+    def query_arguments(self, query, args):
+        # Only this literal six-query mapping can cross the fixture boundary.
+        # No shell command string, caller-selected executable or fallback.
+        fixed = self.NETWORK_READS.get(query)
+        require(fixed is not None and tuple(args) == (fixed[0].rsplit("/", 1)[1], *fixed[1:]),
+            "GUEST_OBSERVER_QUERY")
+        return ("shell", "/system/xbin/su", "0", *fixed)
+
+    def observation_complete(self, adb_command, deadline, boundary):
+        self.check_observer(adb_command, deadline, "after")
+        result = dict(boundary, schema=3, observer=dict(authority="disposable-userdebug-su",
+            existing_su_domain_permissive=True, pre_and_post_guards_verified=True,
+            global_selinux_enforcing=True, adb_shell_unprivileged=True,
+            fixed_network_read_queries=6, app_authority=False, hostile_kernel_proof=False),
+            package_uid_probe=dict(verified=False, app_pid_observed=False))
+        require(time.monotonic() < deadline, "GUEST_OBSERVER_DEADLINE")
+        return result
+
+    def diagnostic_value(self, value, error):
+        observer = dict(self.observer)
+        if observer["outcome"] == "failed" and self.guard_error is not error:
+            observer.update(guard=None, outcome="unobserved")
+        return dict(value, schema=4, observer=observer,
+            observer_authority="disposable-userdebug-existing-permissive-su")
+
+
+def package_uid_probe(adb_command):
+    # AOSP run-as rejects system/non-debuggable packages and drops real,
+    # effective and saved IDs to the package UID before exec. This observes
+    # package-identity execution, NOT the later launched application PID.
+    raw = adb_command("shell", "/system/bin/run-as", PACKAGE, "/system/bin/id", "-u")
+    require(len(raw) <= 16 and re.fullmatch(rb"1[0-9]{4}(?:\r?\n)?", raw), "GUEST_PACKAGE_UID")
+    return dict(verified=True, default_user_application_uid=True, app_pid_observed=False)
+
+
 class EmulatorDiagnostic:
     """Closed observations only; never persist command text, output or VM tokens."""
     MAX_OUTPUT = 65536  # The existing command reader's bound, not a larger log scan.
     MAX_RECEIPT = 1024
     PHASES = frozenset(("avd_create", "avd_configure", "service_start", "boot", "guest_identity",
-        "guest_network", "apk_install", "port_reverse", "app_driver"))
+        "guest_network", "apk_install", "package_identity", "port_reverse", "app_driver"))
     COMMANDS = frozenset(("avdmanager", "adb", "adb_server", "fixture", "emulator", "app_driver"))
     CHECKS = frozenset(("EMULATOR_DEADLINE", "EMULATOR_COMMAND_DEADLINE", "EMULATOR_COMMAND_OUTPUT",
         "EMULATOR_BOOT_FAILED", "ANDROID_API", "ANDROID_ABI", "GUEST_ROUTE_OUTPUT_BOUND",
-        "GUEST_NETWORK_STILL_ACTIVE"))
+        "GUEST_NETWORK_STILL_ACTIVE", "GUEST_PACKAGE_UID"))
     # These fixed SDK/JVM message forms are indications, not a claimed cause.
     # An unfamiliar message (including a new SDK version's wording) is unknown.
     MARKERS = {
@@ -1410,10 +1529,17 @@ def inside(*, avd_only=False):
         # observer-only fixture control port. Disable guest uplinks, then admit
         # only the explicit adbd reverse to the public fixture API.
         diagnostic.phase = "guest_network"
-        boundary = GuestNetworkIsolation().enforce(adb_command, stop)
+        boundary = GuestNetworkObserver().enforce(adb_command, stop)
         H.write(PROOF / "emulator-boundary.json", (json.dumps(boundary) + "\n").encode())
         diagnostic.phase = "apk_install"
         adb_command("install", "--no-streaming", str(APK), seconds=45)
+        diagnostic.phase = "package_identity"
+        boundary["package_uid_probe"] = package_uid_probe(adb_command)
+        # H.write is exclusive. Atomically add the later package observation to
+        # this run's own boundary, retaining the initial unverified form if the
+        # probe fails. Neither form claims the launched application PID.
+        H.write(PROOF / "emulator-boundary.part", (json.dumps(boundary) + "\n").encode())
+        os.replace(PROOF / "emulator-boundary.part", PROOF / "emulator-boundary.json")
         diagnostic.phase = "port_reverse"
         adb_command("reverse", "tcp:43210", "tcp:43210")
         # Driver creates a fresh directory; existing outer root only holds the

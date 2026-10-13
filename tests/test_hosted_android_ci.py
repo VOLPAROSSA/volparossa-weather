@@ -1462,26 +1462,40 @@ class EmulatorDiagnostics(unittest.TestCase):
         real_popen, real_open = subprocess.Popen, open
         path_open, path_mkdir = Path.open, Path.mkdir
         original_drain, original_sleep = M.drain_children, M.time.sleep
-        for accepted, failed_write, query_fails in ((False, False, False), (False, True, False),
-                (True, False, False), (False, False, True)):
+        for accepted, failed_write, query_fails, guard_fails, package_uid in (
+                (False, False, False, False, None), (False, True, False, False, None),
+                (True, False, False, False, None), (False, False, True, False, None),
+                (False, False, False, "before", None), (True, False, False, "after", None),
+                (True, False, False, False, b"0"), (True, False, False, False, b"10000")):
             with self.subTest(accepted=accepted, failed_write=failed_write, query_fails=query_fails), tempfile.TemporaryDirectory() as directory:
                 proof, children, calls = Path(directory), [], []
-                now, link_reads = [100.0], [0]
+                now, link_reads, shell_uid_reads = [100.0], [0], [0]
+                reaches_install = accepted and not guard_fails
                 def popen(argv, **kwargs):
                     calls.append(argv)
                     if argv[0].endswith("/avdmanager"):
                         code = "import sys;sys.stdin.read()"
                     elif "server" in argv or "native-android-fixture.mjs" in argv[1] or "-avd" in argv:
                         code = "import time;time.sleep(30)"
+                    elif len(argv) > 1 and argv[1].endswith("/native-android-driver.mjs"):
+                        self.assertEqual(package_uid, b"10000")
+                        code = "raise SystemExit(7)"  # No fabricated app proof.
                     else:
                         self.assertEqual(argv[:3], [str(M.ANDROID / "platform-tools/adb"), "-s", M.SERIAL])
                         args = argv[3:]
                         if args[0] == "install":
-                            self.assertTrue(accepted)
+                            self.assertTrue(reaches_install)
                             self.assertEqual(link_reads[0], 3)  # Active, then both stable observations.
-                            # Stop at the real install boundary; this test never
-                            # invents an installed application or final report.
-                            child = real_popen([sys.executable, "-I", "-c", "raise SystemExit(7)"], **kwargs)
+                            # Selected cases stop at install; others test the
+                            # real package-UID gate and stop at the app driver.
+                            child = real_popen([sys.executable, "-I", "-c",
+                                "raise SystemExit(7)" if package_uid is None else "pass"], **kwargs)
+                            children.append(child)
+                            return child
+                        if args[0] == "reverse":
+                            self.assertEqual(package_uid, b"10000")
+                            self.assertEqual(args, ["reverse", "tcp:43210", "tcp:43210"])
+                            child = real_popen([sys.executable, "-I", "-c", "pass"], **kwargs)
                             children.append(child)
                             return child
                         self.assertEqual(args[0], "shell")
@@ -1493,6 +1507,18 @@ class EmulatorDiagnostics(unittest.TestCase):
                                 (b"" if accepted else b"qdisc clsact ffff: dev sink-private parent ffff:fff1\n"),
                             ("ip", "-4", "route", "show", "table", "all"): GuestNetworkIsolationTests.V4,
                             ("ip", "-6", "route", "show", "table", "all"): GuestNetworkIsolationTests.V6}
+                        outputs[("/system/bin/run-as", M.PACKAGE, "/system/bin/id", "-u")] = package_uid
+                        for name, command, expected in M.GuestNetworkObserver.GUARDS:
+                            outputs[command] = expected[0]
+                        if tuple(args[1:]) == ("/system/bin/id", "-u"):
+                            shell_uid_reads[0] += 1
+                            if (guard_fails == "before" and shell_uid_reads[0] == 1
+                                    or guard_fails == "after" and shell_uid_reads[0] == 2):
+                                outputs[tuple(args[1:])] = b"private-guard-canary"
+                        # Normalize only the independently asserted fixed guest
+                        # observer prefix for this inert child-output fixture.
+                        if args[1:3] == ["/system/xbin/su", "0"] and args[3] in ("/system/bin/ip", "/system/bin/tc"):
+                            args = ["shell", args[3].rsplit("/", 1)[1], *args[4:]]
                         if tuple(args[1:]) == ("ip", "-details", "-json", "link", "show"):
                             link_reads[0] += 1
                             if accepted and link_reads[0] == 1:
@@ -1521,15 +1547,23 @@ class EmulatorDiagnostics(unittest.TestCase):
                 def drain(owned):
                     try:
                         self.assertEqual(owned, children)
-                        self.assertEqual(len(owned), 17 if accepted else 11)
-                        self.assertEqual((proof / "guest-network-diagnostic.json").exists(), not accepted and not failed_write)
+                        self.assertEqual(len(owned), (34 if package_uid == b"10000" else 32 if package_uid == b"0" else 31)
+                            if reaches_install else 12 if guard_fails == "before"
+                            else 26 if guard_fails == "after" else 18)
+                        self.assertEqual((proof / "guest-network-diagnostic.json").exists(), not reaches_install and not failed_write)
                         self.assertEqual(json.loads((proof / "emulator-diagnostic.json").read_text())["phase"],
-                            "apk_install" if accepted else "guest_network")
+                            ("app_driver" if package_uid == b"10000" else "package_identity" if package_uid == b"0"
+                                else "apk_install") if reaches_install else "guest_network")
                         if query_fails:
                             raw = (proof / "guest-network-diagnostic.json").read_bytes()
                             self.assertEqual(json.loads(raw)["last_query"],
                                 dict(name="qdisc_before", outcome="command_failed"))
                             self.assertNotIn(b"private-canary", raw)
+                        if guard_fails:
+                            raw = (proof / "guest-network-diagnostic.json").read_bytes()
+                            self.assertEqual(json.loads(raw)["observer"]["guard"], "shell_uid")
+                            self.assertEqual(json.loads(raw)["polls"], 0 if guard_fails == "before" else 2)
+                            self.assertNotIn(b"private-guard-canary", raw)
                     finally:
                         drained = original_drain(owned)
                     return drained
@@ -1543,21 +1577,25 @@ class EmulatorDiagnostics(unittest.TestCase):
                         patch.object(M.H, "write", side_effect=write), patch.object(M, "drain_children", side_effect=drain), \
                         patch.object(M.time, "monotonic", side_effect=lambda: now[0]), \
                         patch.object(M.time, "sleep", side_effect=sleep), \
-                        self.assertRaises(subprocess.CalledProcessError if accepted or query_fails else ValueError):
+                        self.assertRaises(subprocess.CalledProcessError
+                            if (reaches_install and package_uid != b"0") or query_fails else ValueError):
                     M.inside()
                 cleanup = json.loads((proof / "emulator-cleanup.json").read_text())
                 self.assertTrue(cleanup["direct_children_reaped"] and cleanup["private_avd_removed"])
                 self.assertFalse(cleanup["trial_returned"])
                 self.assertTrue(all(c.poll() is not None and c.stdin.closed for c in children))
-                self.assertEqual((proof / "emulator-boundary.json").exists(), accepted)
-                if accepted:
+                self.assertEqual((proof / "emulator-boundary.json").exists(), reaches_install)
+                if reaches_install:
                     boundary = json.loads((proof / "emulator-boundary.json").read_text())
-                    self.assertEqual(boundary["schema"], 2)
+                    self.assertEqual(boundary["schema"], 3)
                     self.assertTrue(boundary["guest_no_usable_egress"])
+                    self.assertEqual(boundary["package_uid_probe"]["verified"], package_uid == b"10000")
+                    self.assertFalse(boundary["package_uid_probe"]["app_pid_observed"])
                     self.assertNotIn("guest_default_routes_absent", boundary)
                     self.assertNotIn("guest_non_loopback_routes_absent", boundary)
                 self.assertFalse((proof / "report.json").exists())
                 self.assertFalse((proof / "guest-network-diagnostic.part").exists())
+                self.assertFalse((proof / "emulator-boundary.part").exists())
 
 
 class GuestNetworkDiagnostics(unittest.TestCase):
@@ -1965,6 +2003,178 @@ class GuestNetworkIsolationTests(unittest.TestCase):
             value = json.loads((Path(root) / "guest-network-diagnostic.json").read_bytes())
             self.assertEqual(value["polls"], 2)
             self.assertEqual(value["last_query"], dict(name="qdisc_before", outcome="command_failed"))
+
+
+class GuestNetworkObserverTests(unittest.TestCase):
+    GUARDS = {
+        "build_type": (("/system/bin/getprop", "ro.build.type"), b"userdebug"),
+        "debuggable": (("/system/bin/getprop", "ro.debuggable"), b"1"),
+        "shell_uid": (("/system/bin/id", "-u"), b"2000"),
+        "shell_context": (("/system/bin/id", "-Z"), b"u:r:shell:s0"),
+        "selinux": (("/system/bin/getenforce",), b"Enforcing"),
+        "observer_uid": (("/system/xbin/su", "0", "/system/bin/id", "-u"), b"0"),
+        "observer_context": (("/system/xbin/su", "0", "/system/bin/id", "-Z"), b"u:r:su:s0"),
+    }
+    READS = (
+        ("link_before", ("/system/bin/ip", "-details", "-json", "link", "show")),
+        ("qdisc_before", ("/system/bin/tc", "qdisc", "show")),
+        ("ipv4", ("/system/bin/ip", "-4", "route", "show", "table", "all")),
+        ("ipv6", ("/system/bin/ip", "-6", "route", "show", "table", "all")),
+        ("qdisc_after", ("/system/bin/tc", "qdisc", "show")),
+        ("link_after", ("/system/bin/ip", "-details", "-json", "link", "show")),
+    )
+
+    def run_gate(self, proof, *, overrides=None, advances=None, stop=1000, diagnostic=None, calls=None):
+        overrides, advances = overrides or {}, advances or {}
+        calls = [] if calls is None else calls
+        now, read_index, guards = [100.0], [0], {}
+        fixtures = GuestNetworkIsolationTests
+        values = (fixtures.links(), fixtures.QDISC, fixtures.V4, fixtures.V6, fixtures.QDISC, fixtures.links())
+        def adb(*args, **kwargs):
+            calls.append((args, kwargs))
+            if args[:2] == ("shell", "svc"):
+                return b""
+            self.assertGreater(kwargs["seconds"], 0)
+            self.assertLessEqual(kwargs["seconds"], min(110.0, stop) - now[0])
+            if args[1:4] in (("/system/xbin/su", "0", "/system/bin/ip"),
+                    ("/system/xbin/su", "0", "/system/bin/tc")):
+                index = read_index[0]
+                self.assertLess(index, 6)
+                name, expected = self.READS[index]
+                self.assertEqual(args, ("shell", "/system/xbin/su", "0", *expected))
+                key, value = ("query", name), values[index]
+                read_index[0] += 1
+            else:
+                matches = [(name, value) for name, (expected, value) in self.GUARDS.items() if args == ("shell", *expected)]
+                self.assertEqual(len(matches), 1)
+                name, value = matches[0]
+                count = guards.get(name, 0)
+                self.assertLess(count, 2)
+                guards[name] = count + 1
+                key = ("before" if count == 0 else "after", name)
+            now[0] += advances.get(key, 0.01)
+            value = overrides.get(key, value)
+            if isinstance(value, BaseException):
+                raise value
+            return value
+        with patch.object(M, "PROOF", proof), patch.object(M.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(M.time, "sleep", side_effect=lambda _: now.__setitem__(0, 111.0)):
+            boundary = (diagnostic or M.GuestNetworkObserver()).enforce(adb, stop)
+        return boundary, calls
+
+    def test_exact_fixed_reads_and_before_after_guards_do_not_privilege_app(self):
+        with tempfile.TemporaryDirectory() as root:
+            boundary, calls = self.run_gate(Path(root))
+            self.assertEqual(boundary["schema"], 3)
+            self.assertTrue(boundary["guest_no_usable_egress"])
+            self.assertEqual(boundary["observer"], dict(authority="disposable-userdebug-su",
+                existing_su_domain_permissive=True, pre_and_post_guards_verified=True,
+                global_selinux_enforcing=True, adb_shell_unprivileged=True,
+                fixed_network_read_queries=6, app_authority=False, hostile_kernel_proof=False))
+            self.assertEqual(boundary["package_uid_probe"], dict(verified=False, app_pid_observed=False))
+            expected_guards = [("shell", *argv) for argv, _ in self.GUARDS.values()]
+            self.assertEqual([args for args, _ in calls], [
+                ("shell", "svc", "wifi", "disable"), ("shell", "svc", "data", "disable"),
+                *expected_guards, *[("shell", "/system/xbin/su", "0", *argv) for _, argv in self.READS],
+                *expected_guards])
+            self.assertFalse(list(Path(root).iterdir()))
+        observer = M.GuestNetworkObserver()
+        for query, argv in (("private", ("ip", "link", "show")), ("link_before", ("ip", "link", "set", "lo", "down")),
+                ("ipv4", ("sh", "-c", "private"))):
+            with self.assertRaisesRegex(ValueError, "GUEST_OBSERVER_QUERY"):
+                observer.query_arguments(query, argv)
+
+    def test_each_guard_before_and_after_rejects_without_raw_evidence(self):
+        for phase in ("before", "after"):
+            for name in self.GUARDS:
+                with self.subTest(phase=phase, guard=name), tempfile.TemporaryDirectory() as root:
+                    calls = []
+                    with self.assertRaisesRegex(ValueError, "GUEST_OBSERVER_REJECTED"):
+                        self.run_gate(Path(root), overrides={(phase, name): b"private-token"}, calls=calls)
+                    raw = (Path(root) / "guest-network-diagnostic.json").read_bytes()
+                    value = json.loads(raw)
+                    self.assertEqual(value["schema"], 4)
+                    self.assertEqual(value["stage"], "observer_" + phase)
+                    self.assertEqual(value["observer"]["guard"], name)
+                    self.assertEqual(value["observer"]["outcome"], "failed")
+                    self.assertEqual(value["last_query"], dict(name=None, outcome="unobserved"))
+                    self.assertFalse(value["gate_passed"])
+                    self.assertLessEqual(len(raw), 2048)
+                    self.assertNotIn(b"private-token", raw)
+                    if phase == "before":
+                        self.assertEqual(value["polls"], 0)
+        for raw in (b"user", b"userdebug\nprivate", b" userdebug", "u\u0455erdebug".encode(), b"x" * 129):
+            with self.subTest(raw=raw), tempfile.TemporaryDirectory() as root, self.assertRaises(ValueError):
+                self.run_gate(Path(root), overrides={("before", "build_type"): raw})
+        with tempfile.TemporaryDirectory() as root:
+            value, _ = self.run_gate(Path(root), overrides={("before", "build_type"): b"eng\r\n"})
+            self.assertTrue(value["guest_no_usable_egress"])
+
+    def test_original_absolute_deadline_covers_both_guards_and_every_read(self):
+        for key, stop in ((("before", "observer_context"), 1000), (("query", "link_after"), 1000),
+                (("after", "observer_context"), 1000), (("before", "shell_uid"), 100.03)):
+            with self.subTest(key=key, stop=stop), tempfile.TemporaryDirectory() as root:
+                with self.assertRaisesRegex(ValueError, "GUEST_(?:OBSERVER_DEADLINE|NETWORK_STILL_ACTIVE)"):
+                    self.run_gate(Path(root), advances={key: 10.0}, stop=stop)
+                receipt = json.loads((Path(root) / "guest-network-diagnostic.json").read_bytes())
+                self.assertFalse(receipt["gate_passed"])
+
+    def test_six_query_errors_and_parser_failures_keep_exact_owner_and_cleanup(self):
+        for name, _ in self.READS:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as root:
+                error = subprocess.CalledProcessError(1, "private-argv", output=b"private-output")
+                with self.assertRaises(subprocess.CalledProcessError) as raised:
+                    self.run_gate(Path(root), overrides={("query", name): error})
+                self.assertIs(raised.exception, error)
+                raw = (Path(root) / "guest-network-diagnostic.json").read_bytes()
+                self.assertEqual(json.loads(raw)["last_query"], dict(name=name, outcome="command_failed"))
+                self.assertNotIn(b"private-", raw)
+        for name, raw in (("link_before", b"[]"), ("qdisc_before", b"private"),
+                ("ipv4", b"default via 10.0.2.2 dev sink-private")):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as root, self.assertRaises(ValueError):
+                self.run_gate(Path(root), overrides={("query", name): raw})
+
+    def test_guard_error_identity_write_failure_and_maximum_route_receipt(self):
+        error = subprocess.CalledProcessError(1, "private")
+        with tempfile.TemporaryDirectory() as root, patch.object(M, "PROOF", Path(root)):
+            diagnostic = M.GuestNetworkObserver()
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.run_gate(Path(root), overrides={("after", "shell_uid"): error}, diagnostic=diagnostic)
+            diagnostic.publish_failure(ValueError("later-private-error"))
+            value = json.loads((Path(root) / "guest-network-diagnostic.json").read_bytes())
+            self.assertEqual(value["observer"]["outcome"], "unobserved")
+            self.assertIsNone(value["observer"]["guard"])
+            with patch.object(M.H, "write", side_effect=OSError("private-write")), \
+                    self.assertRaises(subprocess.CalledProcessError) as raised:
+                self.run_gate(Path(root), overrides={("before", "shell_uid"): error})
+            self.assertIs(raised.exception, error)
+        route = b"default via 10.0.2.2 dev sink-private\n"
+        routes = route * (65536 // len(route))
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(ValueError, "GUEST_NETWORK_STILL_ACTIVE"):
+                self.run_gate(Path(root), overrides={("query", "ipv4"): routes, ("query", "ipv6"): routes})
+            raw = (Path(root) / "guest-network-diagnostic.json").read_bytes()
+            self.assertLessEqual(len(raw), 2048)
+            for secret in (b"sink-private", b"10.0.2.2", b"/system", b"u:r:"):
+                self.assertNotIn(secret, raw)
+
+    def test_package_identity_is_fixed_nonprivileged_and_not_application_pid(self):
+        for raw in (b"10000", b"19999\n", b"12345\r\n"):
+            adb = Mock(return_value=raw)
+            value = M.package_uid_probe(adb)
+            adb.assert_called_once_with("shell", "/system/bin/run-as", "org.volparossa.weather.trial", "/system/bin/id", "-u")
+            self.assertTrue(value["default_user_application_uid"] and value["verified"])
+            self.assertFalse(value["app_pid_observed"])
+        for raw in (b"0", b"2000", b"9999", b"20000", b"110000", b"010000", b"10000\nprivate", b"x" * 17):
+            with self.subTest(raw=raw), self.assertRaisesRegex(ValueError, "GUEST_PACKAGE_UID"):
+                M.package_uid_probe(Mock(return_value=raw))
+        tree = ast.parse((ROOT / "scripts/prepare_hosted_android_ci.py").read_text())
+        inside = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "inside")
+        code = ast.unparse(inside)
+        self.assertLess(code.index("GuestNetworkObserver().enforce"), code.index("adb_command('install'"))
+        self.assertLess(code.index("adb_command('install'"), code.index("package_uid_probe(adb_command)"))
+        self.assertLess(code.index("package_uid_probe(adb_command)"), code.index("adb_command('reverse'"))
+        self.assertLess(code.index("package_uid_probe(adb_command)"), code.index("command('app_driver'"))
 
 
 class AvdPreflight(unittest.TestCase):
