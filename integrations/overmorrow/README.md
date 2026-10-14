@@ -589,6 +589,17 @@ background/resume cycle while the same products remain fresh. Initial retrieval
 has a 120-second wait within the unchanged 180-second driver budget; later waits
 remain bounded and do not renew the overall deadline.
 
+The guest bridge can explicitly retain original successful core CLI receipts
+with `--proof-profile android-protected-core-v6 --private-receipt-directory ABS`.
+This Unix-only trial mode requires a separate empty owned mode-0700 directory;
+it writes at most three private mode-0600 receipt/observation pairs per product.
+It observes actual API requests only, after forecast validation and joined
+process/scratch cleanup. It neither prefetches nor changes the HTTP response.
+Default operation retains no receipts. Cancellation and shutdown preserve the
+original deadline and keep directory ownership until any pending write stops;
+an incomplete cleanup remains a failure. Raw receipts include local trial paths
+and must not be exported as public artifacts.
+
 The combined core/VM runner and its source, custody, cold-fetch and packet-capture
 acceptance checks remain to be integrated and executed. These components do not
 prove Android-triggered cold peer retrieval, live expiry behavior, an embedded

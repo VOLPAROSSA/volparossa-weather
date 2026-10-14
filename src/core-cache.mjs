@@ -13,7 +13,7 @@ const MAX_REPORT_BYTES = 16384;
 
 // Only these fixed product wrappers select validation. Callers cannot inject a
 // parser, a freshness function or a different interpretation of trusted bytes.
-const WEATHER = Object.freeze({ maxBytes: MAX_BYTES, request, parse: parseForecast, freshness,
+const WEATHER = Object.freeze({ kind: 'weather', maxBytes: MAX_BYTES, request, parse: parseForecast, freshness,
   matchesFields: (forecast, expected) => Object.hasOwn(forecast.units, 'wind_10m') === expected.includeWind
     && Object.hasOwn(forecast.units, 'precipitation') === expected.includePrecipitation,
   mismatch: 'FORECAST_QUERY_MISMATCH' });
@@ -30,10 +30,16 @@ function groupExists(pid) {
 }
 
 export async function runOwnedJsonProcess(executable, args, cwd, signal, timeoutMs = 180000) {
+  return (await runOwnedReceiptProcess(executable, args, cwd, signal, timeoutMs)).value;
+}
+
+async function runOwnedReceiptProcess(executable, args, cwd, signal, timeoutMs = 180000) {
   requireThat(!signal?.aborted, 'CANCELLED');
+  const startedAt = Date.now();
   const child = spawn(executable, args, { cwd, detached: true, shell: false,
     env: { LANG: 'C.UTF-8', RUST_LOG: 'off' }, stdio: ['ignore', 'pipe', 'pipe'] });
-  let stdout = '', outputBytes = 0, failure = null;
+  const chunks = [];
+  let outputBytes = 0, failure = null;
   let timer, killTimer;
   const stop = code => {
     failure ??= code;
@@ -48,7 +54,7 @@ export async function runOwnedJsonProcess(executable, args, cwd, signal, timeout
   child.stdout.on('data', data => {
     outputBytes += data.length;
     if (outputBytes > MAX_REPORT_BYTES) stop('CORE_REPORT_TOO_LARGE');
-    else stdout += data.toString('utf8');
+    else chunks.push(data);
   });
   // Discard diagnostics (which could contain file paths/private configuration).
   child.stderr.on('data', data => {
@@ -71,27 +77,32 @@ export async function runOwnedJsonProcess(executable, args, cwd, signal, timeout
   }
   requireThat(failure === null, failure);
   requireThat(result.code === 0 && result.exitSignal === null, 'CORE_FAILED');
-  try { return JSON.parse(stdout); } catch { throw new WeatherError('CORE_REPORT_INVALID'); }
+  const stdout = Buffer.concat(chunks), completedAt = Date.now();
+  try { return { value: JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(stdout)),
+    stdout, startedAt, completedAt }; } catch { throw new WeatherError('CORE_REPORT_INVALID'); }
 }
 
-export async function fetchCachedForecast(options, { signal } = {}) {
-  return fetchCachedProduct(options, WEATHER, signal);
+export async function fetchCachedForecast(options, { signal, observeReceipt, receiptDeadline } = {}) {
+  return fetchCachedProduct(options, WEATHER, signal, observeReceipt, receiptDeadline);
 }
 
-export async function fetchCachedAirQuality(options, { signal } = {}) {
+export async function fetchCachedAirQuality(options, { signal, observeReceipt, receiptDeadline } = {}) {
   // A fixed, lazy dependency keeps existing weather-only application bundles
   // independent of this additional product. No input selects the module path.
   const { AQ_MAX_BYTES, airQualityFreshness, airQualityRequest, parseAirQualityForecast } = await import('./air-quality.mjs');
-  const product = Object.freeze({ maxBytes: AQ_MAX_BYTES, request: airQualityRequest,
+  const product = Object.freeze({ kind: 'air_quality', maxBytes: AQ_MAX_BYTES, request: airQualityRequest,
     parse: parseAirQualityForecast, freshness: airQualityFreshness,
     // The AQ parser separately checks units, native evidence and NOAA model source.
     matchesFields: forecast => Object.keys(forecast.units).sort().join('|') === 'pm10|pm2_5',
     mismatch: 'AQ_QUERY_MISMATCH' });
-  return fetchCachedProduct(options, product, signal);
+  return fetchCachedProduct(options, product, signal, observeReceipt, receiptDeadline);
 }
 
 async function fetchCachedProduct({ mode, executable, controlSocket, cache, scratchParent,
-  publisherKey, name, minRevision, query, reuseCache = false }, product, signal) {
+  publisherKey, name, minRevision, query, reuseCache = false }, product, signal, observeReceipt, receiptDeadline) {
+  requireThat(observeReceipt === undefined || typeof observeReceipt === 'function', 'RECEIPT_OBSERVER_INVALID');
+  const deadline = receiptDeadline ?? performance.now() + 180000;
+  requireThat(Number.isFinite(deadline), 'RECEIPT_OBSERVER_INVALID');
   requireThat(mode === 'core-cache', 'CORE_MODE_REQUIRED');
   requireThat(process.platform === 'linux' && typeof process.getuid === 'function', 'CORE_PLATFORM_UNAVAILABLE');
   const expected = product.request(query);
@@ -112,14 +123,15 @@ async function fetchCachedProduct({ mode, executable, controlSocket, cache, scra
   requireThat(socket.isSocket() && !socket.isSymbolicLink(), 'CONTROL_SOCKET_INVALID');
   const work = await mkdtemp(join(scratchParent, 'forecast-'));
   const output = join(work, 'forecast.json');
-  let cleanupUnconfirmed;
+  let cleanupUnconfirmed, result, processResult;
   try {
     const args = ['--control-socket', controlSocket, 'content', 'fetch-name',
       '--publisher-key', publisherKey, '--name', name, '--min-revision', String(minRevision),
       '--cache', cache, '--local-output', output, '--quota-bytes', String(product.maxBytes),
       '--max-entries', '16', '--min-free-bytes', '67108864'];
     if (reuseCache) args.push('--reuse-cache');
-    const receipt = await runOwnedJsonProcess(executable, args, work, signal);
+    processResult = await runOwnedReceiptProcess(executable, args, work, signal);
+    const receipt = processResult.value;
     requireThat(receipt && receipt.operation === 'named_content_download' && receipt.publisher_key === publisherKey
       && receipt.name === name && Number.isSafeInteger(receipt.revision) && receipt.revision >= minRevision
       && receipt.local_delivery === true && receipt.output_mode === '0600' && receipt.ownership_changed === false
@@ -151,7 +163,7 @@ async function fetchCachedProduct({ mode, executable, controlSocket, cache, scra
     const age = product.freshness(forecast, new Date().toISOString(), expiry.toISOString());
     requireThat(!age.stale, 'STALE_FORECAST');
     requireThat(!signal?.aborted, 'CANCELLED');
-    return { forecast, delivery: { mode: 'core-cache', publisher_key: publisherKey, name,
+    result = { forecast, delivery: { mode: 'core-cache', publisher_key: publisherKey, name,
       revision: receipt.revision, manifest_id: receipt.manifest_id, sha256: receipt.sha256,
       publication_expires_at: expiry.toISOString(), freshness: age,
       upstream_origin_attested: false, manifest_media_type_checked: false } };
@@ -168,4 +180,15 @@ async function fetchCachedProduct({ mode, executable, controlSocket, cache, scra
       throw cleanupUnconfirmed ?? failure;
     }
   }
+  // An owner-installed observation sink can retain only a completed, validated
+  // public-community operation. It cannot select the executable, retry a fetch,
+  // replace the result or hide a process/scratch cleanup failure. The original
+  // HTTP deadline and abort signal still own this joined, bounded write phase.
+  if (observeReceipt) {
+    requireThat(!signal?.aborted && performance.now() < deadline, 'CANCELLED');
+    await observeReceipt(Object.freeze({ product: product.kind, stdout: Buffer.from(processResult.stdout),
+      startedAt: processResult.startedAt, completedAt: processResult.completedAt, reuseCache }), { signal, deadline });
+    requireThat(!signal?.aborted && performance.now() < deadline, 'CANCELLED');
+  }
+  return result;
 }

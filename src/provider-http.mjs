@@ -317,9 +317,10 @@ function resultBytes(result, configuration, airQuality = false) {
 }
 
 export async function startProviderHttp({ config, staticRoot, staticProfile = 'default', port, socketPath, requestDeadlineMs = 180000 },
-  { fetchProvider = fetchCachedProvider, fetchAirQualityProvider = fetchCachedAirQualityProvider } = {}) {
+  { fetchProvider = fetchCachedProvider, fetchAirQualityProvider = fetchCachedAirQualityProvider, observeReceipt } = {}) {
   const configuration = providerHttpConfiguration(config);
   const unix = socketPath !== undefined, tcpPort = port === undefined ? 0 : port;
+  requireThat(observeReceipt === undefined || (unix && typeof observeReceipt === 'function'), 'BRIDGE_CONFIG_INVALID');
   requireThat((unix ? port === undefined && staticRoot === undefined && staticProfile === 'default'
     : Number.isInteger(tcpPort) && tcpPort >= 0 && tcpPort <= 65535)
     && Number.isInteger(requestDeadlineMs) && requestDeadlineMs >= 1 && requestDeadlineMs <= 180000
@@ -380,13 +381,15 @@ export async function startProviderHttp({ config, staticRoot, staticProfile = 'd
     // Otherwise a sequential weather -> AQ client receives 503 while the shared
     // slot is still occupied and immediately loses its next request to 429.
     // The existing socket timeout still bounds a backend that ignores abort.
+    const receiptDeadline = performance.now() + requestDeadlineMs;
     const timer = setTimeout(abort, requestDeadlineMs);
     active = (async () => {
       try {
         const fetch = airQuality ? fetchAirQualityProvider : fetchProvider;
         const core = await requestCore(selected.core, controller.signal);
         const result = await Promise.resolve().then(() => fetch(core,
-          { variables: selected.variables, signal: controller.signal }));
+          { variables: selected.variables, signal: controller.signal,
+            ...(observeReceipt ? { observeReceipt, receiptDeadline } : {}) }));
         if (controller.signal.aborted) throw new Error('CANCELLED');
         send(response, 200, resultBytes(result, selected, airQuality));
       } catch (failure) {
