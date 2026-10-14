@@ -3239,7 +3239,8 @@ class AvdPreflight(unittest.TestCase):
         self.assertEqual(M.avd_command(), [str(M.ANDROID / "cmdline-tools/19.0/bin/avdmanager"), "create", "avd",
             "--name", "volparossa_trial", "--package", "system-images;android-36;default;x86_64", "--path", "/state/avd/trial.avd"])
         source = (ROOT / "scripts/prepare_hosted_android_ci.py").read_text()
-        execute = source.split("def execute(", 1)[1].split("def inside(", 1)[0]
+        execute = ast.get_source_segment(source, next(node for node in ast.parse(source).body
+            if isinstance(node, ast.FunctionDef) and node.name == "execute"))
         self.assertEqual(execute.count('H.private_directory(PROOF)'), 1)
         for later in ('repository_fixture()', 'flutter("pub"', 'run_app_gradle(True)', 'run_app_gradle(False)'):
             self.assertLess(execute.index('avd_preflight(netns, awk=awk)'), execute.index(later))

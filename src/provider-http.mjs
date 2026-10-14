@@ -2,8 +2,8 @@
 // Development boundary: fixed public weather/AQ products, not a location catalogue.
 import { createServer } from 'node:http';
 import { constants } from 'node:fs';
-import { lstat, readdir, realpath, open } from 'node:fs/promises';
-import { dirname, isAbsolute, join, resolve, extname } from 'node:path';
+import { lstat, readdir, realpath, open, mkdtemp, chmod, link, unlink, rmdir } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, resolve, extname } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { fetchCachedProvider, fetchCachedAirQualityProvider } from './provider-core.mjs';
 import { providerVariables, toProviderForecast } from './provider.mjs';
@@ -15,6 +15,8 @@ const API = '/api/volparossa/forecast';
 const AQ_API = '/api/volparossa/air-quality';
 const MAX_ASSET = 8 * 1024 * 1024, MAX_STATIC = 32 * 1024 * 1024;
 const MAX_RESPONSE = 256 * 1024;
+const UNIX_ORIGIN = 'http://127.0.0.1:43210';
+const MAX_UNIX_PATH = 103;
 const MIME = Object.freeze({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
@@ -46,6 +48,121 @@ function absolute(value) {
   requireThat(typeof value === 'string' && isAbsolute(value) && resolve(value) === value
     && !/[\x00-\x1f\x7f]/.test(value), 'BRIDGE_PATH_INVALID');
   return value;
+}
+
+function sameInode(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+// Linux-only private API listener. The configured parent must already exist;
+// neither cache directories nor the configured socket parent are created here.
+async function listenUnix(server, socketPath) {
+  absolute(socketPath);
+  requireThat(process.platform === 'linux' && typeof process.getuid === 'function'
+    && Buffer.byteLength(socketPath) <= MAX_UNIX_PATH, 'BRIDGE_SOCKET_INVALID');
+  const parentPath = dirname(socketPath), uid = process.getuid();
+  let parent, staging, parentInfo, stagingInfo, stagingPath, bindPath, socketInfo;
+  let published = false, retired = false;
+  function privateDirectory(info) {
+    return info.isDirectory() && info.uid === uid && (info.mode & 0o7777) === 0o700;
+  }
+  async function parentUnchanged() {
+    const current = await lstat(parentPath);
+    return privateDirectory(current) && sameInode(parentInfo, current)
+      && await realpath(parentPath) === parentPath;
+  }
+  function ownedSocket(info) {
+    return socketInfo && info.isSocket() && info.uid === uid && sameInode(socketInfo, info);
+  }
+  // Unlink only a known inode through the pinned parent, never a replacement at
+  // the caller's pathname. Missing/replaced entries are not adopted or repaired.
+  async function removeSocket(path) {
+    let info;
+    try { info = await lstat(path); }
+    catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    requireThat(ownedSocket(info), 'BRIDGE_SOCKET_CLEANUP_UNCONFIRMED');
+    await unlink(path);
+    return true;
+  }
+  async function retireBinding() {
+    if (retired || !stagingPath) return;
+    requireThat(stagingInfo, 'BRIDGE_SOCKET_CLEANUP_UNCONFIRMED');
+    if (socketInfo) await removeSocket(bindPath);
+    const current = await lstat(stagingPath);
+    requireThat(current.isDirectory() && current.uid === uid && !(current.mode & 0o077)
+      && sameInode(stagingInfo, current) && current.mode === stagingInfo.mode,
+      'BRIDGE_SOCKET_CLEANUP_UNCONFIRMED');
+    // rmdir never recursively removes entries. Keep the now-unlinked directory
+    // descriptor open until libuv closes the listener. Its automatic unlink of
+    // bindPath can then never address a replacement public socket or file.
+    await rmdir(stagingPath);
+    retired = true;
+  }
+  const publicPath = () => `/proc/self/fd/${parent.fd}/${basename(socketPath)}`;
+  async function cleanup() {
+    let failure;
+    try {
+      if (published) {
+        const unchanged = await parentUnchanged().catch(() => false);
+        const removed = await removeSocket(publicPath());
+        requireThat(unchanged && removed, 'BRIDGE_SOCKET_CLEANUP_UNCONFIRMED');
+      }
+    } catch (error) { failure = error; }
+    try { await staging?.close(); } catch (error) { failure ??= error; }
+    try { await parent?.close(); } catch (error) { failure ??= error; }
+    if (failure) throw new Error('BRIDGE_SOCKET_CLEANUP_UNCONFIRMED');
+  }
+  try {
+    parent = await open(parentPath, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    parentInfo = await parent.stat();
+    requireThat(privateDirectory(parentInfo) && await parentUnchanged(), 'BRIDGE_SOCKET_PARENT_INVALID');
+    let exists = true;
+    try { await lstat(publicPath()); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; exists = false; }
+    requireThat(!exists, 'BRIDGE_SOCKET_EXISTS');
+    stagingPath = await mkdtemp(`/proc/self/fd/${parent.fd}/.weather-socket-`);
+    // Admit the opened directory, not a pathname checked before opening. Keep
+    // the named identity even if a restrictive umask makes open fail, so the
+    // failure path can retire only that exact empty directory.
+    try { staging = await open(stagingPath, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW); }
+    finally { stagingInfo = await lstat(stagingPath); }
+    requireThat(stagingInfo.isDirectory() && stagingInfo.uid === uid && !(stagingInfo.mode & 0o077),
+      'BRIDGE_SOCKET_PARENT_INVALID');
+    const opened = await staging.stat();
+    requireThat(privateDirectory(opened) && sameInode(stagingInfo, opened), 'BRIDGE_SOCKET_PARENT_INVALID');
+    bindPath = `/proc/self/fd/${staging.fd}/api.sock`;
+    requireThat(Buffer.byteLength(bindPath) <= MAX_UNIX_PATH, 'BRIDGE_SOCKET_INVALID');
+    await new Promise((done, fail) => {
+      server.once('error', fail);
+      server.listen({ path: bindPath, exclusive: true }, () => {
+        server.removeListener('error', fail); done();
+      });
+    });
+    socketInfo = await lstat(bindPath);
+    requireThat(socketInfo.isSocket() && socketInfo.uid === uid && socketInfo.nlink === 1,
+      'BRIDGE_SOCKET_INVALID');
+    await chmod(bindPath, 0o600);
+    const privateSocket = await lstat(bindPath);
+    requireThat(ownedSocket(privateSocket) && (privateSocket.mode & 0o7777) === 0o600
+      && privateSocket.nlink === 1 && await parentUnchanged(), 'BRIDGE_SOCKET_INVALID');
+    // Hard-link publication is atomic and fails if ANY destination entry exists.
+    // It cannot overwrite even a concurrent socket, regular file or symlink.
+    await link(bindPath, publicPath());
+    published = true;
+    await retireBinding();
+    requireThat(await parentUnchanged(), 'BRIDGE_SOCKET_PARENT_CHANGED');
+    const ready = await lstat(publicPath());
+    requireThat(ownedSocket(ready) && (ready.mode & 0o7777) === 0o600 && ready.nlink === 1,
+      'BRIDGE_SOCKET_INVALID');
+    return cleanup;
+  } catch (error) {
+    let cleanupError;
+    try { await retireBinding(); } catch (failure) { cleanupError = failure; }
+    await new Promise(done => { server.close(done); server.closeAllConnections(); });
+    try { await cleanup(); } catch (failure) { cleanupError ??= failure; }
+    if (cleanupError) throw new Error('BRIDGE_SOCKET_CLEANUP_UNCONFIRMED');
+    throw error;
+  }
 }
 
 function coreConfiguration(value, airQuality = false) {
@@ -199,15 +316,18 @@ function resultBytes(result, configuration, airQuality = false) {
   return bytes;
 }
 
-export async function startProviderHttp({ config, staticRoot, staticProfile = 'default', port = 0, requestDeadlineMs = 180000 },
-  { fetchProvider = fetchCachedProvider, fetchAirQualityProvider = fetchCachedAirQualityProvider } = {}) {
+export async function startProviderHttp({ config, staticRoot, staticProfile = 'default', port, socketPath, requestDeadlineMs = 180000 },
+  { fetchProvider = fetchCachedProvider, fetchAirQualityProvider = fetchCachedAirQualityProvider, observeReceipt } = {}) {
   const configuration = providerHttpConfiguration(config);
-  requireThat(Number.isInteger(port) && port >= 0 && port <= 65535
+  const unix = socketPath !== undefined, tcpPort = port === undefined ? 0 : port;
+  requireThat(observeReceipt === undefined || (unix && typeof observeReceipt === 'function'), 'BRIDGE_CONFIG_INVALID');
+  requireThat((unix ? port === undefined && staticRoot === undefined && staticProfile === 'default'
+    : Number.isInteger(tcpPort) && tcpPort >= 0 && tcpPort <= 65535)
     && Number.isInteger(requestDeadlineMs) && requestDeadlineMs >= 1 && requestDeadlineMs <= 180000
     && typeof staticProfile === 'string' && Object.hasOwn(STATIC_PROFILES, staticProfile),
   'BRIDGE_CONFIG_INVALID');
-  const profile = STATIC_PROFILES[staticProfile], assets = await staticAssets(staticRoot, profile);
-  let origin, active = null, closing = false, cleanupUnconfirmed = false;
+  const profile = STATIC_PROFILES[staticProfile], assets = unix ? new Map() : await staticAssets(staticRoot, profile);
+  let origin = unix ? UNIX_ORIGIN : undefined, active = null, closing = unix, cleanupUnconfirmed = false;
   const controllers = new Set();
   function send(response, status, body, type = 'application/json', extraHeaders = {}) {
     if (response.destroyed || response.writableEnded) return;
@@ -261,13 +381,15 @@ export async function startProviderHttp({ config, staticRoot, staticProfile = 'd
     // Otherwise a sequential weather -> AQ client receives 503 while the shared
     // slot is still occupied and immediately loses its next request to 429.
     // The existing socket timeout still bounds a backend that ignores abort.
+    const receiptDeadline = performance.now() + requestDeadlineMs;
     const timer = setTimeout(abort, requestDeadlineMs);
     active = (async () => {
       try {
         const fetch = airQuality ? fetchAirQualityProvider : fetchProvider;
         const core = await requestCore(selected.core, controller.signal);
         const result = await Promise.resolve().then(() => fetch(core,
-          { variables: selected.variables, signal: controller.signal }));
+          { variables: selected.variables, signal: controller.signal,
+            ...(observeReceipt ? { observeReceipt, receiptDeadline } : {}) }));
         if (controller.signal.aborted) throw new Error('CANCELLED');
         send(response, 200, resultBytes(result, selected, airQuality));
       } catch (failure) {
@@ -286,12 +408,19 @@ export async function startProviderHttp({ config, staticRoot, staticProfile = 'd
   server.maxConnections = 16; server.maxRequestsPerSocket = 16;
   server.setTimeout(requestDeadlineMs + 5000, socket => socket.destroy());
   server.on('clientError', (_error, socket) => { socket.destroy(); });
-  await new Promise((done, fail) => {
-    server.once('error', fail);
-    server.listen(port, '127.0.0.1', () => { server.removeListener('error', fail); done(); });
-  });
-  origin = `http://127.0.0.1:${server.address().port}`;
-  return Object.freeze({ origin, async close() {
+  let unixCleanup;
+  if (unix) {
+    unixCleanup = await listenUnix(server, socketPath);
+    closing = false;
+  } else {
+    await new Promise((done, fail) => {
+      server.once('error', fail);
+      server.listen(tcpPort, '127.0.0.1', () => { server.removeListener('error', fail); done(); });
+    });
+    origin = `http://127.0.0.1:${server.address().port}`;
+  }
+  let closePromise;
+  async function close() {
     closing = true;
     for (const controller of controllers) controller.abort();
     const stopped = new Promise(done => server.close(done));
@@ -303,6 +432,13 @@ export async function startProviderHttp({ config, staticRoot, staticProfile = 'd
         timer = setTimeout(() => reject(new Error('BRIDGE_CLEANUP_UNCONFIRMED')), 5000);
       })]);
       if (cleanupUnconfirmed) throw new Error('BRIDGE_CLEANUP_UNCONFIRMED');
-    } finally { clearTimeout(timer); }
+    } finally {
+      clearTimeout(timer);
+      if (unixCleanup) await unixCleanup();
+    }
+  }
+  return Object.freeze({ origin, ...(unix ? { socketPath } : {}), close() {
+    closePromise ??= close();
+    return closePromise;
   } });
 }

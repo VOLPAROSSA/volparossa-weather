@@ -302,7 +302,7 @@ export function recordDriverFailure(report, diagnostic, error) {
   try {
     if (['installed-app', 'read-only-observer'].includes(report.phase)) {
       report.failure_diagnostic = diagnostic.failure(error);
-    } else if (['initial-native-products', 'actual-refresh', 'background-resume-expiry'].includes(report.phase)) {
+    } else if (['initial-native-products', 'actual-refresh', 'background-resume-expiry', 'background-resume-fresh'].includes(report.phase)) {
       report.failure_diagnostic = diagnostic.productFailure(error);
     }
   } catch { /* Diagnosis cannot mask the original failure or prevent cleanup. */ }
@@ -518,23 +518,57 @@ export async function observeVm({ adb, waitFor, pid, diagnostic, ownForward, own
   return isolate;
 }
 
-export async function readFixtureControl({ remaining, diagnostic, fetchControl = fetch }, path = '/state') {
+export async function readFixtureControl({ remaining, diagnostic, fetchControl = fetch, profile = 'synthetic' }, path = '/state') {
   const response = await diagnostic.at('control_request', () => {
-    remaining(); assert.ok(['/state', '/phase/initial', '/phase/refresh', '/phase/short-lived'].includes(path));
+    remaining(); assert.ok(['synthetic', 'protected-core'].includes(profile));
+    assert.ok((profile === 'protected-core' ? ['/state'] : ['/state', '/phase/initial', '/phase/refresh', '/phase/short-lived']).includes(path));
     return fetchControl(`${CONTROL}${path}`, { method: path === '/state' ? 'GET' : 'POST',
       redirect: 'error', signal: AbortSignal.timeout(3000) });
   });
   await diagnostic.at('control_status', () => assert.equal(response.status, 200));
   const parts = []; let length = 0;
   await diagnostic.at('control_body', async () => {
-    for await (const part of response.body) { length += part.length; assert.ok(length <= 65536); parts.push(part); }
+    for await (const part of response.body) {
+      length += part.length; assert.ok(length <= (profile === 'protected-core' ? 2 * 256 * 1024 + 4096 : 65536)); parts.push(part);
+    }
   });
   const value = await diagnostic.at('control_decode', () => JSON.parse(Buffer.concat(parts).toString('utf8')));
   await diagnostic.at('control_schema', () => {
+    if (profile === 'protected-core') return validateLiveControl(value);
     assert.equal(value.schema, 2); assert.equal(value.core_executed, false);
     assert.equal(value.overlay_proven, false); assert.equal(value.synthetic_weather, true);
     assert.equal(value.synthetic_air_quality, true);
   });
+  return value;
+}
+
+export function validateLiveControl(value) {
+  assert.ok(exactKeys(value, ['schema', 'profile', 'calls', 'completed', 'products', 'response_sha256', 'active',
+    'terminal_failure', 'synthetic_weather', 'synthetic_air_quality', 'core_executed', 'overlay_proven']));
+  assert.equal(value.schema, 3); assert.equal(value.profile, 'protected-core');
+  for (const flag of ['synthetic_weather', 'synthetic_air_quality', 'core_executed', 'overlay_proven']) assert.equal(value[flag], false);
+  assert.equal(value.terminal_failure, null); assert.equal(typeof value.active, 'boolean');
+  for (const name of ['calls', 'completed', 'products', 'response_sha256']) assert.ok(exactKeys(value[name], ['weather', 'air_quality']));
+  for (const name of ['weather', 'air_quality']) {
+    assert.ok(Number.isInteger(value.calls[name]) && value.calls[name] >= 0 && value.calls[name] <= 3);
+    assert.ok(Number.isInteger(value.completed[name]) && value.completed[name] >= 0 && value.completed[name] <= value.calls[name]);
+    if (value.completed[name] === 0) {
+      assert.equal(value.products[name], null); assert.equal(value.response_sha256[name], null);
+    } else {
+      assert.match(value.response_sha256[name], /^[a-f0-9]{64}$/);
+      const product = value.products[name], delivery = product.delivery;
+      assert.equal(product.kind, 'forecast'); assert.equal(delivery.mode, 'core-cache');
+      assert.match(delivery.publisher_key, /^[a-f0-9]{64}$/); assert.match(delivery.manifest_id, /^[a-f0-9]{64}$/);
+      assert.match(delivery.sha256, /^[a-f0-9]{64}$/);
+      assert.ok(typeof delivery.name === 'string' && Buffer.byteLength(delivery.name) >= 1 && Buffer.byteLength(delivery.name) <= 128);
+      assert.ok(Number.isSafeInteger(delivery.revision) && delivery.revision > 0);
+      assert.equal(delivery.upstream_origin_attested, false); assert.equal(delivery.manifest_media_type_checked, false);
+      assert.equal(product.forecast.schema, name === 'weather' ? 'volparossa.forecast.v1' : 'volparossa.air-quality.forecast.v1');
+      assert.equal(product.forecast.samples.length, name === 'weather' ? 4 : 5);
+      assert.deepEqual(product.forecast.samples.map(sample => sample.lead_hours), name === 'weather' ? [3, 9, 24, 48] : [3, 6, 12, 24, 48]);
+    }
+  }
+  if (value.completed.weather > 0 && value.completed.air_quality > 0) productClockWindow(value.products);
   return value;
 }
 
@@ -778,8 +812,163 @@ export async function exerciseNativeProducts({ report, diagnostic, control, wait
   report.phase = 'complete'; report.passed = true;
 }
 
+// This profile observes real forwarded responses. It cannot independently
+// establish cold retrieval, source acquisition or protected-route authority;
+// those remain mandatory gates of the separate joined core proof.
+export async function exerciseLiveNativeProducts({ report, diagnostic, control, waitFor, snapshot: readSnapshot,
+  lifecycle, adb, remaining, clock = Date.now, sleep = pause }) {
+  const context = { diagnostic, remaining, clock, lifecycle };
+  async function snapshot() {
+    diagnostic.observeProducts(null);
+    const value = await readSnapshot(); diagnostic.observeProducts(value); return value;
+  }
+  async function swipe(value) {
+    const { width, height } = value.screen, x = Math.round(width * .5);
+    await diagnostic.at('swipe', () => adb(['shell', 'input', 'swipe', String(x), String(Math.round(height * .78)),
+      String(x), String(Math.round(height * .24)), '250']));
+    await diagnostic.at('swipe_settle', () => sleep(200));
+  }
+  async function products(count) {
+    diagnostic.waitingFor = 'product_count_wait';
+    const value = await waitFor(async () => {
+      const current = await control();
+      await diagnostic.at('control_schema', () => validateLiveControl(current));
+      diagnostic.note(() => ({ weather_requests_observed: current.calls.weather,
+        air_quality_requests_observed: current.calls.air_quality }));
+      return diagnostic.at('product_counts', () => {
+        for (const name of ['weather', 'air_quality']) assert.ok(current.calls[name] <= count);
+        return !current.active && Object.values(current.calls).every(value => value === count)
+          && Object.values(current.completed).every(value => value === count) ? current : null;
+      });
+    }, count === 1 ? 120000 : 15000);
+    // Cold acquisition has more room than an observer poll, but still shares
+    // the driver's original 180-second deadline with every remaining action.
+    diagnostic.waitingFor = null;
+    return value;
+  }
+  function immutable(product) {
+    const delivery = product.delivery;
+    return { forecast: product.forecast, delivery: Object.fromEntries(['mode', 'publisher_key', 'name', 'revision',
+      'manifest_id', 'sha256', 'publication_expires_at', 'upstream_origin_attested', 'manifest_media_type_checked']
+      .map(key => [key, delivery[key]])), expires_at: product.freshness.expires_at };
+  }
+  async function unchanged(current, initial) {
+    await diagnostic.at('product_metadata', () => {
+      for (const name of ['weather', 'air_quality']) assert.deepEqual(immutable(current.products[name]), immutable(initial.products[name]));
+    });
+  }
+  function tables(value, expected) {
+    assert.ok(!value.labels.includes('Expired — refresh required; values are hidden'));
+    for (const name of ['weather', 'air_quality']) {
+      verifyTable(value.tables.find(table => table.product === name), expected.products[name]);
+      for (const label of metadata(expected.products[name])) assert.ok(value.labels.includes(label));
+    }
+  }
+  async function collect(expected) {
+    const observed = {}, labels = new Set();
+    for (let attempt = 0; attempt < 16; attempt++) {
+      diagnostic.note(() => ({ collection_attempts: attempt + 1 }));
+      const value = await diagnostic.at('product_snapshot', snapshot);
+      await diagnostic.at('product_metadata', () => assert.ok(!value.labels.includes('Expired — refresh required; values are hidden')));
+      for (const label of value.labels) {
+        if (Object.values(expected.products).some(product => metadata(product).includes(label))) labels.add(label);
+      }
+      for (const table of value.tables) {
+        try { observed[table.product] = verifyTable(table, expected.products[table.product]); }
+        catch { /* A previous frame is never evidence for the new response. */ }
+      }
+      diagnostic.note(() => ({ weather_table_matched: Object.hasOwn(observed, 'weather'),
+        air_quality_table_matched: Object.hasOwn(observed, 'air_quality'),
+        weather_metadata_matches: metadata(expected.products.weather).filter(label => labels.has(label)).length,
+        air_quality_metadata_matches: metadata(expected.products.air_quality).filter(label => labels.has(label)).length }));
+      if (Object.keys(observed).length === 2 && Object.values(expected.products).every(product =>
+        metadata(product).every(label => labels.has(label)))) {
+        await lifecycleWithinWindow(context, expected.products);
+        return { ...observed, response_sha256: { ...expected.response_sha256 } };
+      }
+      await swipe(value);
+    }
+    diagnostic.subphase = 'products_unobserved'; throw new Error('mounted native products not observed');
+  }
+  const tap = () => tapNativeRefresh({ diagnostic, waitFor, snapshot, swipe, adb, remaining });
+  report.phase = 'initial-native-products'; diagnostic.beginProducts(1);
+  const initial = await products(1);
+  report.observations.initial = await collect(initial);
+  report.checks.initial_exact_native_rows = true;
+  report.phase = 'actual-refresh'; diagnostic.beginProducts(2);
+  await tap();
+  const refreshed = await products(2); await unchanged(refreshed, initial);
+  report.observations.refresh = await collect(refreshed);
+  report.checks.actual_tap_refresh = true;
+  report.phase = 'background-resume-fresh'; diagnostic.beginProducts(3);
+  await tap();
+  const third = await products(3); await unchanged(third, initial);
+  report.observations.before_background = await collect(third);
+  const before = await diagnostic.at('product_snapshot', snapshot);
+  await diagnostic.at('before_background', () => {
+    assert.equal(before.current_lifecycle, 'resumed'); tables(before, third);
+  });
+  const baseline = await lifecycleWithinWindow(context, third.products, true);
+  await diagnostic.at('lifecycle_validate', () => {
+    assert.equal(baseline.current_lifecycle, 'resumed');
+    assert.ok(baseline.callback_state === null || baseline.callback_state === 'resumed');
+  });
+  await diagnostic.timed('home_command_ms', () => diagnostic.at('background_home',
+    () => adb(['shell', 'input', 'keyevent', 'KEYCODE_HOME'])));
+  diagnostic.waitingFor = 'background_wait';
+  let polls = 0;
+  await waitFor(async () => {
+    diagnostic.noteTiming(() => ({ background_polls: ++polls, callback_advance: null }));
+    const value = await lifecycleWithinWindow(context, third.products);
+    return diagnostic.at('lifecycle_validate', () => {
+      assert.ok(value.callback_sequence >= baseline.callback_sequence);
+      diagnostic.noteTiming(() => ({ callback_advance: value.callback_sequence - baseline.callback_sequence }));
+      return value.callback_sequence > baseline.callback_sequence && ['hidden', 'paused'].includes(value.current_lifecycle)
+        && value.callback_state === value.current_lifecycle ? value : null;
+    });
+  });
+  diagnostic.waitingFor = null;
+  await diagnostic.at('background_pause', async () => { await sleep(6000); remaining(); });
+  diagnostic.waitingFor = 'resume_wait';
+  const resumed = await resumeInstalledApp({ adb: args => diagnostic.at('resume_start', () => adb(args)), waitFor,
+    snapshot: () => diagnostic.at('resume_snapshot', snapshot) });
+  diagnostic.waitingFor = null;
+  await diagnostic.at('product_tables', () => tables(resumed, third));
+  const current = await lifecycleWithinWindow(context, third.products);
+  await diagnostic.at('lifecycle_validate', () => {
+    assert.equal(current.current_lifecycle, 'resumed'); assert.equal(current.callback_state, 'resumed');
+    assert.ok(current.callback_sequence > baseline.callback_sequence);
+  });
+  const final = await control();
+  await diagnostic.at('final_requests', async () => {
+    validateLiveControl(final); assert.equal(final.active, false);
+    assert.deepEqual(final.calls, { weather: 3, air_quality: 3 });
+    assert.deepEqual(final.completed, final.calls); assert.deepEqual(final.products, third.products);
+    assert.deepEqual(final.response_sha256, third.response_sha256);
+  });
+  report.observations.after_resume = Object.fromEntries(['weather', 'air_quality'].map(name =>
+    [name, verifyTable(resumed.tables.find(table => table.product === name), third.products[name])]));
+  report.observations.bindings = Object.fromEntries(['weather', 'air_quality'].map(name =>
+    [name, { forecast_sha256: initial.products[name].delivery.sha256,
+      immutable_product_sha256: digest(immutable(initial.products[name])) }]));
+  report.observations.requests = { weather: 3, air_quality: 3 };
+  report.observations.lifecycle = resumed.lifecycle;
+  Object.assign(report.checks, { third_refresh_exact_native_rows: true, real_android_background_resume: true,
+    original_products_fresh_after_resume: true, no_extra_product_requests: true });
+  report.scope.mounted_widget_tables = true; report.scope.real_adb_interaction = true;
+  report.phase = 'complete'; report.passed = true;
+}
+
+export function nativeDriverProfile(args) {
+  assert.ok(args.length === 6 || args.length === 8);
+  assert.equal(args[0], '--adb'); assert.equal(args[2], '--serial'); assert.equal(args[4], '--output');
+  if (args.length === 6) return 'synthetic';
+  assert.equal(args[6], '--profile'); assert.equal(args[7], 'protected-core');
+  return 'protected-core';
+}
+
 async function main() {
-  assert.equal(process.argv.length, 8);
+  const profile = nativeDriverProfile(process.argv.slice(2));
   assert.equal(process.argv[2], '--adb'); assert.equal(process.argv[4], '--serial');
   assert.equal(process.argv[6], '--output');
   const adbPath = process.argv[3], serial = process.argv[5], output = resolve(process.argv[7]);
@@ -797,6 +986,11 @@ async function main() {
       real_adb_interaction: false, synthetic_weather: true, synthetic_air_quality: true,
       core_executed: false, overlay_proven: false, physical_device: false, production_authority: false },
     cleanup: { app_stopped: false, forward_removed: true, vm_closed: true } };
+  if (profile === 'protected-core') {
+    report.schema = 2; report.kind = 'overmorrow-installed-android-protected-core-trial';
+    report.profile = profile; report.joined_core_acceptance = false;
+    Object.assign(report.scope, { synthetic_weather: false, synthetic_air_quality: false, expiry_proven: false });
+  }
   let vm, forward, appOwned = false, interrupted = false;
   const diagnostic = new ObserverDiagnostic();
   const started = Date.now(), deadline = started + 180000;
@@ -812,7 +1006,7 @@ async function main() {
       timeout: 8000, killSignal: 'SIGKILL', maxBuffer: 65536, encoding: 'utf8',
     }, (error, stdout, stderr) => error ? reject(adbFailure(error, { args, stdout, stderr })) : done(stdout.trim())));
   }
-  const control = path => readFixtureControl({ remaining, diagnostic }, path);
+  const control = path => readFixtureControl({ remaining, diagnostic, profile }, path);
   async function waitFor(check, milliseconds = 15000) {
     return waitForObservation(check, deadline, remaining, milliseconds);
   }
@@ -820,14 +1014,20 @@ async function main() {
   async function snapshot() { remaining(); return validateSnapshot(await vm.request(EXTENSION, { isolateId: isolate })); }
   async function lifecycle() { remaining(); return readLifecycle(vm, isolate); }
   try {
-    const initialPrepared = await prepareNativePhase({ control, waitFor, adb, diagnostic, remaining }, 'initial');
+    const initialPrepared = profile === 'synthetic'
+      ? await prepareNativePhase({ control, waitFor, adb, diagnostic, remaining }, 'initial') : null;
+    if (profile === 'protected-core') {
+      const initial = await control();
+      assert.deepEqual(initial.calls, { weather: 0, air_quality: 0 }); assert.equal(initial.active, false);
+    }
     const pid = await startInstalledApp({ adb, waitFor, diagnostic,
       installed() { report.scope.installed_android_app = true; }, ownApp() { appOwned = true; } });
     report.phase = 'read-only-observer';
     isolate = await observeVm({ adb, waitFor, pid, diagnostic,
       ownForward(value) { forward = value; report.cleanup.forward_removed = false; },
       ownVm(value) { vm = value; report.cleanup.vm_closed = false; } });
-    await exerciseNativeProducts({ report, diagnostic, control, waitFor, snapshot, lifecycle, adb, remaining, initialPrepared });
+    const exercise = profile === 'synthetic' ? exerciseNativeProducts : exerciseLiveNativeProducts;
+    await exercise({ report, diagnostic, control, waitFor, snapshot, lifecycle, adb, remaining, initialPrepared });
   } catch (error) {
     recordDriverFailure(report, diagnostic, error);
   } finally {

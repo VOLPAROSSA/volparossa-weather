@@ -343,6 +343,12 @@ resuming. This is not pixel-level visual verification, physical-device evidence
 or live core delivery. A mobile core, iOS execution, home-screen widgets and
 release packaging remain required.
 
+The next [Android-to-core candidate](integrations/overmorrow/README.md#android-to-core-candidate)
+adds a private Unix-socket API and separates APK preparation from the installed
+trial. It forwards the original core-backed responses without generating sample
+weather or extending their expiry. Component checks are not yet evidence of a
+successful joint Android-and-peer trial.
+
 ### Additional weather data
 
 - [x] Precipitation source and shared provider: IFS/AIFS native totals, checked
