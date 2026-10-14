@@ -48,11 +48,12 @@ requested exactly twice; the browser uses only loopback resources and cleanup
 passes. This additional trial uses synthetic products and does not replace the
 full browser trial.
 
-The separate joined core delivery trial below now passes. An Android debug APK
-build and strict offline rebuild also pass; installed-app behavior, iOS packaging,
-mobile background lifecycle and native home-screen widgets remain unverified.
-The synthetic browser proof establishes neither forecast accuracy nor mobile
-execution.
+The separate joined core delivery trial below passes in the browser. The Android
+debug build, strict offline rebuild and installed-emulator trial also pass,
+including actual refresh taps and background/resume expiry with synthetic
+products. Live Android-to-core delivery, physical devices, iOS packaging and
+native home-screen widgets remain unverified. Neither synthetic interaction
+tests nor successful delivery establish forecast accuracy.
 
 ## Hosted build and browser trials
 
@@ -80,11 +81,36 @@ source requests and do not prove core delivery or native Android/iOS operation.
 
 ## Android trial candidate
 
-The [Android hosted workflow](../../.github/workflows/hosted-android.yml) now passes
-the debug APK build and strict offline rebuild; the installed-app emulator trial
-has not yet passed.
+The [Android hosted workflow](../../.github/workflows/hosted-android.yml) passes
+the debug APK build, strict offline rebuild and installed-app emulator trial.
 
 ### Current result
+
+[The successful hosted trial](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38497919547)
+at `576550f32b27f10015f1852ac7ecd5c85c99960f` is integrated through
+[PR #19](https://github.com/VOLPAROSSA/volparossa-weather/pull/19).
+The installed app checks four weather rows and five particulate rows against
+synthetic loopback responses, performs a real refresh tap, and retains the same
+VM/isolate across Android backgrounding and resuming. Expired products are hidden
+without another request. Each product is requested exactly three times.
+
+The unchanged 4,500 ms fixture TTL and 6,000 ms background pause are exercised
+with a fresh resumed baseline and a new matching background callback. These are
+synthetic expiry checks, not altered timestamps on real model publications.
+Mounted-widget values and real ADB actions are verified; pixel visibility,
+physical-device behavior and mobile core/network delivery are not.
+
+The original 45-member proof artifact has SHA256
+`cb9dda17f07c19bcdfa7f3fce066b1b14ea36e084ee58e556ef0793c70dc7dbe`;
+the original log ZIP has SHA256
+`db344da5d8317ab22d27bb3214464703e229190a824fea124be35669993583f4`.
+The debug APK is 74,381,351 bytes with SHA256
+`6592dcba0b2039e989b94de525b35e7249766b5d10658fc39ec26324f3eb4924`.
+It has no production release authority. App/emulator shutdown, private-state
+removal, enclosing process drain, sandbox cleanup, KVM access restoration and
+unchanged host network namespace all pass.
+
+### Earlier link inventory failures
 
 [Trial 32](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38438989104)
 at `cd13a93a` passes the APK build and offline rebuild, then stops before
@@ -114,7 +140,7 @@ The [link inventory code](https://android.googlesource.com/platform/external/ipr
 invokes those detailed printers for down devices too. This is a concrete source
 defect, but not proof of which path produced trial 31's malformed output.
 
-The current candidate keeps the complete basic inventory and obtains full details
+The correction after trial 32 keeps the complete basic inventory and obtains full details
 through two fixed queries: loopback and interfaces whose kernel-reported type
 is dummy. Every
 candidate sink must match the inventory's identity and all overlapping fields.

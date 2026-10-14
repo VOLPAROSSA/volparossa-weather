@@ -3,7 +3,7 @@
 import { createServer } from 'node:http';
 import { constants } from 'node:fs';
 import { lstat, readdir, realpath, open } from 'node:fs/promises';
-import { isAbsolute, join, resolve, extname } from 'node:path';
+import { dirname, isAbsolute, join, resolve, extname } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { fetchCachedProvider, fetchCachedAirQualityProvider } from './provider-core.mjs';
 import { providerVariables, toProviderForecast } from './provider.mjs';
@@ -50,12 +50,15 @@ function absolute(value) {
 
 function coreConfiguration(value, airQuality = false) {
   const core = structuredClone(value);
+  const automatic = core && Object.hasOwn(core, 'cacheMode');
   exact(core, ['mode', 'executable', 'controlSocket', 'cache', 'scratchParent', 'publisherKey',
-    'name', 'minRevision', 'query', 'reuseCache'], 'BRIDGE_CONFIG_INVALID');
-  requireThat(core.mode === 'core-cache' && typeof core.reuseCache === 'boolean', 'BRIDGE_CONFIG_INVALID');
-  // A long-lived UI must reuse an explicitly initialized, agent-owned cache.
-  // Creation is a separate one-shot CLI action; repeating create on Refresh fails.
-  requireThat(core.reuseCache === true, 'BRIDGE_REUSABLE_CACHE_REQUIRED');
+    'name', 'minRevision', 'query', automatic ? 'cacheMode' : 'reuseCache'], 'BRIDGE_CONFIG_INVALID');
+  requireThat(core.mode === 'core-cache' && (automatic ? core.cacheMode === 'create-or-open'
+    : typeof core.reuseCache === 'boolean'), 'BRIDGE_CONFIG_INVALID');
+  // Historical configurations remain open-only. The explicit new mode lets
+  // the first actual GET ask core to create a cache; it does not create one
+  // while starting the server, or make the HTTP process a cache validator.
+  requireThat(automatic || core.reuseCache === true, 'BRIDGE_REUSABLE_CACHE_REQUIRED');
   for (const name of ['executable', 'controlSocket', 'cache', 'scratchParent']) absolute(core[name]);
   requireThat(typeof core.publisherKey === 'string' && /^[a-f0-9]{64}$/.test(core.publisherKey)
     && typeof core.name === 'string' && Buffer.byteLength(core.name) >= 1 && Buffer.byteLength(core.name) <= 128
@@ -67,6 +70,35 @@ function coreConfiguration(value, airQuality = false) {
   core.query = airQuality ? airQualityRequest(core.query) : request(core.query);
   requireThat(core.query.communityArea, 'PUBLIC_COMMUNITY_AREA_REQUIRED');
   return Object.freeze(core);
+}
+
+async function requestCore(core, signal) {
+  if (!Object.hasOwn(core, 'cacheMode')) return core;
+  // Existence only selects one core operation. An unreadable parent is not an
+  // absent cache. A canonical, non-group/world-writable parent must already
+  // exist; neither parents nor cache files are made/adopted/repaired here.
+  const parentPath = dirname(core.cache), parent = await lstat(parentPath);
+  requireThat(parent.isDirectory() && !parent.isSymbolicLink() && !(parent.mode & 0o022)
+    && await realpath(parentPath) === parentPath, 'BRIDGE_CACHE_PARENT_INVALID');
+  let reuseCache;
+  try {
+    const info = await lstat(core.cache);
+    requireThat(info.isDirectory() && !info.isSymbolicLink(), 'BRIDGE_CACHE_PATH_INVALID');
+    reuseCache = true;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    reuseCache = false;
+  }
+  const after = await lstat(parentPath);
+  requireThat(['dev', 'ino', 'uid', 'gid', 'mode'].every(key => parent[key] === after[key])
+    && await realpath(parentPath) === parentPath, 'BRIDGE_CACHE_PARENT_CHANGED');
+  requireThat(!signal.aborted, 'CANCELLED');
+  const { cacheMode: _mode, ...options } = core;
+  // Core checks ownership, directory identity, locks, index and chunks. A
+  // create/EEXIST race or any failed open causes no retry or fallback here. After
+  // joined cleanup, a later GET/restart makes a fresh choice for the same path,
+  // including a complete cache left by an interrupted network operation.
+  return { ...options, reuseCache };
 }
 
 export function providerHttpConfiguration(config) {
@@ -233,7 +265,8 @@ export async function startProviderHttp({ config, staticRoot, staticProfile = 'd
     active = (async () => {
       try {
         const fetch = airQuality ? fetchAirQualityProvider : fetchProvider;
-        const result = await Promise.resolve().then(() => fetch(selected.core,
+        const core = await requestCore(selected.core, controller.signal);
+        const result = await Promise.resolve().then(() => fetch(core,
           { variables: selected.variables, signal: controller.signal }));
         if (controller.signal.aborted) throw new Error('CANCELLED');
         send(response, 200, resultBytes(result, selected, airQuality));
