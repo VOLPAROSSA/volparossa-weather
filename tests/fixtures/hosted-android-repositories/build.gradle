@@ -1,0 +1,100 @@
+// SPDX-License-Identifier: GPL-3.0-only
+import groovy.json.JsonOutput
+import org.gradle.api.internal.artifacts.repositories.ResolutionAwareRepository
+import org.gradle.api.internal.artifacts.repositories.descriptor.MavenRepositoryDescriptor
+
+// No external plugin/dependency. Gradle's ordinary nonempty plugins{} path
+// still installs its real PluginArtifactRepository wrappers before resolving
+// this built-in plugin. A missing wrapper is a failure, not a skipped test.
+plugins { id 'java' }
+
+tasks.register('verifyRepositoryContract') {
+    dependsOn(gradle.includedBuild('compiler-property').task(':verifyCompilerProperty'))
+    doLast {
+        assert gradle.startParameter.offline
+        assert gradle.gradleVersion == '8.13'
+        assert providers.gradleProperty('kotlin.compiler.execution.strategy').get() == 'in-process'
+        // This file is produced by the genuine included-build task in the
+        // fresh disposable fixture, not by a mocked Kotlin/Gradle compiler.
+        def includedProperty = file('compiler-property/build/verified-property.txt')
+        assert includedProperty.length() == 11
+        assert includedProperty.getText('US-ASCII') == 'in-process\n'
+        // Observe the actual Gradle JVM, including any single-use daemon, not
+        // merely the launcher's intended limits. Both bounds remain finite.
+        def limits = new File('/proc/self/limits').getText('US-ASCII')
+        assert limits.length() <= 16384
+        def descriptorLines = limits.readLines().findAll { it.startsWith('Max open files ') }
+        assert descriptorLines.size() == 1
+        def descriptorFields = descriptorLines[0].trim().split(/\s+/).toList()
+        assert descriptorFields == ['Max', 'open', 'files', '4096', '4096', 'files']
+        def nofileSoft = descriptorFields[3].toInteger()
+        def nofileHard = descriptorFields[4].toInteger()
+        def wrappers = project.buildscript.repositories.findAll {
+            it.class.name == 'org.gradle.plugin.use.internal.PluginArtifactRepository'
+        }
+        assert wrappers.size() == 3
+        assert wrappers.every {
+            it instanceof ResolutionAwareRepository && it.descriptor instanceof MavenRepositoryDescriptor
+        }
+        assert project.configurations.every { it.allDependencies.empty }
+        assert project.buildscript.configurations.every { it.allDependencies.empty }
+        def rejected = []
+        def deny = { label, expected, add ->
+            def before = project.repositories.toList()
+            def caught = false
+            try {
+                add()
+            } catch (Exception failure) {
+                // Domain-object callbacks may add a Gradle exception wrapper.
+                // Bound traversal, match only our exact closed reason, and do
+                // not print the exception or a repository's URL/path.
+                def current = failure
+                for (int index = 0; index < 8 && current != null; index++) {
+                    if (current.message == expected) {
+                        caught = true
+                        break
+                    }
+                    current = current.cause
+                }
+                if (!caught) {
+                    throw new GradleException('NATIVE_REPOSITORY_FIXTURE_UNEXPECTED_FAILURE')
+                }
+            } finally {
+                project.repositories.findAll { !before.contains(it) }.each { project.repositories.remove(it) }
+            }
+            assert caught
+            rejected.add(label)
+        }
+        // Same allowed base; additional endpoints must never bypass policy.
+        project.repositories.maven {
+            url = uri('https://repo.maven.apache.org/maven2')
+            artifactUrls 'https://repo.maven.apache.org/maven2/'
+        }
+        deny('artifact-url', 'NATIVE_REPOSITORY_DENIED:artifact-url:maven') {
+            project.repositories.maven {
+                url = uri('https://repo.maven.apache.org/maven2')
+                artifactUrls 'https://unadmitted.invalid/maven'
+            }
+        }
+        deny('unadmitted', 'NATIVE_REPOSITORY_DENIED:url:maven') {
+            project.repositories.maven { url = uri('https://unadmitted.invalid/maven') }
+        }
+        deny('http', 'NATIVE_REPOSITORY_DENIED:url:maven') {
+            project.repositories.maven { url = uri('http://repo.maven.apache.org/maven2') }
+        }
+        deny('file', 'NATIVE_REPOSITORY_DENIED:url:maven') {
+            project.repositories.maven { url = uri('file:///state/not-a-repository') }
+        }
+        deny('ivy', 'NATIVE_REPOSITORY_DENIED:type:ivy') {
+            project.repositories.ivy { url = uri('https://repo.maven.apache.org/maven2') }
+        }
+        deny('flatdir', 'NATIVE_REPOSITORY_DENIED:type:flatdir') {
+            project.repositories.flatDir { dirs '/state/not-a-repository' }
+        }
+        println('NATIVE_REPOSITORY_FIXTURE ' + JsonOutput.toJson([
+            schema: 3, kind: 'gradle-repository-contract', gradle_version: gradle.gradleVersion,
+            plugin_wrappers: wrappers.size(), rejected: rejected, networkless: true, external_dependencies: false,
+            nofile_soft: nofileSoft, nofile_hard: nofileHard, kotlin_property_scopes: ['root', 'included']
+        ]))
+    }
+}

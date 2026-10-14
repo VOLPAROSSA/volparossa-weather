@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Pure/inert tests only: no package installation, browser, bwrap or build."""
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -276,6 +277,9 @@ class HostedClients(unittest.TestCase):
             self.assertEqual(G["LOGS"][0]["sha256"], hashlib.sha256(raw).hexdigest())
             self.assertEqual(G["LOGS"][0]["exit_status"], 0)
             self.assertTrue(G["DRAIN_CONFIRMED"])
+            self.assertNotIn("peak_memory_categories", G["LOGS"][0])
+            self.assertNotIn("memory_category_method", G["LOGS"][0])
+            self.assertNotIn("java_cpu", G["LOGS"][0])
 
     def test_failed_process_is_not_a_success_or_empty_evidence(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(G, OUTPUT=Path(directory), LOGS=[], DRAIN_CONFIRMED=True):
@@ -299,7 +303,7 @@ class HostedClients(unittest.TestCase):
             command.assert_not_called()
 
     def test_prelaunch_requires_actual_budget_plus_unchanged_host_reserve(self):
-        for budget in (1536 * 1024**2, 2 * H["GIB"]):
+        for budget in (1536 * 1024**2, 2 * H["GIB"], 4 * H["GIB"]):
             needed = budget + 2 * H["GIB"]
             with self.subTest(budget=budget), tempfile.TemporaryDirectory() as directory, \
                     patch.dict(G, OUTPUT=Path(directory), LOGS=[], available_memory=lambda: needed - 1), \
@@ -312,6 +316,102 @@ class HostedClients(unittest.TestCase):
                 self.assertEqual(record["memory_limit_bytes"], budget)
                 self.assertEqual(record["host_reserve_bytes"], 2 * H["GIB"])
                 self.assertEqual(record["launch_min_available_bytes"], needed)
+
+    def test_categories_use_same_rss_with_vanished_and_unreadable_processes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            proc = Path(directory)
+            # 105 vanishes before status. 104 has status but no executable;
+            # 106 is a zero-RSS zombie. None may discard an observed RSS value.
+            for pid, rss, exe in ((101, 1024, "java"), (102, 2048, "dartvm"),
+                    (103, 12, "private-name-never-exported"), (104, 7, None), (106, None, None)):
+                base = proc / str(pid)
+                (base / "task" / str(pid)).mkdir(parents=True)
+                (base / "status").write_text("State: Z\n" if rss is None else f"VmRSS: {rss} kB\n")
+                (base / "task" / str(pid) / "children").write_text("102 103 104 105 106 102" if pid == 101 else "")
+                if exe is not None:
+                    (base / "exe").symlink_to("/inert-not-executed/" + exe)
+            categories = {k: dict(processes=0, rss_bytes=0) for k in ("java", "dart", "other")}
+            with patch.dict(G, Path=lambda value: proc if value == "/proc" else Path(value)):
+                total = H["owned_rss"](101, categories=categories)
+                with patch.object(os, "readlink", side_effect=AssertionError("default must not inspect names")):
+                    self.assertEqual(H["owned_rss"](101), total)
+            self.assertEqual(categories, dict(java=dict(processes=1, rss_bytes=1024**2),
+                dart=dict(processes=1, rss_bytes=2*1024**2), other=dict(processes=3, rss_bytes=19*1024)))
+            self.assertEqual(total, sum(v["rss_bytes"] for v in categories.values()))
+            self.assertNotIn("private-name", json.dumps(categories))
+        for executable in ("dart", "dartvm", "dartaotruntime"):
+            with patch.object(os, "readlink", return_value="/not-exported/" + executable):
+                self.assertEqual(H["rss_category"](Path("/inert")), "dart")
+        with patch.object(os, "readlink", side_effect=PermissionError):
+            self.assertEqual(H["rss_category"](Path("/inert")), "other")
+
+    def test_four_gib_inert_child_uses_six_gib_admission_and_closed_peak_sample(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(G, OUTPUT=Path(directory), LOGS=[],
+                DRAIN_CONFIRMED=True, available_memory=lambda: 6 * H["GIB"]):
+            raw = H["run"]("categories", [sys.executable, "-I", "-c", "print('small inert child')"],
+                5, memory=4*H["GIB"], memory_categories=True)
+            self.assertEqual(raw, b"small inert child\n")
+            record = G["LOGS"][0]
+            self.assertEqual(record["launch_min_available_bytes"], 6*H["GIB"])
+            self.assertEqual(record["host_reserve_bytes"], 2*H["GIB"])
+            self.assertEqual(record["memory_limit_bytes"], 4*H["GIB"])
+            self.assertEqual(set(record["peak_memory_categories"]), {"java", "dart", "other"})
+            for value in record["peak_memory_categories"].values():
+                self.assertEqual(set(value), {"processes", "rss_bytes"})
+                self.assertTrue(all(type(v) is int and v >= 0 for v in value.values()))
+            self.assertEqual(sum(v["rss_bytes"] for v in record["peak_memory_categories"].values()), record["peak_descendant_rss"])
+            self.assertTrue(record["returned"])
+
+    def test_same_peak_sample_is_retained_when_cap_stops_real_inert_child(self):
+        # A tiny bound, not a multi-GiB allocation. The same real Python child
+        # and ordinary /proc traversal exercise the actual stop/evidence path.
+        with tempfile.TemporaryDirectory() as directory, patch.dict(G, OUTPUT=Path(directory), LOGS=[],
+                DRAIN_CONFIRMED=True, available_memory=lambda: 6*H["GIB"]):
+            with self.assertRaisesRegex(ValueError, "CHILD_MEMORY_BOUND"):
+                H["run"]("cap", [sys.executable, "-I", "-c", "import time;time.sleep(10)"],
+                    5, memory=1, memory_categories=True)
+            record = G["LOGS"][0]
+            self.assertGreater(record["peak_descendant_rss"], 1)
+            self.assertEqual(sum(v["rss_bytes"] for v in record["peak_memory_categories"].values()), record["peak_descendant_rss"])
+            self.assertLess(record["exit_status"], 0)
+            self.assertFalse(record["returned"])
+            self.assertFalse(record["process_drain_confirmed"])
+
+    def test_breakdown_is_one_peak_snapshot_not_sum_of_independent_category_peaks(self):
+        samples = []
+        def sample(_pid, *, categories):
+            kind, rss = ("java", 100) if not samples else ("dart", 50)
+            categories[kind] = dict(processes=1, rss_bytes=rss)
+            samples.append(rss)
+            return rss
+        with tempfile.TemporaryDirectory() as directory, patch.dict(G, OUTPUT=Path(directory), LOGS=[],
+                DRAIN_CONFIRMED=True, available_memory=lambda: 6*H["GIB"], owned_rss=sample):
+            H["run"]("one-sample", [sys.executable, "-I", "-c", "import time;print('ready',flush=True);time.sleep(0.02)"],
+                5, memory=4*H["GIB"], memory_categories=True)
+            self.assertGreaterEqual(len(samples), 2)
+            record = G["LOGS"][0]
+            self.assertEqual(record["peak_descendant_rss"], 100)
+            self.assertEqual(record["peak_memory_categories"], dict(java=dict(processes=1, rss_bytes=100),
+                dart=dict(processes=0, rss_bytes=0), other=dict(processes=0, rss_bytes=0)))
+
+    def test_four_gib_profile_still_stops_when_running_host_reserve_falls(self):
+        available = iter((6*H["GIB"], 2*H["GIB"]-1))
+        with tempfile.TemporaryDirectory() as directory, patch.dict(G, OUTPUT=Path(directory), LOGS=[],
+                DRAIN_CONFIRMED=True, available_memory=lambda: next(available)):
+            with self.assertRaisesRegex(ValueError, "HOST_MEMORY_RESERVE"):
+                H["run"]("reserve-fall", [sys.executable, "-I", "-c", "import time;time.sleep(10)"],
+                    5, memory=4*H["GIB"], memory_categories=True)
+            record = G["LOGS"][0]
+            self.assertEqual(record["host_reserve_bytes"], 2*H["GIB"])
+            self.assertLess(record["exit_status"], 0)
+            self.assertFalse(record["process_drain_confirmed"])
+            self.assertIsNone(record["peak_memory_categories"])
+
+    def test_category_diagnostics_require_active_memory_monitor(self):
+        for enabled, reserve in ((True, False), (1, True), ("yes", True)):
+            with patch.object(subprocess, "Popen") as spawn, self.assertRaisesRegex(ValueError, "MEMORY_DIAGNOSTIC_SCOPE"):
+                H["run"]("bad-scope", ["not-executed"], 5, reserve=reserve, memory_categories=enabled)
+            spawn.assert_not_called()
 
     def test_prelaunch_retains_three_gib_minimum_for_small_probe_budget(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(G, OUTPUT=Path(directory), LOGS=[],
@@ -364,6 +464,94 @@ class HostedClients(unittest.TestCase):
                     with self.assertRaises(H["Interrupted"]):
                         H["run"]("uncertain", ["not-executed"], 5, reserve=False)
                     self.assertFalse(G["DRAIN_CONFIRMED"])
+
+
+class JavaCpuObservations(unittest.TestCase):
+    @staticmethod
+    def stat(utime=120, stime=30, start=7):
+        fields = ["S"] + ["0"] * 49
+        for index, value in ((11, utime), (12, stime), (13, 999999), (14, 999999), (19, start)):
+            fields[index] = str(value)
+        return ("123 (java (inert)) " + " ".join(fields) + "\n").encode()
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.base = self.root / "101"
+        self.base.mkdir()
+        (self.root / "java").write_bytes(b"inert executable-identity fixture; never executed")
+        (self.base / "exe").symlink_to(self.root / "java")
+        (self.base / "stat").write_bytes(self.stat())
+        (self.base / "limits").write_text("Limit                     Soft Limit           Hard Limit           Units\n"
+            "Max cpu time              900                  900                  seconds\n")
+        self.value = H["java_cpu_state"]()
+
+    def test_own_ticks_only_and_matching_limits_at_maximum_not_process_sum(self):
+        with patch.object(os, "sysconf", return_value=250):
+            H["observe_java_cpu"](self.base, self.value)
+        self.assertEqual(self.value, dict(status="observed", samples_observed=1, samples_unavailable=0,
+            max_process_cpu_ms=600, soft_limit_seconds=900, hard_limit_seconds=900, sampled_lower_bound=True))
+        (self.base / "stat").write_bytes(self.stat(utime=10, stime=10))
+        (self.base / "limits").write_text("Max cpu time 100 100 seconds\n")
+        with patch.object(os, "sysconf", return_value=250):
+            H["observe_java_cpu"](self.base, self.value)
+        self.assertEqual(self.value["samples_observed"], 2)
+        self.assertEqual(self.value["max_process_cpu_ms"], 600)
+        self.assertEqual(self.value["hard_limit_seconds"], 900)
+        self.assertNotIn(str(self.root), json.dumps(self.value))
+
+    def test_reuse_exec_change_vanished_malformed_and_missing_limits_stay_unknown(self):
+        original = Path.open
+        for issue in ("reuse", "exec", "missing", "malformed", "limit", "oversized"):
+            with self.subTest(issue=issue):
+                value = H["java_cpu_state"]()
+                calls = []
+                def opened(path, *args, **kwargs):
+                    if path == self.base / "stat":
+                        calls.append(1)
+                        if issue == "missing": raise FileNotFoundError
+                        if issue == "malformed": return io.BytesIO(b"bad")
+                        if issue == "oversized": return io.BytesIO(b"x"*65537)
+                        return io.BytesIO(self.stat(start=8 if issue == "reuse" and len(calls)>1 else 7))
+                    if path == self.base / "limits" and issue == "limit": return io.BytesIO(b"Max cpu time nope\n")
+                    return original(path, *args, **kwargs)
+                links = [str(self.root/"java"), str(self.root/("different" if issue == "exec" else "java"))]
+                with patch.object(Path, "open", opened), patch.object(os, "readlink", side_effect=links):
+                    H["observe_java_cpu"](self.base, value)
+                self.assertEqual(value["status"], "unknown")
+                self.assertEqual(value["samples_unavailable"], 1)
+                self.assertIsNone(value["max_process_cpu_ms"])
+
+    def test_unavailable_cpu_never_discards_rss_and_disabled_never_reads_stat(self):
+        (self.base / "task/101").mkdir(parents=True)
+        (self.base / "task/101/children").write_text("")
+        (self.base / "status").write_text("VmRSS: 2048 kB\n")
+        (self.base / "stat").unlink()
+        categories = {k: dict(processes=0, rss_bytes=0) for k in ("java", "dart", "other")}
+        with patch.dict(G, Path=lambda value: self.root if value == "/proc" else Path(value)):
+            total = H["owned_rss"](101, categories=categories, java_cpu=self.value)
+            self.assertEqual(self.value["samples_unavailable"], 1)
+            self.assertEqual(total, 2048*1024)
+            self.assertEqual(categories["java"]["rss_bytes"], total)
+            with patch.dict(G, observe_java_cpu=Mock(side_effect=AssertionError("disabled"))):
+                self.assertEqual(H["owned_rss"](101), total)
+
+    def test_real_inert_child_opt_in_retains_unknown_not_zero_and_same_reserve(self):
+        with patch.dict(G, OUTPUT=self.root, LOGS=[], DRAIN_CONFIRMED=True, available_memory=lambda: 6*H["GIB"]):
+            H["run"]("cpu-inert", [sys.executable, "-I", "-c", "print('inert Python, not Java')"],
+                5, memory=4*H["GIB"], memory_categories=True, java_cpu=True)
+            record = G["LOGS"][0]
+        self.assertEqual(record["java_cpu"], H["java_cpu_state"]())
+        self.assertEqual(record["launch_min_available_bytes"], 6*H["GIB"])
+        self.assertEqual(record["host_reserve_bytes"], 2*H["GIB"])
+        self.assertTrue(record["process_drain_confirmed"])
+
+    def test_cpu_opt_in_requires_categories_and_does_not_allow_truthy_nonbool(self):
+        for cpu, categories in ((True, False), (1, True), ("yes", True)):
+            with patch.object(subprocess, "Popen") as spawn, self.assertRaisesRegex(ValueError, "JAVA_CPU_DIAGNOSTIC_SCOPE"):
+                H["run"]("invalid", ["not-executed"], 5, java_cpu=cpu, memory_categories=categories)
+            spawn.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import unittest
 
 spec = importlib.util.spec_from_file_location("overmorrow_smoke", Path(__file__).with_name("smoke_browser.py"))
@@ -14,6 +15,38 @@ spec.loader.exec_module(driver)
 
 
 class BrowserHarnessTests(unittest.TestCase):
+    def test_staging_rejects_applicable_patch_with_stale_git_postimage(self):
+        stage_spec = importlib.util.spec_from_file_location("overmorrow_stage", Path(__file__).with_name("stage.py"))
+        stage = importlib.util.module_from_spec(stage_spec)
+        stage_spec.loader.exec_module(stage)
+        with tempfile.TemporaryDirectory(prefix="overmorrow-canonical-patch-") as temporary:
+            repository = Path(temporary)
+            def git(*args):
+                return subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "maintenance.auto=false",
+                    "-C", str(repository), *args], check=True, capture_output=True, text=True, timeout=10,
+                    env={"PATH": "/usr/bin:/bin", "HOME": temporary, "GIT_CONFIG_NOSYSTEM": "1",
+                         "GIT_CONFIG_GLOBAL": "/dev/null"}).stdout
+            git("init", "--quiet", "--template=", "--initial-branch=fixture")
+            source = repository / "source.txt"
+            source.write_text("original\n")
+            git("add", "source.txt")
+            source.write_text("patched\n")
+            canonical = git("diff", "--no-ext-diff", "--binary", "--")
+            stage.verify_canonical_patch(repository, canonical)
+            index = next(line for line in canonical.splitlines() if line.startswith("index "))
+            stale = canonical.replace(index, index.split("..")[0] + "..0000000 100644")
+            with self.assertRaisesRegex(ValueError, "exact canonical Git diff"):
+                stage.verify_canonical_patch(repository, stale)
+            source.write_text("original\n")
+            patch = repository / "stale.patch"
+            patch.write_text(stale)
+            git("apply", "--check", str(patch))
+            git("apply", str(patch))
+            self.assertEqual(source.read_text(), "patched\n")
+            with self.assertRaisesRegex(ValueError, "exact canonical Git diff"):
+                stage.verify_canonical_patch(repository, stale)
+            stage.verify_canonical_patch(repository, canonical)
+
     def test_canonical_hash_is_order_independent(self):
         self.assertEqual(driver.canonical_hash({"a": 1, "b": 2}), driver.canonical_hash({"b": 2, "a": 1}))
 

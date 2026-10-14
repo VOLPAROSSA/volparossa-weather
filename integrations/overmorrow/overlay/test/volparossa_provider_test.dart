@@ -73,12 +73,35 @@ void main() {
       expect(result.airQuality, isNotNull);
       expect(result.weatherError, null);
       expect(result.airQualityError, null);
+      final observed = providerObservation();
+      for (final key in ['weather', 'air_quality']) {
+        expect(observed[key], {
+          'stage': 'complete', 'outcome': 'success', 'http_class': 'ok',
+          'clock_relation': 'withinWindow', 'attempts': 1,
+          'response_received': true, 'status_accepted': true, 'body_complete': true,
+          'json_decoded': true, 'product_validated': true,
+        });
+      }
+      // A new load resets BOTH products; a late older load cannot overwrite it.
+      final late = Completer<http.Response>();
+      final older = NativeProviderClient(origin, clock: () => now,
+        createClient: () => MockClient((request) async => request.url.path.endsWith('air-quality')
+          ? http.Response('', 503) : await late.future)).load();
+      expect((providerObservation()['weather'] as Map)['outcome'], 'pending');
+      expect((providerObservation()['air_quality'] as Map)['outcome'], 'unobserved');
+      await NativeProviderClient(origin, clock: () => now,
+        createClient: () => MockClient((request) async => product(request.url.path.endsWith('air-quality')))).load();
+      final newer = providerObservation();
+      late.complete(http.Response('', 503));
+      await older;
+      expect(providerObservation(), newer);
     },
   );
 
   test(
     'weather failures preserve independent AQ and never trigger an origin fallback',
     () async {
+      var index = 0;
       for (final response in [
         http.Response('', 503),
         http.Response(
@@ -93,6 +116,8 @@ void main() {
           headers: {'content-type': 'application/json'},
         ),
         http.Response('{}', 200, headers: {'content-type': 'application/json'}),
+        http.Response('private-invalid-json', 200, headers: {'content-type': 'application/json'}),
+        http.Response.bytes([255], 200, headers: {'content-type': 'application/json'}),
       ]) {
         var count = 0;
         final result = await NativeProviderClient(
@@ -110,6 +135,32 @@ void main() {
         expect(result.weatherError, isNotNull);
         expect(result.airQuality, isNotNull);
         expect(result.airQualityError, null);
+        final observed = providerObservation()['weather'] as Map;
+        expect(observed['outcome'], ['httpStatus', 'httpStatus', 'contentType',
+          'contentLength', 'schema', 'jsonEncoding', 'jsonEncoding'][index++]);
+        expect(observed['response_received'], true);
+        expect(observed['product_validated'], false);
+        expect(observed['clock_relation'], 'unknown');
+        expect((providerObservation()['air_quality'] as Map)['outcome'], 'success');
+        expect(jsonEncode(providerObservation()), isNot(contains('private-invalid')));
+      }
+      // These clock categories arise only from the actual parser's ordered
+      // predicates, using its existing injected clock, never HTTP Date headers.
+      for (final quality in [false, true]) {
+        final parsed = NativeProduct.parse(fixture[quality ? 'air_quality' : 'weather'],
+          airQuality: quality, now: now);
+        for (final entry in [
+          (parsed.acquiredAt.subtract(const Duration(microseconds: 1)), 'futureAcquired', 'beforeAcquired'),
+          (parsed.expiresAt, 'expired', 'atOrAfterExpiry'),
+        ]) {
+          await NativeProviderClient(origin, clock: () => entry.$1,
+            createClient: () => MockClient((request) async => product(request.url.path.endsWith('air-quality')))).load();
+          final observed = providerObservation()[quality ? 'air_quality' : 'weather'] as Map;
+          expect(observed['outcome'], entry.$2);
+          expect(observed['clock_relation'], entry.$3);
+          expect(observed['json_decoded'], true);
+          expect(observed['product_validated'], false);
+        }
       }
     },
   );
@@ -141,6 +192,9 @@ void main() {
         expect(result.weather, isNotNull);
         expect(result.airQuality, null);
         expect(result.airQualityError, isNotNull);
+        final observation = providerObservation()['air_quality'] as Map;
+        expect(observation['outcome'], mismatch ? 'areaMismatch' : 'httpStatus');
+        expect(observation['product_validated'], mismatch);
       }
     },
   );
@@ -158,6 +212,25 @@ void main() {
       expect(result.airQuality, null);
       expect(result.weatherError, isNotNull);
       expect(result.airQualityError, isNotNull);
+      for (final entry in <(String, Future<http.StreamedResponse> Function(http.BaseRequest))>[
+        ('transport', (_) async => throw const FormatException('private-transport')),
+        ('bodyStream', (_) async => http.StreamedResponse(Stream<List<int>>.error(
+          const FormatException('private-stream')), 200, headers: {'content-type': 'application/json'})),
+        ('bodyTooLarge', (_) async => http.StreamedResponse(Stream<List<int>>.value(
+          List<int>.filled(maxProviderBytes + 1, 0)), 200, headers: {'content-type': 'application/json'})),
+      ]) {
+        final result = await NativeProviderClient(origin, clock: () => now,
+          createClient: () => _RequestClient(entry.$2)).load();
+        expect(result.areaSource, null);
+        for (final key in ['weather', 'air_quality']) {
+          final observed = providerObservation()[key] as Map;
+          expect(observed['outcome'], entry.$1);
+          expect(observed['response_received'], entry.$1 != 'transport');
+          expect(observed['body_complete'], false);
+          expect(observed['product_validated'], false);
+        }
+        expect(jsonEncode(providerObservation()), isNot(contains('private-')));
+      }
     },
   );
 
@@ -236,6 +309,9 @@ void main() {
     expect(result!.weather, null);
     expect(result!.weatherError, isNotNull);
     expect(result!.airQuality, isNotNull);
+    expect((providerObservation()['weather'] as Map)['outcome'], 'busyLimit');
+    expect((providerObservation()['weather'] as Map)['attempts'], 6);
+    expect((providerObservation()['weather'] as Map)['product_validated'], false);
   });
 
   testWidgets('busy cleanup admission can recover independently for either product', (tester) async {
@@ -256,6 +332,11 @@ void main() {
     expect(attempts.values.toList(), [3, 3]);
     expect(result!.weather, isNotNull);
     expect(result!.airQuality, isNotNull);
+    for (final key in ['weather', 'air_quality']) {
+      final observed = providerObservation()[key] as Map;
+      expect(observed['outcome'], 'success');
+      expect(observed['attempts'], 3);
+    }
   });
 
   test('other failures and malformed busy responses are never retried', () async {
@@ -323,12 +404,15 @@ void main() {
     expect(result!.weather, null);
     expect(result!.weatherError, isNotNull);
     expect(result!.airQuality, isNotNull);
+    final observationBeforeLate = providerObservation();
+    expect((observationBeforeLate['weather'] as Map)['outcome'], 'deadline');
     late.complete(streamed(product(false)));
     await tester.pump();
     expect(weatherAttempts, 5);
     expect(aqAttempts, 1);
     expect(closed, 6);
     expect(result!.weather, null);
+    expect(providerObservation(), observationBeforeLate);
   });
 
   testWidgets('deadline aborts a response body and drains it before independent AQ', (tester) async {

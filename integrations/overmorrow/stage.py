@@ -27,6 +27,15 @@ def git(path, *args):
                           umask=0o077).stdout.strip()
 
 
+def verify_canonical_patch(destination, patch):
+    # Applying a text patch does not validate its index postimage hash. Keep
+    # the browser's exact canonical-diff gate, and catch stale metadata before
+    # dependency acquisition or compilation as well.
+    actual = git(destination, "-c", "diff.autoRefreshIndex=false", "diff", "--no-ext-diff", "--binary", "--")
+    if actual + "\n" != patch:
+        raise ValueError("staged patch is not the exact canonical Git diff")
+
+
 def stage(destination, source=None):
     pin = json.loads((HERE / "upstream.json").read_text())
     destination = pathlib.Path(destination).absolute()
@@ -57,6 +66,7 @@ def stage(destination, source=None):
             raise ValueError("upstream license or lock mismatch")
     git(destination, "apply", "--check", str(HERE / "upstream.patch"))
     git(destination, "apply", str(HERE / "upstream.patch"))
+    verify_canonical_patch(destination, (HERE / "upstream.patch").read_text())
     overlay = HERE / "overlay"
     for source_file in sorted(overlay.rglob("*")):
         if source_file.is_symlink():

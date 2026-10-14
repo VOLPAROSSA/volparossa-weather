@@ -7,7 +7,7 @@
   "license": "GPL-3.0-or-later",
   "license_sha256": "3743f7a4ab5132f7dbeb88e68097657ab8374e74b46b6402efbe80ccfb1b6488",
   "pubspec_lock_sha256": "fdfb5275aac49a1a62f7424a665f88b7db6fe1314d1e7c9f037ad6d32d906ce3",
-  "upstream_patch_sha256": "be8cd2a36b3d18dd37ff90bf3282e610133520ce75a12074fa9047271583afa2",
+  "upstream_patch_sha256": "8f740e79c18dd299fb8be231e58fbc1ea52deaf9e28dc47819bdf8f5cdea6b82",
   "upstream_agents_files": [],
   "original_integration_license": "GPL-3.0-only; retain upstream headers and LICENSE, with LICENSE.VOLPAROSSA identifying new files",
   "mode": "--dart-define=VOLPAROSSA_WEATHER=true",

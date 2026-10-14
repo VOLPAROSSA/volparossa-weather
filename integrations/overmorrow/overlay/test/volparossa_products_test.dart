@@ -78,6 +78,33 @@ void main() {
       products.airQuality!.staleAt(now.add(const Duration(seconds: 31))),
       true,
     );
+    // Closed first-failed clock observations do not relax the original times.
+    for (final quality in [false, true]) {
+      final input = fixture[quality ? 'air_quality' : 'weather'];
+      final parsed = NativeProduct.parse(input, airQuality: quality, now: now);
+      for (final entry in [
+        (parsed.acquiredAt.subtract(const Duration(microseconds: 1)), ProductClockRejection.futureAcquired),
+        (parsed.expiresAt, ProductClockRejection.expired),
+      ]) {
+        expect(() => NativeProduct.parse(input, airQuality: quality, now: entry.$1),
+          throwsA(isA<ProductClockException>().having((e) => e.reason, 'closed reason', entry.$2)
+            .having((e) => e.message, 'fixed message', 'Invalid VOLPAROSSA product')));
+      }
+      NativeProduct.parse(input, airQuality: quality, now: parsed.acquiredAt);
+      NativeProduct.parse(input, airQuality: quality,
+        now: parsed.expiresAt.subtract(const Duration(microseconds: 1)));
+      // Invalid timestamps/earlier schema predicates never become clock claims.
+      for (final mutate in <void Function(dynamic)>[
+        (v) => v['forecast']['source']['acquired_at'] = 'private-invalid-time',
+        (v) => v['delivery']['mode'] = 'other',
+        (v) => v['freshness']['expires_at'] = parsed.acquiredAt.toIso8601String(),
+      ]) {
+        final invalid = copy(input); mutate(invalid);
+        expect(() => NativeProduct.parse(invalid, airQuality: quality,
+          now: parsed.acquiredAt.subtract(const Duration(seconds: 1))),
+          throwsA(isA<FormatException>().having((e) => e is ProductClockException, 'earlier predicate', false)));
+      }
+    }
   });
 
   test(

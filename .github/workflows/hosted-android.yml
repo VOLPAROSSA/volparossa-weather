@@ -1,0 +1,146 @@
+name: Build hosted Android client
+run-name: Pinned Android debug build and installed synthetic app trial
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/overmorrow-native-android]
+    paths:
+      - .github/workflows/hosted-android.yml
+      - scripts/prepare_hosted_android*.py
+      - scripts/hosted-android-repositories.gradle
+      - third_party/android-emulator-local-package.xml
+      - integrations/overmorrow/prepare_native_android.py
+      - integrations/overmorrow/native-android*
+      - integrations/overmorrow/test_native_android.py
+      - integrations/overmorrow/test-native-android.mjs
+      - tests/test_hosted_android*.py
+      - tests/fixtures/hosted-android-repositories/*
+      - tests/fixtures/hosted-android-repositories/compiler-property/*.gradle
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weather-hosted-android-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check exact source and inert native contracts
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --short --untracked-files=all)"
+          python3 -B -m unittest discover -s tests -p 'test_hosted_android*.py'
+          python3 -B integrations/overmorrow/test_native_android.py
+      - name: Install declared tools only on this disposable hosted runner
+        run: |
+          set -euo pipefail
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(id -u)" != 0
+          test -c /dev/kvm
+          test "$(df --output=avail -B1 "$GITHUB_WORKSPACE" | tail -n1 | tr -d ' ')" -ge 25769803776
+          timeout 180s sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update
+          # Bound slow Java package downloads on this disposable runner only;
+          # this does not extend any product, build or installed-trial deadline.
+          timeout 600s sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+            apparmor bubblewrap acl git python3 util-linux iproute2 ca-certificates curl unzip xz-utils zip \
+            debianutils mawk openjdk-17-jdk-headless libglu1-mesa libgl1 libpulse0 libnss3 libxkbcommon0 \
+            libxcb-cursor0 libxi6 libxrandr2 libxrender1 libxfixes3 libxcursor1 libasound2t64 libgbm1 libatomic1
+          umask 077
+          mkdir -p build
+          dpkg-query -W apparmor bubblewrap acl git python3 util-linux iproute2 ca-certificates curl unzip xz-utils zip \
+            debianutils mawk openjdk-17-jdk-headless libc6 libstdc++6 libglu1-mesa libgl1 libpulse0 libnss3 \
+            libxkbcommon0 libxcb-cursor0 libxi6 libxrandr2 libxrender1 libxfixes3 libxcursor1 libasound2t64 libgbm1 libatomic1 \
+            > build/hosted-android-packages.txt
+      - name: Prepare exact public inputs without executing Android tools
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 -B scripts/prepare_hosted_flutter.py --fetch --output "$GITHUB_WORKSPACE/build/hosted-flutter-sdk"
+          python3 -B scripts/prepare_hosted_runtime.py --with-npm --fetch --output "$GITHUB_WORKSPACE/build/hosted-client-runtime"
+          python3 -B scripts/prepare_hosted_android.py --fetch --output "$GITHUB_WORKSPACE/build/hosted-android-inputs"
+      - name: Grant only this disposable runner temporary KVM access
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          umask 077
+          test ! -e build/hosted-android-kvm.acl
+          getfacl --absolute-names /dev/kvm > build/hosted-android-kvm.acl
+          printf '%s\n' 'Temporarily grant only this runner UID KVM access; restore the exact original ACL afterward.'
+          sudo -n setfacl -m "u:$(id -u):rw" /dev/kvm
+      - name: Acquire dependencies, rebuild offline, install and exercise app
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 -B scripts/prepare_hosted_android_ci.py
+      - name: Restore original disposable runner KVM ACL
+        if: always()
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          if test -f build/hosted-android-kvm.acl; then
+            test ! -L build/hosted-android-kvm.acl
+            sudo -n setfacl --restore=build/hosted-android-kvm.acl
+            getfacl --absolute-names /dev/kvm | cmp - build/hosted-android-kvm.acl
+            printf '%s\n' '{"schema":1,"original_kvm_acl_restored":true}' > build/hosted-android-kvm-cleanup.json
+          fi
+      - name: Retain bounded original build and installed-app evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hosted-android-proof-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/hosted-android-packages.txt
+            build/hosted-android-kvm-cleanup.json
+            build/hosted-android-inputs/provenance.json
+            build/hosted-android-inputs/download-failure.json
+            build/hosted-flutter-sdk/provenance.json
+            build/hosted-client-runtime/provenance.json
+            build/hosted-android-ci/*.json
+            build/hosted-android-ci/*.log
+            build/overmorrow-hosted-android-proof/report.json
+            build/overmorrow-hosted-android-proof/emulator-cleanup.json
+            build/overmorrow-hosted-android-proof/emulator-boundary.json
+            build/overmorrow-hosted-android-proof/emulator-diagnostic.json
+            build/overmorrow-hosted-android-proof/guest-network-diagnostic.json
+            build/overmorrow-hosted-android-proof/emulator-preflight-inputs.json
+            build/overmorrow-hosted-android-proof/emulator-preflight-diagnostic.json
+            build/overmorrow-hosted-android-proof/emulator-preflight-cleanup.json
+      - name: Retain only successful unadmitted debug APK and notices
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hosted-android-debug-unadmitted-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            build/overmorrow-hosted-android-ci/build/app/outputs/flutter-apk/app-debug.apk
+            build/overmorrow-hosted-android-ci/LICENSE
+            build/overmorrow-hosted-android-ci/LICENSE.VOLPAROSSA
+            build/overmorrow-hosted-android-ci/pubspec.lock
+            build/overmorrow-hosted-android-ci/volparossa-native-profile.json
+      - name: State the actual acceptance boundary
+        if: always()
+        run: |
+          printf '%s\n' \
+            'Inspect original phase receipts: acquisition build executes with public repositories.' \
+            'Captured Gradle checksums are consistency evidence, not independent prior authorization.' \
+            'Only the subsequent offline rebuild and installed emulator app can satisfy this trial.' \
+            'Debug synthetic weather/air-quality only; no mobile core, live origins, physical-device or release claim.' \
+            'No SDK, caches, signing keys, AVD disks, VM-service tokens or private logs are uploaded.' \
+            >> "$GITHUB_STEP_SUMMARY"

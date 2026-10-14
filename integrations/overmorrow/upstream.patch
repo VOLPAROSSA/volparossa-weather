@@ -376,7 +376,7 @@ index 9f03bf5..e2e266b 100644
                                    ),
                                  ),
 diff --git a/lib/main_ui.dart b/lib/main_ui.dart
-index e3ceaf3..7008b5d 100644
+index e3ceaf3..1922475 100644
 --- a/lib/main_ui.dart
 +++ b/lib/main_ui.dart
 @@ -17,6 +17,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
@@ -465,13 +465,13 @@ index e3ceaf3..7008b5d 100644
  
    @override
    Widget build(BuildContext context) {
-+    if (volparossaProfile) return Padding(padding: const EdgeInsets.all(24),
++    if (volparossaProfile) return SafeArea(top: false, child: Padding(padding: const EdgeInsets.all(24),
 +      child: Column(children: [
 +        const Text('Provider: VOLPAROSSA shared core. No upstream fallback.'),
 +        const Text('Mobile background updates and home-screen widgets: not yet connected.'),
 +        if (isLoading) const Text('Refreshing forecasts'),
 +        FilledButton(onPressed: isLoading ? null : () => updateLocation(latLon, loc), child: const Text('Refresh forecasts')),
-+      ]));
++      ])));
      return Padding(
        padding: const EdgeInsets.only(left: 24, right: 24, bottom: 110, top: 35),
        child: Column(

@@ -1,0 +1,71 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Disposable first acquisition only. This constrains configured dependency
+// repositories, not arbitrary code's network capability or redirect destinations.
+// Captured verification metadata is not independent prior review.
+import org.gradle.api.artifacts.repositories.MavenArtifactRepository
+import org.gradle.api.artifacts.repositories.IvyArtifactRepository
+import org.gradle.api.artifacts.repositories.FlatDirectoryArtifactRepository
+import org.gradle.api.internal.artifacts.repositories.ResolutionAwareRepository
+import org.gradle.api.internal.artifacts.repositories.descriptor.MavenRepositoryDescriptor
+
+if (gradle.gradleVersion != '8.13') {
+    throw new GradleException('NATIVE_REPOSITORY_DENIED:gradle-version:other')
+}
+def admitted = [
+    'https://dl.google.com/dl/android/maven2',
+    'https://maven.google.com',
+    'https://repo.maven.apache.org/maven2',
+    'https://repo1.maven.org/maven2',
+    'https://plugins.gradle.org/m2',
+    'https://storage.googleapis.com/download.flutter.io'
+] as Set
+def admittedUrl = { value ->
+    value instanceof URI && admitted.contains(value.toString().replaceAll('/+$', ''))
+}
+def verifyRepository = { repository ->
+    def kind = repository instanceof MavenArtifactRepository ? 'maven' :
+        repository.class.name == 'org.gradle.plugin.use.internal.PluginArtifactRepository' ? 'plugin-wrapper' :
+        repository instanceof IvyArtifactRepository ? 'ivy' :
+        repository instanceof FlatDirectoryArtifactRepository ? 'flatdir' : 'other'
+    def reject = { reason ->
+        // Closed classifications only: never URLs, credentials or local paths.
+        throw new GradleException("NATIVE_REPOSITORY_DENIED:${reason}:${kind}")
+    }
+    def url, artifactUrls
+    if (kind == 'maven') {
+        url = repository.url
+        artifactUrls = repository.artifactUrls
+    } else if (kind == 'plugin-wrapper' && repository instanceof ResolutionAwareRepository) {
+        // Gradle 8.13 wraps normal plugin-management Maven repositories before
+        // adding them to buildscript.repositories. The wrapper is NOT a Maven
+        // interface; its typed descriptor delegates to the original repository.
+        // See v8.13.0 PluginArtifactRepository#getDescriptor and
+        // DefaultPluginArtifactRepositories#applyRepositoriesTo. No reflection
+        // into private delegates or permission for arbitrary wrapper types.
+        // Run 38245213294 retained only the interface rejection, not the actual
+        // runtime type. The separate offline fixture must prove this specific
+        // source-derived compatibility path with real Gradle wrapper objects.
+        def descriptor = ((ResolutionAwareRepository) repository).descriptor
+        if (!(descriptor instanceof MavenRepositoryDescriptor)) {
+            reject('descriptor')
+        }
+        url = descriptor.properties['URL']
+        artifactUrls = descriptor.properties['ARTIFACT_URLS']
+    } else {
+        reject('type')
+    }
+    if (!admittedUrl(url)) {
+        reject('url')
+    }
+    if (!(artifactUrls instanceof Collection) || artifactUrls.size() > 16 || !artifactUrls.every(admittedUrl)) {
+        reject('artifact-url')
+    }
+}
+gradle.settingsEvaluated { settings ->
+    settings.pluginManagement.repositories.all(verifyRepository)
+    settings.dependencyResolutionManagement.repositories.all(verifyRepository)
+}
+gradle.allprojects { project ->
+    project.repositories.all(verifyRepository)
+    project.buildscript.repositories.all(verifyRepository)
+}
