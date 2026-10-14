@@ -313,11 +313,68 @@ def verify_browser_report(value, table=False):
 
 
 def proof_removed(proof):
-    return not any((proof / name).exists() for name in PROFILE_DIRS)
+    return not any((proof / name).exists() or (proof / name).is_symlink() for name in PROFILE_DIRS)
+
+
+def private_directory_identity(info):
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
+            and stat.S_IMODE(info.st_mode) == 0o700, "BROWSER_DIRECTORY_IDENTITY")
+    return info.st_dev, info.st_ino
+
+
+def prepare_browser_output(proof, owned):
+    require(proof in (PROOF, TABLE_PROOF), "BROWSER_OUTPUT_REQUIRED")
+    for name in ("", "appdata", "appdata/firefox", "appdata/firefox-esr"):
+        path = proof / name
+        H.private_directory(path)
+        owned.setdefault(proof, {})[name] = private_directory_identity(path.lstat())
+
+
+def cleanup_empty_browser_output(proof, identities):
+    # A source/preflight rejection can precede the browser driver's finally.
+    # After confirmed drain, remove only our exact empty bootstrap directories,
+    # never browser files, profiles, receipts, unknown entries or symlink targets.
+    if not H.DRAIN_CONFIRMED:
+        return False
+    root_fd = appdata_fd = None
+    try:
+        require(proof in (PROOF, TABLE_PROOF) and proof.resolve() == proof, "BROWSER_OUTPUT_REQUIRED")
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        root_fd = os.open(proof, flags)
+        require(private_directory_identity(os.fstat(root_fd)) == identities[""], "BROWSER_DIRECTORY_CHANGED")
+        if "appdata" not in identities:
+            return True
+        try:
+            appdata_fd = os.open("appdata", flags, dir_fd=root_fd)
+        except FileNotFoundError:
+            return True
+        require(private_directory_identity(os.fstat(appdata_fd)) == identities["appdata"], "BROWSER_DIRECTORY_CHANGED")
+        for name in ("firefox", "firefox-esr"):
+            if "appdata/" + name not in identities:
+                continue
+            try:
+                info = os.stat(name, dir_fd=appdata_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            require(private_directory_identity(info) == identities["appdata/" + name], "BROWSER_DIRECTORY_CHANGED")
+            os.rmdir(name, dir_fd=appdata_fd)
+        # No recursive deletion: any unexpected file leaves cleanup unproven.
+        require(private_directory_identity(os.stat("appdata", dir_fd=root_fd, follow_symlinks=False))
+                == identities["appdata"], "BROWSER_DIRECTORY_CHANGED")
+        os.rmdir("appdata", dir_fd=root_fd)
+        return True
+    except (OSError, ValueError, KeyError):
+        return False  # Preserve the original failure and expose remaining state.
+    finally:
+        if appdata_fd is not None:
+            os.close(appdata_fd)
+        if root_fd is not None:
+            os.close(root_fd)
 
 
 def execute(helper, platform):
     installed = attempted = success = False
+    owned_browser_directories = {}
     phase = "baseline"
     started = time.monotonic()
     netns = os.readlink("/proc/self/ns/net")
@@ -396,10 +453,7 @@ def execute(helper, platform):
         reports = {}
         for proof, table in ((PROOF, False), (TABLE_PROOF, True)):
             phase = "synthetic-table-browser" if table else "synthetic-browser"
-            H.private_directory(proof)
-            H.private_directory(proof / "appdata")
-            for name in ("firefox", "firefox-esr"):
-                H.private_directory(proof / "appdata" / name)
+            prepare_browser_output(proof, owned_browser_directories)
             preflight("browser", proof)
             H.run("table-browser-smoke" if table else "browser-smoke",
                 sandbox(browser_command(proof, netns), mode="browser", proof=proof), 180,
@@ -432,8 +486,11 @@ def execute(helper, platform):
         for sig in previous:
             signal.signal(sig, signal.SIG_IGN)
         try:
+            empty_cleanup = {proof: cleanup_empty_browser_output(proof, identities)
+                             for proof, identities in owned_browser_directories.items()}
             outer = dict(process_drain_confirmed=H.DRAIN_CONFIRMED,
-                private_profile_removed=proof_removed(PROOF), private_table_profile_removed=proof_removed(TABLE_PROOF),
+                private_profile_removed=empty_cleanup.get(PROOF, True) and proof_removed(PROOF),
+                private_table_profile_removed=empty_cleanup.get(TABLE_PROOF, True) and proof_removed(TABLE_PROOF),
                 host_netns_unchanged=os.readlink("/proc/self/ns/net") == netns)
             helper.DRAIN_CONFIRMED = helper.DRAIN_CONFIRMED and H.DRAIN_CONFIRMED
             cleaning = helper.cleanup(platform, attempted, installed)

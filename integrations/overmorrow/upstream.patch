@@ -376,7 +376,7 @@ index 9f03bf5..e2e266b 100644
                                    ),
                                  ),
 diff --git a/lib/main_ui.dart b/lib/main_ui.dart
-index e3ceaf3..7008b5d 100644
+index e3ceaf3..1922475 100644
 --- a/lib/main_ui.dart
 +++ b/lib/main_ui.dart
 @@ -17,6 +17,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.

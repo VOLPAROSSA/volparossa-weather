@@ -303,6 +303,87 @@ class HostedOvermorrow(unittest.TestCase):
             (proof / "tmp/served-weather.json").write_text("{}")
             self.assertFalse(W["proof_removed"](proof))
 
+    def browser_output_fixture(self, temporary):
+        proof = Path(temporary) / "proof"
+        self.enterContext(patch.dict(G, PROOF=proof))
+        self.enterContext(patch.object(H, "DRAIN_CONFIRMED", True))
+        owned = {}
+        W["prepare_browser_output"](proof, owned)
+        return proof, owned[proof]
+
+    def test_early_source_failure_removes_only_owned_empty_browser_directories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            proof, identities = self.browser_output_fixture(temporary)
+            (proof / "failure.json").write_text('"original failure"')
+            self.assertTrue(W["cleanup_empty_browser_output"](proof, identities))
+            self.assertTrue(W["proof_removed"](proof))
+            self.assertEqual((proof / "failure.json").read_text(), '"original failure"')
+            self.assertTrue(proof.is_dir())
+            self.assertTrue(W["cleanup_empty_browser_output"](proof, identities))
+
+    def test_undrained_browser_never_removes_owned_directories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            proof, identities = self.browser_output_fixture(temporary)
+            with patch.object(H, "DRAIN_CONFIRMED", False):
+                self.assertFalse(W["cleanup_empty_browser_output"](proof, identities))
+            self.assertTrue((proof / "appdata/firefox").is_dir())
+            self.assertFalse(W["proof_removed"](proof))
+
+    def test_populated_browser_directory_is_not_recursively_deleted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            proof, identities = self.browser_output_fixture(temporary)
+            sentinel = proof / "appdata/firefox/private-data"
+            sentinel.write_text("private fixture")
+            self.assertFalse(W["cleanup_empty_browser_output"](proof, identities))
+            self.assertEqual(sentinel.read_text(), "private fixture")
+            self.assertFalse(W["proof_removed"](proof))
+
+    def test_replaced_or_symlinked_browser_directory_never_changes_target(self):
+        for name in ("appdata", "appdata/firefox"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                proof, identities = self.browser_output_fixture(temporary)
+                original = proof / name
+                retained = Path(temporary) / "retained"
+                original.rename(retained)
+                original.symlink_to(retained, target_is_directory=True)
+                self.assertFalse(W["cleanup_empty_browser_output"](proof, identities))
+                self.assertTrue(retained.is_dir())
+                self.assertTrue(original.is_symlink())
+                self.assertFalse(W["proof_removed"](proof))
+
+    def test_replaced_root_or_changed_permissions_reject_cleanup(self):
+        for changed_root in (False, True):
+            with self.subTest(changed_root=changed_root), tempfile.TemporaryDirectory() as temporary:
+                proof, identities = self.browser_output_fixture(temporary)
+                if changed_root:
+                    proof.rename(Path(temporary) / "retained")
+                    proof.mkdir(mode=0o700)
+                else:
+                    (proof / "appdata").chmod(0o755)
+                self.assertFalse(W["cleanup_empty_browser_output"](proof, identities))
+
+    def test_partial_browser_directory_creation_is_tracked_for_cleanup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            proof = Path(temporary) / "proof"
+            owned = {}
+            original = H.private_directory
+            def create(path):
+                if path == proof / "appdata/firefox-esr":
+                    raise OSError("synthetic creation failure")
+                original(path)
+            with patch.dict(G, PROOF=proof), patch.object(H, "DRAIN_CONFIRMED", True), \
+                    patch.object(H, "private_directory", side_effect=create):
+                with self.assertRaisesRegex(OSError, "synthetic creation failure"):
+                    W["prepare_browser_output"](proof, owned)
+                self.assertTrue(W["cleanup_empty_browser_output"](proof, owned[proof]))
+                self.assertTrue(W["proof_removed"](proof))
+
+    def test_dangling_private_profile_link_is_not_cleanup_success(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            proof = Path(temporary)
+            (proof / "appdata").symlink_to(proof / "missing")
+            self.assertFalse(W["proof_removed"](proof))
+
     def test_preflight_script_is_inertly_parseable_and_checks_sdk_boundary(self):
         compile(W["PROBE"], "overmorrow-preflight", "exec")
         self.assertIn("sdk_source_read_only=True", W["PROBE"])
