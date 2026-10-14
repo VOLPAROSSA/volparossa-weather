@@ -7,7 +7,6 @@ import { request as httpRequest } from 'node:http';
 import { createServer, createConnection } from 'node:net';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
-import { constants } from 'node:fs';
 import { mkdtemp, mkdir, chmod, writeFile, readFile, readdir, rm, lstat, symlink, rename, open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -210,8 +209,12 @@ test('close preserves replacement file, symlink and socket rather than libuv unl
   for (const kind of ['file', 'symlink', 'socket']) {
     const f = await fixture(t), server = await f.start(), old = join(f.parent, 'moved-owned.sock');
     await rename(f.socketPath, old);
-    let replacement;
-    if (kind === 'file') await writeFile(f.socketPath, 'replacement remains', { mode: 0o600, flag: 'wx' });
+    let replacement, replacementFile;
+    if (kind === 'file') {
+      replacementFile = await open(f.socketPath, 'wx+', 0o600);
+      t.after(() => replacementFile.close());
+      await replacementFile.writeFile('replacement remains');
+    }
     if (kind === 'symlink') await symlink(join(f.root, 'unrelated'), f.socketPath);
     if (kind === 'socket') {
       replacement = createServer(); replacement.listen(f.socketPath); await once(replacement, 'listening');
@@ -220,12 +223,11 @@ test('close preserves replacement file, symlink and socket rather than libuv unl
     await assert.rejects(server.close(), /BRIDGE_SOCKET_CLEANUP_UNCONFIRMED/);
     const after = await lstat(f.socketPath); assert.equal(after.ino, before.ino); assert.equal(after.mode, before.mode);
     if (kind === 'file') {
-      const file = await open(f.socketPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-      try {
-        const opened = await file.stat();
-        assert.equal(opened.isFile(), true); assert.equal(opened.dev, before.dev); assert.equal(opened.ino, before.ino);
-        assert.equal(await file.readFile('utf8'), 'replacement remains');
-      } finally { await file.close(); }
+      const opened = await replacementFile.stat();
+      assert.equal(opened.isFile(), true); assert.equal(opened.dev, before.dev); assert.equal(opened.ino, before.ino);
+      const bytes = Buffer.alloc(64);
+      const { bytesRead } = await replacementFile.read(bytes, 0, bytes.length, 0);
+      assert.equal(bytes.subarray(0, bytesRead).toString('utf8'), 'replacement remains');
     }
     assert.equal((await lstat(old)).isSocket(), true);
     if (replacement) await new Promise(done => replacement.close(done));
