@@ -558,6 +558,43 @@ Gradle checksums demonstrate consistency, not prior independent review. Only
 successful debug APKs, application notices and bounded reports may be exported,
 not SDKs, caches, signing keys, emulator state or debug-service credentials.
 
+## Android-to-core candidate
+
+The production HTTP bridge can now listen on an explicitly configured private
+Unix socket instead of a TCP port. This mode serves only the two fixed weather
+and particulate APIs. Its existing core authorization, hash, expiry,
+cancellation and cache checks still apply. The caller must provide an owned
+mode-0700 parent; the listener publishes a mode-0600 socket without overwriting
+an existing entry, and removes only its own socket during cleanup.
+
+The installed-app runner has two additional commands for the separate core
+workflow `Weather Android protected core delivery`:
+
+```sh
+python3 -B scripts/prepare_hosted_android_ci.py --prepare-protected-core
+python3 -B scripts/prepare_hosted_android_ci.py --run-protected-core --upstream-socket /private/api/core-api.sock
+```
+
+These are guarded disposable-runner entrypoints, not local setup instructions.
+Preparation builds the debug APK, checks the emulator prerequisites and records
+the exact source, dependency and artifact bindings before short-lived core
+publications are created. Runtime rechecks those inputs for the same CI run and
+exposes only a socket-only directory to the network-isolated Android sandbox.
+SSH credentials and the daemon's control socket must stay outside that mount.
+
+The live doorway forwards original response bytes; its observer cannot change
+the weather, publication expiry or cache state. The driver checks the installed
+app's four weather and five particulate rows, two real refresh taps and a
+background/resume cycle while the same products remain fresh. Initial retrieval
+has a 120-second wait within the unchanged 180-second driver budget; later waits
+remain bounded and do not renew the overall deadline.
+
+The combined core/VM runner and its source, custody, cold-fetch and packet-capture
+acceptance checks remain to be integrated and executed. These components do not
+prove Android-triggered cold peer retrieval, live expiry behavior, an embedded
+mobile daemon or physical-device support. The historical synthetic Android trial
+and the successful web/core trial below retain their separate scopes.
+
 ## Joined core delivery trial
 
 The core's version-five Weather bundle selects this actual Overmorrow client,

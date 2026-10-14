@@ -59,6 +59,7 @@ jobs:
       - name: Check Overmorrow integration without downloading upstream dependencies
         run: |
           node --test integrations/overmorrow/test-browser-fixture.mjs integrations/overmorrow/test_prepare_core_browser.mjs integrations/overmorrow/test_table_fixture.mjs
+          node --test integrations/overmorrow/test-native-android-live.mjs
           test -f "$GITHUB_WORKSPACE/build/test-browser-support/scripts/smoke_privacy.py"
           VOLPAROSSA_TEST_NODE="$(command -v node)" \
             VOLPAROSSA_TEST_BROWSER_ROOT="$GITHUB_WORKSPACE/build/test-browser-support" python3 -B -m unittest discover \

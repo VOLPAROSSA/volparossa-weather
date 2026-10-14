@@ -41,6 +41,12 @@ PROOF = ROOT / "build/overmorrow-hosted-android-proof"
 INPUTS = ROOT / "build/hosted-android-inputs"
 SDK = W.SDK
 WORKFLOW = "Build hosted Android client"
+CORE_WORKFLOW = "Weather Android protected core delivery"
+PREPARED_OUTPUT = OUTPUT
+LIVE_OUTPUT = ROOT / "build/hosted-android-live-ci"
+LIVE_PROOF = ROOT / "build/overmorrow-hosted-android-live-proof"
+LIVE_MEMORY = 4 * 1024**3
+SOCKET_MOUNT = Path("/tools/core-api")
 JAVA = Path("/usr/lib/jvm/java-17-openjdk-amd64")
 JAVA_LAUNCHER_LIMIT = 4 * 1024**2
 AWK = Path("/usr/bin/mawk")
@@ -124,16 +130,28 @@ def prepare_gradle_user_properties():
     return verify_gradle_user_properties()
 
 
-def guards(env):
+def guards(env, *, protected_core=False):
+    require(type(protected_core) is bool, "HOSTED_PROFILE")
     required = dict(GITHUB_ACTIONS="true", RUNNER_OS="Linux", RUNNER_ENVIRONMENT="github-hosted",
-        GITHUB_REPOSITORY="VOLPAROSSA/volparossa-weather", GITHUB_WORKFLOW=WORKFLOW)
+        GITHUB_REPOSITORY="VOLPAROSSA/volparossa" if protected_core else "VOLPAROSSA/volparossa-weather",
+        GITHUB_WORKFLOW=CORE_WORKFLOW if protected_core else WORKFLOW)
     require(os.geteuid() == os.getuid() != 0 and all(env.get(k) == v for k, v in required.items()), "DISPOSABLE_HOSTED_ONLY")
-    require(env.get("GITHUB_WORKSPACE") == str(ROOT) and re.fullmatch(r"[0-9a-f]{40}", env.get("GITHUB_SHA", "")), "EXACT_SOURCE")
+    source = env.get("VOLPAROSSA_WEATHER_SOURCE_SHA" if protected_core else "GITHUB_SHA", "")
+    require(re.fullmatch(r"[0-9a-f]{40}", source)
+        and re.fullmatch(r"[0-9a-f]{40}", env.get("GITHUB_SHA", "")), "EXACT_SOURCE")
+    if protected_core:
+        workspace = Path(env.get("GITHUB_WORKSPACE", ""))
+        require(workspace.is_absolute() and workspace.resolve(strict=True) == workspace
+            and ROOT != workspace and ROOT.is_relative_to(workspace), "CORE_CHECKOUT_SCOPE")
+        require(all(re.fullmatch(r"[1-9][0-9]{0,19}", env.get(k, "")) for k in
+            ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")), "CORE_RUN_IDENTITY")
+    else:
+        require(env.get("GITHUB_WORKSPACE") == str(ROOT), "EXACT_SOURCE")
     helper = H.policy_helper()
     platform = runpy.run_path(str(ROOT / "scripts/prepare_hosted_decoder.py"))
     require(platform["platform"]()["os_id"] == "ubuntu", "UBUNTU_24_REQUIRED")
     _, head = helper.process(["/usr/bin/git", "-C", str(ROOT), "rev-parse", "HEAD"], 10)
-    require(head.decode().strip() == env["GITHUB_SHA"], "SOURCE_HEAD")
+    require(head.decode().strip() == source, "SOURCE_HEAD")
     helper.process(["/usr/bin/git", "-C", str(ROOT), "diff", "--quiet", "HEAD", "--"], 10)
     require(H.sha(H.read(H.PROFILE)) == H.PROFILE_SHA, "POLICY_CHANGED")
     for path in (ROOT, ROOT / "build", SDK, INPUTS, H.RUNTIME):
@@ -146,8 +164,9 @@ def guards(env):
     return helper, platform
 
 
-def sandbox(command, mode):
+def sandbox(command, mode, *, upstream_socket=None):
     require(mode in ("acquire", "compile", "emulator"), "NATIVE_SANDBOX_MODE")
+    require(upstream_socket is None or mode == "emulator", "SOCKET_EMULATOR_ONLY")
     argv = W.sandbox(command, mode="acquire" if mode == "acquire" else "compile")
     index = argv.index("--remount-ro")
     # Exact read-only distro Java configuration is required by Ubuntu's Java
@@ -166,6 +185,11 @@ def sandbox(command, mode):
             str(SDK / "packages/flutter_tools/gradle" / name)]
     if mode == "emulator":
         extra += ["--dev-bind", "/dev/kvm", "/dev/kvm", "--bind", str(PROOF), str(PROOF)]
+    if upstream_socket is not None:
+        upstream_binding(upstream_socket)
+        # Only an already-created socket-only private directory crosses the
+        # namespace. No SSH key, agent socket or network namespace is shared.
+        extra += ["--ro-bind", str(Path(upstream_socket).parent), str(SOCKET_MOUNT)]
     argv[index:index] = extra
     return argv
 
@@ -455,6 +479,111 @@ def validate_report(value):
             require(set(item) == {"rows", "table_sha256", "product_sha256"} and type(item["rows"]) is int
                 and item["rows"] == rows and all(re.fullmatch(r"[0-9a-f]{64}", item[k]) for k in
                 ("table_sha256", "product_sha256")), "INSTALLED_PRODUCT_BINDING")
+
+
+def validate_live_report(value):
+    """Admit installed-app observations, never promote them to overlay proof."""
+    require(value.get("schema") == 2 and value.get("kind") == "overmorrow-installed-android-protected-core-trial"
+        and value.get("profile") == "protected-core" and value.get("joined_core_acceptance") is False
+        and value.get("passed") is True and value.get("phase") == "complete" and value.get("package") == PACKAGE,
+        "LIVE_INSTALLED_APP_PROOF")
+    require(value.get("scope") == dict(installed_android_app=True, mounted_widget_tables=True,
+        real_adb_interaction=True, pixel_visibility_proven=False, synthetic_weather=False, synthetic_air_quality=False,
+        core_executed=False, overlay_proven=False, physical_device=False, production_authority=False,
+        expiry_proven=False), "LIVE_INSTALLED_APP_SCOPE")
+    require(value.get("checks") == dict(initial_exact_native_rows=True, actual_tap_refresh=True,
+        third_refresh_exact_native_rows=True, real_android_background_resume=True,
+        original_products_fresh_after_resume=True, no_extra_product_requests=True), "LIVE_INSTALLED_APP_CHECKS")
+    observed = value.get("observations", {})
+    require(observed.get("requests") == dict(weather=3, air_quality=3)
+        and value.get("cleanup") == dict(app_stopped=True, forward_removed=True, vm_closed=True),
+        "LIVE_INSTALLED_APP_COMPLETION")
+    for phase in ("initial", "refresh", "before_background", "after_resume"):
+        products = observed.get(phase, {})
+        require(set(products) == ({"weather", "air_quality"} if phase == "after_resume"
+            else {"weather", "air_quality", "response_sha256"}), "LIVE_INSTALLED_PRODUCT_PAIR")
+        if phase != "after_resume":
+            responses = products["response_sha256"]
+            require(type(responses) is dict and set(responses) == {"weather", "air_quality"}
+                and all(type(v) is str and re.fullmatch(r"[0-9a-f]{64}", v) for v in responses.values()),
+                "LIVE_RESPONSE_BINDING")
+        for key, rows in (("weather", 4), ("air_quality", 5)):
+            item = products[key]
+            require(set(item) == {"rows", "table_sha256", "product_sha256"} and type(item["rows"]) is int
+                and item["rows"] == rows and all(type(item[k]) is str and re.fullmatch(r"[0-9a-f]{64}", item[k])
+                    for k in ("table_sha256", "product_sha256")), "LIVE_INSTALLED_PRODUCT_BINDING")
+    bindings = observed.get("bindings", {})
+    require(set(bindings) == {"weather", "air_quality"}, "LIVE_FORECAST_PAIR")
+    for item in bindings.values():
+        require(type(item) is dict and set(item) == {"forecast_sha256", "immutable_product_sha256"}
+            and all(type(v) is str and re.fullmatch(r"[0-9a-f]{64}", v) for v in item.values()), "LIVE_FORECAST_BINDING")
+
+
+def upstream_binding(path):
+    """A socket-only mount, not permission to expose a general host directory."""
+    require(type(path) in (str, type(Path())) and Path(path).is_absolute(), "CORE_SOCKET_PATH")
+    path = Path(path)
+    require(len(os.fsencode(path)) <= 103 and path.resolve(strict=True) == path
+        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", path.name), "CORE_SOCKET_PATH")
+    parent = path.parent
+    before, info = parent.lstat(), path.lstat()
+    require(parent.resolve(strict=True) == parent and stat.S_ISDIR(before.st_mode)
+        and before.st_uid == os.getuid() and stat.S_IMODE(before.st_mode) == 0o700,
+        "CORE_SOCKET_PARENT")
+    require(stat.S_ISSOCK(info.st_mode) and info.st_uid == os.getuid() and info.st_nlink == 1
+        and stat.S_IMODE(info.st_mode) == 0o600 and list(parent.iterdir()) == [path], "CORE_SOCKET_ONLY")
+    after, named = parent.lstat(), path.lstat()
+    fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink")
+    require(all(getattr(before, k) == getattr(after, k) and getattr(info, k) == getattr(named, k)
+        for k in fields), "CORE_SOCKET_CHANGED")
+    return dict(parent={k: getattr(after, k) for k in fields}, socket={k: getattr(named, k) for k in fields})
+
+
+def core_run_identity(env):
+    return dict(weather_commit=env["VOLPAROSSA_WEATHER_SOURCE_SHA"], core_commit=env["GITHUB_SHA"],
+        run_id=env["GITHUB_RUN_ID"], run_attempt=env["GITHUB_RUN_ATTEMPT"])
+
+
+def use_live_paths():
+    # Called in both the outer command and the fixed sandbox entrypoint.
+    # Preparation files remain immutable inputs; all runtime evidence is new.
+    global OUTPUT, PRIVATE, PROOF
+    OUTPUT, PRIVATE, PROOF = LIVE_OUTPUT, LIVE_OUTPUT / "private", LIVE_PROOF
+    H.OUTPUT, H.PRIVATE, H.PROOF = OUTPUT, PRIVATE, PROOF
+    W.OUTPUT, W.PRIVATE = OUTPUT, PRIVATE
+    W.SDK_TOOL_STATE = PRIVATE / "flutter-tool-state"
+
+
+def prepared_core_inputs(helper):
+    """Recheck preparation on this exact run before installing/executing an APK."""
+    value = H.document(PREPARED_OUTPUT / "prepared.json")
+    require(value.get("schema") == 1 and value.get("kind") == "hosted-android-protected-core-preparation"
+        and value.get("identity") == core_run_identity(os.environ)
+        and value.get("actual_installed_app") is False and value.get("core_delivery") is False
+        and value.get("release_authority") is False, "CORE_PREPARATION_IDENTITY")
+    result = H.document(PREPARED_OUTPUT / "result.json")
+    require(result == dict(schema=2, kind="hosted-android-protected-core-preparation", phase="prepared", success=True,
+        process_drain_confirmed=True, policy_cleanup_complete=True, host_netns_unchanged=True,
+        synthetic=False, mobile_core=False, production_authority=False), "CORE_PREPARATION_COMPLETION")
+    cleanup = H.document(PREPARED_OUTPUT / "cleanup.json")
+    require(cleanup.get("complete") is True and cleanup.get("process_drain_confirmed") is True,
+        "CORE_PREPARATION_CLEANUP")
+    require(H.digest(APK) == value["apk"], "PREPARED_APK_CHANGED")
+    require(native_sources() == value["native_sources"], "PREPARED_NATIVE_SOURCE_CHANGED")
+    require(H.runtime_inventory() == value["runtime"], "PREPARED_RUNTIME_CHANGED")
+    require(W.verify_phase_inputs(helper, H.document(W.HERE / "upstream.json")) == value["sdk"], "PREPARED_SDK_CHANGED")
+    require(runpy.run_path(str(ROOT / "scripts/prepare_hosted_android.py"))["verify"](INPUTS) == value["android"],
+        "PREPARED_ANDROID_CHANGED")
+    require(verification_metadata() == value["dependencies"], "PREPARED_DEPENDENCIES_CHANGED")
+    require(apt_awk_digest() == value["awk"] and apt_java_digest() == value["java"], "PREPARED_DISTRO_TOOL_CHANGED")
+    for name, digest in value["receipts"].items():
+        require(name in {"offline-apk.json", "native-source.json", "toolchain.json", "dependency-capture.json",
+            "emulator-preflight.json", "gradle-kotlin-config.json", "gradle-resources.json"}
+            and type(digest) is str and re.fullmatch(r"[0-9a-f]{64}", digest)
+            and H.sha(H.read(PREPARED_OUTPUT / name)) == digest, "PREPARED_RECEIPT_CHANGED")
+    require(set(value["receipts"]) == {"offline-apk.json", "native-source.json", "toolchain.json", "dependency-capture.json",
+        "emulator-preflight.json", "gradle-kotlin-config.json", "gradle-resources.json"}, "PREPARED_RECEIPT_SET")
+    return value
 
 
 def native_sources(expected=None):
@@ -1681,7 +1810,8 @@ def avd_preflight(netns, *, awk):
         creation_timeout_seconds=30, installed_app_exercised=False, production_authority=False))
 
 
-def execute(helper, platform):
+def execute(helper, platform, *, prepare_only=False):
+    require(type(prepare_only) is bool, "PREPARE_PROFILE")
     installed = attempted = success = False
     phase, netns = "baseline", os.readlink("/proc/self/ns/net")
     prior = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
@@ -1757,6 +1887,19 @@ def execute(helper, platform):
         apk = H.digest(APK)
         H.save("offline-apk.json", dict(schema=1, artifact=apk, compiled_networkless=True,
             dependency_checksums="strict-captured-not-prior-reviewed", debug_signed=True, production_authority=False))
+        if prepare_only:
+            # Stop before publication/expiry clocks need to begin. This record
+            # is usable only together with the successful finally/cleanup
+            # receipts, and all original inputs are rechecked by the live run.
+            H.save("prepared.json", dict(schema=1, kind="hosted-android-protected-core-preparation",
+                identity=core_run_identity(os.environ), apk=apk, runtime=runtime, sdk=sdk, android=android,
+                native_sources=native, dependencies=metadata, awk=awk, java=apt_java_digest(),
+                receipts={name: H.sha(H.read(OUTPUT / name)) for name in ("offline-apk.json", "native-source.json",
+                    "toolchain.json", "dependency-capture.json", "emulator-preflight.json",
+                    "gradle-kotlin-config.json", "gradle-resources.json")},
+                actual_installed_app=False, core_delivery=False, release_authority=False))
+            phase, success = "prepared", True
+            return
         phase = "installed-emulator-trial"
         require(apt_awk_digest() == awk, "AWK_TOOL_CHANGED")
         preflight("emulator", netns)
@@ -1786,21 +1929,118 @@ def execute(helper, platform):
             H.save("cleanup.json", cleanup)
             H.save("steps.json", dict(schema=1, steps=H.LOGS))
             unchanged = os.readlink("/proc/self/ns/net") == netns
-            H.save("result.json", dict(schema=1, kind="hosted-android-build-and-installed-trial", phase=phase,
+            H.save("result.json", dict(schema=2 if prepare_only else 1,
+                kind="hosted-android-protected-core-preparation" if prepare_only else "hosted-android-build-and-installed-trial", phase=phase,
                 success=success and cleanup["complete"] and H.DRAIN_CONFIRMED and unchanged,
                 process_drain_confirmed=H.DRAIN_CONFIRMED, policy_cleanup_complete=cleanup["complete"],
                 host_netns_unchanged=unchanged,
-                synthetic=True, mobile_core=False, production_authority=False))
+                synthetic=not prepare_only, mobile_core=False, production_authority=False))
             require(cleanup["complete"], "CLEANUP_UNCONFIRMED")
         finally:
             for s, handler in prior.items():
                 signal.signal(s, handler)
 
 
-def inside(*, avd_only=False):
-    require(type(avd_only) is bool, "INSIDE_SCOPE")
+def run_protected_core(helper, platform, upstream_socket):
+    """Run the prepared installed app through only the fixed private HTTP API.
+
+    The enclosing core workflow must separately join packet captures, cache
+    custody and publication records. This runner never asserts overlay proof.
+    """
+    prepared = prepared_core_inputs(helper)
+    socket_identity = upstream_binding(upstream_socket)
+    use_live_paths()
+    H.private_directory(OUTPUT)
+    installed = attempted = success = False
+    phase, netns = "baseline", os.readlink("/proc/self/ns/net")
+    prior = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
+    def interrupted(_s, _f):
+        raise H.Interrupted("HOSTED_ANDROID_CORE_INTERRUPTED")
+    for s in prior:
+        signal.signal(s, interrupted)
+    try:
+        H.save("baseline.json", helper.prechecks(platform))
+        H.save("admission.json", dict(schema=1, kind="hosted-android-protected-core-admission",
+            identity=prepared["identity"], prepared_sha256=H.sha(H.read(PREPARED_OUTPUT / "prepared.json")),
+            result_sha256=H.sha(H.read(PREPARED_OUTPUT / "result.json")), apk=prepared["apk"],
+            core_executed=False, joined_core_acceptance=False))
+        H.private_directory(PRIVATE)
+        for name in ("config", "cache", "pub-cache", "android-home", "avd", "gradle-home", "java-home", "flutter-tool-state"):
+            H.private_directory(PRIVATE / name)
+        H.save("gradle-kotlin-config.json", prepare_gradle_user_properties())
+        for mount in (W.SDK_TOOL_MOUNT, *(SDK / "packages/flutter_tools/gradle" / name for name in GRADLE_STATE)):
+            info = mount.lstat()
+            require(mount.resolve(strict=True) == mount and stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
+                and stat.S_IMODE(info.st_mode) == 0o700 and not any(mount.iterdir()), "PREPARED_MOUNT_CHANGED")
+        for name in GRADLE_STATE:
+            H.private_directory(PRIVATE / ("flutter-gradle-" + name.lstrip(".")))
+        H.private_directory(PROOF)
+        H.write(OUTPUT / "passwd", f"runner:x:{os.getuid()}:{os.getgid()}:CI:/home/runner:/bin/false\n".encode())
+        H.write(OUTPUT / "group", f"runner:x:{os.getgid()}:\n".encode())
+        phase = "policy-install"
+        print("Disposable hosted CI: fixed socket-only API mount; owned offline emulator; scoped policy removed only after process drain.", flush=True)
+        installed = True
+        helper.process(["/usr/bin/sudo", "-n", "/usr/bin/install", "-o", "root", "-g", "root", "-m", "0600",
+            "--", str(H.PROFILE), str(helper.STAGED)], 10)
+        helper.staged_owned(platform)
+        attempted = True
+        helper.process(["/usr/bin/sudo", "-n", helper.PARSER, "--add", "--skip-cache", str(helper.STAGED)], 10)
+        phase = "installed-emulator-trial"
+        preflight("emulator", netns)
+        require(upstream_binding(upstream_socket) == socket_identity, "CORE_SOCKET_CHANGED")
+        H.run("installed-android-protected-core-trial", sandbox(["/usr/bin/python3", "-B", str(Path(__file__)),
+            "--inside-protected-core", "--upstream-socket", str(SOCKET_MOUNT / Path(upstream_socket).name)],
+            "emulator", upstream_socket=upstream_socket), 520,
+            env=dict(environment(), VOLPAROSSA_TEST_HOST_NETNS=netns), memory=LIVE_MEMORY)
+        require(upstream_binding(upstream_socket) == socket_identity, "CORE_SOCKET_CHANGED")
+        require(H.digest(APK) == prepared["apk"] and native_sources() == prepared["native_sources"],
+            "PREPARED_APP_CHANGED_DURING_TRIAL")
+        original = H.document(PROOF / "report.json")
+        validate_live_report(original)
+        cleanup = H.document(PROOF / "emulator-cleanup.json")
+        require(cleanup == dict(schema=1, direct_children_reaped=True, private_avd_removed=True,
+            private_android_home_removed=True, trial_returned=True, enclosing_namespace_cleanup_required=True),
+            "LIVE_EMULATOR_CLEANUP")
+        H.save("installed.json", dict(schema=1, kind="hosted-android-protected-core-installed",
+            identity=prepared["identity"], apk=prepared["apk"],
+            installed_report_sha256=H.sha(H.read(PROOF / "report.json")),
+            boundary_sha256=H.sha(H.read(PROOF / "emulator-boundary.json")),
+            emulator_cleanup_sha256=H.sha(H.read(PROOF / "emulator-cleanup.json")),
+            actual_installed_app=True, synthetic=False, expiry_proven=False,
+            core_delivery=False, joined_core_acceptance=False, production_authority=False))
+        phase, success = "complete", True
+    except BaseException as error:
+        H.save("failure.json", dict(schema=1, phase=phase, category=type(error).__name__,
+            code=str(error) if isinstance(error, (ValueError, H.Interrupted)) else "HOSTED_ANDROID_CORE_FAILURE"))
+        raise
+    finally:
+        for s in prior:
+            signal.signal(s, signal.SIG_IGN)
+        try:
+            helper.DRAIN_CONFIRMED = helper.DRAIN_CONFIRMED and H.DRAIN_CONFIRMED
+            cleanup = helper.cleanup(platform, attempted, installed)
+            H.save("cleanup.json", cleanup)
+            H.save("steps.json", dict(schema=1, steps=H.LOGS))
+            unchanged = os.readlink("/proc/self/ns/net") == netns
+            H.save("result.json", dict(schema=1, kind="hosted-android-protected-core-installed-trial", phase=phase,
+                success=success and cleanup["complete"] and H.DRAIN_CONFIRMED and unchanged,
+                process_drain_confirmed=H.DRAIN_CONFIRMED, policy_cleanup_complete=cleanup["complete"],
+                host_netns_unchanged=unchanged, synthetic=False, expiry_proven=False,
+                core_delivery=False, joined_core_acceptance=False, mobile_core=False, production_authority=False))
+            require(cleanup["complete"], "CLEANUP_UNCONFIRMED")
+        finally:
+            for s, handler in prior.items():
+                signal.signal(s, handler)
+
+
+def inside(*, avd_only=False, upstream_socket=None):
+    require(type(avd_only) is bool and (upstream_socket is None or not avd_only), "INSIDE_SCOPE")
     require(os.getuid() != 0 and "volparossa_ci_weather_clients_child" in Path("/proc/self/attr/current").read_text()
         and [n for _, n in socket.if_nameindex()] == ["lo"] and not Path("/etc/resolv.conf").exists(), "OFFLINE_SANDBOX_ONLY")
+    if upstream_socket is not None:
+        require(Path(upstream_socket).parent == SOCKET_MOUNT
+            and os.statvfs(SOCKET_MOUNT).f_flag & os.ST_RDONLY, "CORE_SOCKET_READ_ONLY_MOUNT")
+        upstream_binding(upstream_socket)
     # Explicitly owned children only. All private raw logs/VM authentication
     # material remain under /state, never among uploaded public evidence.
     children, logs = [], []
@@ -1920,8 +2160,12 @@ def inside(*, avd_only=False):
             out.write("\nhw.lcd.width=1080\nhw.lcd.height=1920\nhw.lcd.density=420\nhw.keyboard=yes\n")
         diagnostic.phase = "service_start"
         start("adb", [adb, "-L", "tcp:127.0.0.1:5037", "nodaemon", "server"])
-        Path("/state/native-fixture").mkdir(mode=0o700)
-        fixture = start("fixture", [str(H.NODE), str(W.HERE / "native-android-fixture.mjs"), "--work", "/state/native-fixture"])
+        if upstream_socket is None:
+            Path("/state/native-fixture").mkdir(mode=0o700)
+            fixture = start("fixture", [str(H.NODE), str(W.HERE / "native-android-fixture.mjs"), "--work", "/state/native-fixture"])
+        else:
+            fixture = start("fixture", [str(H.NODE), str(W.HERE / "native-android-live-fixture.mjs"),
+                "--upstream-socket", upstream_socket])
         emulator = start("emulator", [str(ANDROID / "emulator/emulator"), "-avd", "volparossa_trial", "-port", "5554",
             "-accel", "on", "-cores", "2", "-memory", "1536", "-no-window", "-no-audio", "-no-snapshot",
             "-no-boot-anim", "-gpu", "swiftshader_indirect", "-no-metrics", "-camera-back", "none", "-camera-front", "none"])
@@ -1960,7 +2204,8 @@ def inside(*, avd_only=False):
         diagnostic.phase = "app_driver"
         try:
             command("app_driver", [str(H.NODE), str(W.HERE / "native-android-driver.mjs"), "--adb", adb,
-                "--serial", SERIAL, "--output", str(PROOF / "driver")], 190)
+                "--serial", SERIAL, "--output", str(PROOF / "driver")]
+                + (["--profile", "protected-core"] if upstream_socket is not None else []), 190)
         finally:
             original = PROOF / "driver/report.json"
             if original.exists():
@@ -1999,6 +2244,19 @@ def main():
         return
     if sys.argv[1:] == ["--inside-avd-preflight"]:
         inside(avd_only=True)
+        return
+    if len(sys.argv) == 4 and sys.argv[1:3] == ["--inside-protected-core", "--upstream-socket"]:
+        use_live_paths()
+        inside(upstream_socket=sys.argv[3])
+        return
+    if sys.argv[1:] == ["--prepare-protected-core"]:
+        helper, platform = guards(os.environ, protected_core=True)
+        H.private_directory(OUTPUT)
+        execute(helper, platform, prepare_only=True)
+        return
+    if len(sys.argv) == 4 and sys.argv[1:3] == ["--run-protected-core", "--upstream-socket"]:
+        helper, platform = guards(os.environ, protected_core=True)
+        run_protected_core(helper, platform, sys.argv[3])
         return
     require(len(sys.argv) == 1, "NO_ARBITRARY_COMMAND")
     helper, platform = guards(os.environ)
