@@ -255,9 +255,15 @@ test('cache symlink or regular file is rejected before any core call and left in
   const f = await fixture(t), cache = f.config.core.cache;
   await symlink(f.staticRoot, cache); const server = await f.start();
   assert.equal((await get(server.origin)).status, 503); assert.equal((await lstat(cache)).isSymbolicLink(), true);
-  await rm(cache); await writeFile(cache, 'private sentinel', { mode: 0o600 });
-  assert.equal((await get(server.origin)).status, 503); assert.equal(await readFile(cache, 'utf8'), 'private sentinel');
+
+  // Separate owned fixture: never replace or reopen the observed symlink path.
+  const regular = await fixture(t), file = regular.config.core.cache;
+  await writeFile(file, 'private sentinel', { mode: 0o600, flag: 'wx' });
+  const regularServer = await regular.start();
+  assert.equal((await get(regularServer.origin)).status, 503);
+  assert.equal(await readFile(file, 'utf8'), 'private sentinel');
   assert.deepEqual(await f.calls(), []);
+  assert.deepEqual(await regular.calls(), []);
 });
 
 test('missing, symlinked, writable and non-searchable parents never become implicit creation authority', async t => {
