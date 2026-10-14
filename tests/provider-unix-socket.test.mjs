@@ -7,7 +7,8 @@ import { request as httpRequest } from 'node:http';
 import { createServer, createConnection } from 'node:net';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, chmod, writeFile, readFile, readdir, rm, lstat, symlink, rename } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { mkdtemp, mkdir, chmod, writeFile, readFile, readdir, rm, lstat, symlink, rename, open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -218,7 +219,14 @@ test('close preserves replacement file, symlink and socket rather than libuv unl
     const before = await lstat(f.socketPath);
     await assert.rejects(server.close(), /BRIDGE_SOCKET_CLEANUP_UNCONFIRMED/);
     const after = await lstat(f.socketPath); assert.equal(after.ino, before.ino); assert.equal(after.mode, before.mode);
-    if (kind === 'file') assert.equal(await readFile(f.socketPath, 'utf8'), 'replacement remains');
+    if (kind === 'file') {
+      const file = await open(f.socketPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        const opened = await file.stat();
+        assert.equal(opened.isFile(), true); assert.equal(opened.dev, before.dev); assert.equal(opened.ino, before.ino);
+        assert.equal(await file.readFile('utf8'), 'replacement remains');
+      } finally { await file.close(); }
+    }
     assert.equal((await lstat(old)).isSocket(), true);
     if (replacement) await new Promise(done => replacement.close(done));
   }

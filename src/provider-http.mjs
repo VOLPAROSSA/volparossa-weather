@@ -121,10 +121,13 @@ async function listenUnix(server, socketPath) {
     catch (error) { if (error.code !== 'ENOENT') throw error; exists = false; }
     requireThat(!exists, 'BRIDGE_SOCKET_EXISTS');
     stagingPath = await mkdtemp(`/proc/self/fd/${parent.fd}/.weather-socket-`);
-    stagingInfo = await lstat(stagingPath);
+    // Admit the opened directory, not a pathname checked before opening. Keep
+    // the named identity even if a restrictive umask makes open fail, so the
+    // failure path can retire only that exact empty directory.
+    try { staging = await open(stagingPath, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW); }
+    finally { stagingInfo = await lstat(stagingPath); }
     requireThat(stagingInfo.isDirectory() && stagingInfo.uid === uid && !(stagingInfo.mode & 0o077),
       'BRIDGE_SOCKET_PARENT_INVALID');
-    staging = await open(stagingPath, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     const opened = await staging.stat();
     requireThat(privateDirectory(opened) && sameInode(stagingInfo, opened), 'BRIDGE_SOCKET_PARENT_INVALID');
     bindPath = `/proc/self/fd/${staging.fd}/api.sock`;
