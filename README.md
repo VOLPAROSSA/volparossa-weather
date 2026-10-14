@@ -30,16 +30,16 @@ no intermediate weather API is required.
   an explicit local HTTP bridge to that same core-cache consumer.
 
 This is a **temperature, wind, precipitation and particulate-forecast development
-component**, not yet a complete weather app. The separate NOAA particulate
-adapter and core-cache consumer work locally. The actual Drizz.li page displays
-and refreshes precipitation and particulate forecasts in isolated tests with
-synthetic data; their joined live peer-delivery trial remains outstanding.
-Observations, trained corrections, model comparison,
-automatic shared acquisition and native mobile integration remain future work.
-The Drizz.li build and isolated browser interaction pass with synthetic weather.
-A joined trial also displays and refreshes real temperature/wind data obtained
-from a peer through the protected core. Rain accumulation must
-not be presented as hourly rainfall; unsupported values are not invented.
+component**, not yet a complete weather app. Overmorrow's web client displays and
+refreshes real weather and particulate products retrieved through protected
+peers; that trial fetches the products before opening the UI. Drizz.li has a
+separate real temperature/wind delivery proof and synthetic rain/particulate
+interaction tests. An installed Overmorrow Android debug app also passes refresh
+and background/resume checks in an isolated emulator, using synthetic products.
+Actual Android-to-core delivery, iOS support, observations, trained corrections,
+model comparison and automatic shared acquisition remain unfinished. Rain
+accumulation must not be presented as hourly rainfall; unsupported values are
+not invented.
 
 The [real IFS origin-to-native-decoder smoke](third_party/ecmwf-smoke.json) passes:
 658,325 selected GRIB bytes produced a 15.396 °C nearest-grid forecast for the
@@ -64,8 +64,9 @@ proof of forecast accuracy or complete overlay-to-browser delivery.
 
 Use an existing Node.js 22+ installation. The ESM JSON contract has no framework
 dependency. The current ecCodes/core process adapters run on Linux; native mobile
-decoders are not implemented. Android packaging has a test candidate, but its
-hosted build and installed-app trial remain unverified.
+decoders are not implemented. The Android debug build and installed-emulator
+trial pass with synthetic data; they do not establish live mobile core delivery
+or a release-ready app.
 
 The explicit [source-only decoder builder](third_party/eccodes/README.md) uses
 pinned official ecCodes/ecbuild/libaec sources and workspace-local output. It
@@ -265,9 +266,20 @@ trusted publisher, public community area and model run; browser requests cannot
 choose arbitrary locations, publishers, files or commands. One bounded retrieval
 uses the existing core-cache adapter, cancels on disconnect and never falls back
 to an origin service. No CORS access or automatic location publication is enabled.
-Initialize the exact agent-owned cache with an explicit successful CLI retrieval
-first, then configure the long-lived bridge with `reuseCache: true`; one-shot
-cache creation is rejected by the bridge so refreshes do not try to recreate it.
+Existing configurations with `reuseCache: true` require a cache already created
+by the core. For first-request setup, replace that field with
+`cacheMode: "create-or-open"` in each desired product's `core` configuration.
+Do not specify both fields. The selected cache's canonical parent directory
+must already exist and must not be group- or world-writable; the bridge needs
+permission to inspect the exact cache path.
+
+In this explicit mode, the first GET asks the core to create an absent cache;
+later requests and bridge restarts ask the core to reopen an existing directory.
+The core still validates cache ownership, identity, index and locking. The bridge
+does not make cache markers, adopt foreign directories or erase incomplete
+caches. Each request makes at most one core call. A failed or cancelled fetch
+may leave a valid cache for the next request; invalid caches and unreadable paths
+remain errors, without an automatic repair or fallback.
 The two products must describe the same public area, but may use different
 publishers, models, runs and lead times. Requests are sequential and share one
 retrieval slot; a timed-out request finishes cancellation before releasing its
@@ -298,7 +310,7 @@ precipitation delivery or simultaneous two-subflow bulk throughput.
 The complete topology run still exits unsuccessfully at a later, separate
 15 MiB adaptive-provider fetch (`CONTENT_UNAVAILABLE`). The successful Weather
 phase is not an all-green topology result. Interactive location selection,
-precipitation/particulate peer delivery, core-to-Overmorrow delivery and native packaging
+Drizz.li precipitation/particulate peer delivery and live mobile core integration
 remain required; this is not yet a complete cross-platform weather app.
 
 ### Overmorrow client integration
@@ -318,19 +330,18 @@ The refresh control remains disabled while loading. CanvasKit and licenses fit
 the existing bounded local static server; no renderer CDN is configured.
 Cold retrieval uses a bounded per-product deadline aligned with the core bridge,
 with actual request cancellation and short retries only for explicit busy replies.
-Core-to-Overmorrow delivery and native Android/iOS execution remain unverified.
-Packaging, background lifecycle and home-screen widgets remain required.
 The [joined core-delivery trial](integrations/overmorrow/README.md#joined-core-delivery-trial)
-now has a separate Overmorrow bundle profile and exact native table checks;
-its thirteen preparation/driver tests pass, but the live trial remains open.
+passes with real weather and particulate products, including precipitation
+windows, exact table values, refresh and cleanup. It proves cold core retrieval
+followed by browser use, not a browser-initiated first cold fetch.
 
-An [Android trial candidate](integrations/overmorrow/README.md#android-trial-candidate)
-now prepares a separate debug app and a hosted emulator test. It starts the real
-app with synthetic products from a loopback provider and checks native table
-values, actual refresh taps and expiry after backgrounding and resuming. The APK
-build and installed-app trial have not yet run. This does not establish a mobile
-core, iOS support or a release-ready application; existing web/iOS sources remain
-unchanged.
+The [Android trial](integrations/overmorrow/README.md#android-trial-candidate)
+passes the debug build, strict offline rebuild and installed-app checks in an
+isolated emulator. Synthetic loopback products are checked against mounted
+native tables, with actual refresh taps and expiry after backgrounding and
+resuming. This is not pixel-level visual verification, physical-device evidence
+or live core delivery. A mobile core, iOS execution, home-screen widgets and
+release packaging remain required.
 
 ### Additional weather data
 
