@@ -11,6 +11,7 @@ import { pathToFileURL } from 'node:url';
 export const PACKAGE = 'org.volparossa.weather.trial';
 export const COMPONENT = `${PACKAGE}/com.marotidev.overmorrow.MainActivity`;
 const EXTENSION = 'ext.volparossa.native_snapshot';
+const LIFECYCLE_EXTENSION = 'ext.volparossa.native_lifecycle';
 const ORIGIN = 'http://127.0.0.1:43210', CONTROL = 'http://127.0.0.1:43211';
 export const HEADERS = Object.freeze({
   weather: ['Native valid time (UTC)', 'Temperature (°C)', 'Wind (m/s)', 'Wind from (°)',
@@ -20,6 +21,23 @@ export const HEADERS = Object.freeze({
 const pause = ms => new Promise(done => setTimeout(done, ms));
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const LIFECYCLE = Object.freeze(['resumed', 'inactive', 'hidden', 'paused', 'detached']);
+
+export function validateLifecycle(value) {
+  assert.ok(exactKeys(value, ['schema', 'kind', 'current_lifecycle', 'callback_state', 'callback_sequence', 'guest_utc_ms']));
+  assert.equal(value.schema, 1); assert.equal(value.kind, 'overmorrow-native-lifecycle');
+  assert.ok(value.current_lifecycle === null || LIFECYCLE.includes(value.current_lifecycle));
+  assert.ok(value.callback_state === null || LIFECYCLE.includes(value.callback_state));
+  assert.ok(Number.isInteger(value.callback_sequence) && value.callback_sequence >= 0 && value.callback_sequence <= 65535);
+  assert.equal(value.callback_sequence === 0, value.callback_state === null);
+  assert.ok(Number.isSafeInteger(value.guest_utc_ms) && value.guest_utc_ms >= 1000000000000 && value.guest_utc_ms <= 9999999999999);
+  return value;
+}
+
+export async function readLifecycle(vm, isolate) {
+  // Keep the exact VM/isolate selected by the full mounted-snapshot readiness
+  // check. No retry of missing methods, app commands or new service attachment.
+  return validateLifecycle(await vm.request(LIFECYCLE_EXTENSION, { isolateId: isolate }));
+}
 
 function decimal(value) {
   assert.ok(typeof value === 'string' && value.length <= 40);
@@ -121,7 +139,7 @@ const OBSERVER_SUBPHASES = new Set(['unobserved', 'logcat_read', 'vm_address', '
   'tap', 'missing_values', 'expiry_snapshot', 'expiry_labels', 'expiry_wait', 'before_background',
   'background_home', 'background_snapshot', 'background_wait', 'background_pause', 'resume_start', 'resume_snapshot', 'resume_wait',
   'expired_labels', 'expired_tables', 'final_requests', 'clock_window', 'clock_guest_read',
-  'clock_guest_decode', 'clock_validity', 'clock_wait']);
+  'clock_guest_decode', 'clock_validity', 'clock_wait', 'lifecycle_baseline', 'lifecycle_read', 'lifecycle_validate']);
 const OBSERVER_CODES = new Set(['unknown', 'validation_failed', 'response_type_invalid', 'adb_exit',
   'adb_signal', 'adb_output_bound', 'adb_spawn_failed', 'adb_failed', 'websocket_deadline',
   'websocket_failed', 'vm_request_rejected', 'vm_request_deadline', 'vm_connection_closed',
@@ -178,12 +196,25 @@ export class ObserverDiagnostic {
   beginProducts(expected) {
     this.subphase = 'unobserved'; this.waitingFor = null;
     this.appObservation = null;
+    this.timing = {};
     this.progress = { expected_requests_per_product: expected, collection_attempts: 0, refresh_search_attempts: 0 };
   }
   note(values) {
     // Optional diagnostics cannot introduce a new failure or replace the real
     // operation's exception. No values are exported without the closed projection.
     try { Object.assign(this.progress, values()); } catch { /* retain unknown */ }
+  }
+  noteTiming(values) {
+    try { Object.assign(this.timing, values()); } catch { /* retain unknown */ }
+  }
+  async timed(key, action) {
+    let started;
+    try { started = performance.now(); } catch { /* timing is optional */ }
+    try { return await action(); }
+    finally {
+      try { this.noteTiming(() => ({ [key]: Math.floor(performance.now() - started) })); }
+      catch { /* Optional timing cannot replace the operation's result/error. */ }
+    }
   }
   observeProducts(snapshot) {
     this.appObservation = null;
@@ -212,7 +243,10 @@ export class ObserverDiagnostic {
         provider: exactKeys(last.provider, ['weather', 'air_quality'])
           ? { weather: projectProviderObservation(last.provider.weather), air_quality: projectProviderObservation(last.provider.air_quality) } : null,
         app: projectAppObservation(last.app) } : null;
-    return { ...this.failure(error), schema: 4, acceptance_evidence: false,
+    const timing = this.timing ?? {};
+    const duration = key => Number.isInteger(timing[key]) && timing[key] >= 0 && timing[key] <= 180000 ? timing[key] : null;
+    const bounded = (key, maximum) => Number.isInteger(timing[key]) && timing[key] >= 0 && timing[key] <= maximum ? timing[key] : null;
+    return { ...this.failure(error), schema: 5, acceptance_evidence: false,
       progress: {
         expected_requests_per_product: count('expected_requests_per_product', 3),
         weather_requests_observed: count('weather_requests_observed', 3),
@@ -223,7 +257,15 @@ export class ObserverDiagnostic {
         weather_metadata_matches: count('weather_metadata_matches', 6), air_quality_metadata_matches: count('air_quality_metadata_matches', 6),
         expiry_labels_matched: count('expiry_labels_matched', 2), expired_labels_observed: count('expired_labels_observed', 2),
         tables_remaining: count('tables_remaining', 4),
-      }, last_snapshot: lastSnapshot };
+      }, last_snapshot: lastSnapshot,
+      timing: {
+        phase_prepare_ms: duration('phase_prepare_ms'), target_tap_ms: duration('target_tap_ms'),
+        products_ready_ms: duration('products_ready_ms'),
+        pre_home_ui_ms: duration('pre_home_ui_ms'), baseline_read_ms: duration('baseline_read_ms'),
+        home_command_ms: duration('home_command_ms'), background_read_ms: duration('background_read_ms'),
+        background_polls: bounded('background_polls', 64), callback_advance: bounded('callback_advance', 64),
+        clock_failure_side: ['host_before', 'host_after', 'guest'].includes(timing.clock_failure_side) ? timing.clock_failure_side : null,
+      } };
   }
 }
 
@@ -365,7 +407,7 @@ class ReadOnlyVm {
     this.pending.clear();
   }
   async request(method, params = {}) {
-    assert.ok(['getVM', EXTENSION].includes(method));
+    assert.ok(['getVM', EXTENSION, LIFECYCLE_EXTENSION].includes(method));
     assert.ok(this.pending.size === 0 && this.socket.readyState === WebSocket.OPEN);
     const id = ++this.next;
     return new Promise((resolve, reject) => {
@@ -518,12 +560,13 @@ export function productClockWindow(products) {
 
 export async function phaseClockReady({ adb, diagnostic, remaining, clock = Date.now }, products) {
   const window = await diagnostic.at('clock_window', () => productClockWindow(products));
-  function hostValid() {
+  function hostValid(side) {
     remaining(); const now = clock(); assert.ok(Number.isSafeInteger(now));
+    if (now < window.acquired || now >= window.expires) diagnostic.noteTiming(() => ({ clock_failure_side: side }));
     if (now < window.acquired) throw new ObserverFailure('clock_host_before_acquisition');
     if (now >= window.expires) throw new ObserverFailure('clock_expired');
   }
-  await diagnostic.at('clock_validity', hostValid);
+  await diagnostic.at('clock_validity', () => hostValid('host_before'));
   // Android 16 toybox date.c reads CLOCK_REALTIME and implements %3N. This
   // fixed unprivileged read observes the real guest clock; it never sets it.
   // https://android.googlesource.com/platform/external/toybox/+/refs/tags/android-16.0.0_r1/toys/posix/date.c
@@ -534,10 +577,39 @@ export async function phaseClockReady({ adb, diagnostic, remaining, clock = Date
     return Number(raw);
   });
   return diagnostic.at('clock_validity', () => {
-    hostValid();
-    if (guest >= window.expires) throw new ObserverFailure('clock_expired');
+    hostValid('host_after');
+    if (guest >= window.expires) {
+      diagnostic.noteTiming(() => ({ clock_failure_side: 'guest' }));
+      throw new ObserverFailure('clock_expired');
+    }
     return guest >= window.acquired;
   });
+}
+
+export async function lifecycleWithinWindow({ lifecycle, diagnostic, remaining, clock = Date.now }, products, baseline = false) {
+  // A poll rejected before its first request must not inherit a previous
+  // request duration. The poll counter separately includes this clock gate.
+  diagnostic.noteTiming(() => ({ [baseline ? 'baseline_read_ms' : 'background_read_ms']: null, clock_failure_side: null }));
+  const window = await diagnostic.at('clock_window', () => productClockWindow(products));
+  function hostValid(side) {
+    remaining(); const now = clock(); assert.ok(Number.isSafeInteger(now));
+    if (now < window.acquired || now >= window.expires) diagnostic.noteTiming(() => ({ clock_failure_side: side }));
+    if (now < window.acquired) throw new ObserverFailure('clock_host_before_acquisition');
+    if (now >= window.expires) throw new ObserverFailure('clock_expired');
+  }
+  await diagnostic.at('clock_validity', () => hostValid('host_before'));
+  const observed = await diagnostic.timed(baseline ? 'baseline_read_ms' : 'background_read_ms',
+    () => diagnostic.at(baseline ? 'lifecycle_baseline' : 'lifecycle_read', lifecycle));
+  remaining();
+  const value = await diagnostic.at('lifecycle_validate', () => validateLifecycle(observed));
+  await diagnostic.at('clock_validity', () => {
+    hostValid('host_after');
+    const guest = value.guest_utc_ms;
+    if (guest < window.acquired || guest >= window.expires) diagnostic.noteTiming(() => ({ clock_failure_side: 'guest' }));
+    if (guest >= window.expires) throw new ObserverFailure('clock_expired');
+    assert.ok(guest >= window.acquired);
+  });
+  return value;
 }
 
 export async function prepareNativePhase(context, phase) {
@@ -557,9 +629,9 @@ export async function prepareNativePhase(context, phase) {
 // The production sequence is shared with inert contract tests. Injectable I/O
 // is a test seam, never an alternate native acceptance path. Keep the original
 // exact predicates, commands, attempt counts and wait budgets here.
-export async function exerciseNativeProducts({ report, diagnostic, control, waitFor, snapshot: readSnapshot, adb, remaining,
+export async function exerciseNativeProducts({ report, diagnostic, control, waitFor, snapshot: readSnapshot, lifecycle, adb, remaining,
   initialPrepared, clock = Date.now, sleep = pause }) {
-  const phaseContext = { control, waitFor, adb, diagnostic, remaining, clock };
+  const phaseContext = { control, waitFor, adb, diagnostic, remaining, clock, lifecycle };
   async function snapshot() {
     // A failed or malformed new read must not inherit an earlier observation.
     diagnostic.observeProducts(null);
@@ -635,20 +707,21 @@ export async function exerciseNativeProducts({ report, diagnostic, control, wait
   });
   report.checks.actual_tap_refresh_and_missing_values = true;
   report.phase = 'background-resume-expiry'; diagnostic.beginProducts(3);
-  const shortPrepared = await prepareNativePhase(phaseContext, 'short-lived'); await tapRefresh();
-  const short = await products(3, shortPrepared);
+  const shortPrepared = await diagnostic.timed('phase_prepare_ms', () => prepareNativePhase(phaseContext, 'short-lived'));
+  await diagnostic.timed('target_tap_ms', tapRefresh);
+  const short = await diagnostic.timed('products_ready_ms', () => products(3, shortPrepared));
   // App is at the footer after a real tap; the same native product widgets
   // must consume the response before Android takes the app to background.
   // Use that one fresh snapshot for all pre-HOME UI predicates; a second VM
   // tree traversal adds no predicate and spends the immutable product TTL.
   diagnostic.waitingFor = 'expiry_wait';
-  const before = await waitFor(async () => {
+  const before = await diagnostic.timed('pre_home_ui_ms', () => waitFor(async () => {
     const value = await diagnostic.at('expiry_snapshot', snapshot);
     diagnostic.subphase = 'expiry_labels';
     diagnostic.note(() => ({ expiry_labels_matched: Object.values(short.products)
       .filter(product => value.labels.includes(`Expires ${product.freshness.expires_at}`)).length }));
     return Object.values(short.products).every(product => value.labels.includes(`Expires ${product.freshness.expires_at}`)) ? value : null;
-  }, 3000);
+  }, 3000));
   diagnostic.waitingFor = null;
   await diagnostic.at('before_background', async () => {
     assert.equal(before.current_lifecycle, 'resumed');
@@ -658,16 +731,27 @@ export async function exerciseNativeProducts({ report, diagnostic, control, wait
       verifyTable(before.tables.find(table => table.product === name), short.products[name]);
     }
   });
-  assert.equal(await phaseClockReady(phaseContext, short.products), true);
-  await diagnostic.at('background_home', () => adb(['shell', 'input', 'keyevent', 'KEYCODE_HOME']));
+  const baseline = await lifecycleWithinWindow(phaseContext, short.products, true);
+  await diagnostic.at('lifecycle_validate', () => {
+    assert.equal(baseline.current_lifecycle, 'resumed');
+    assert.ok(baseline.callback_state === null || baseline.callback_state === 'resumed');
+  });
+  await diagnostic.timed('home_command_ms', () => diagnostic.at('background_home',
+    () => adb(['shell', 'input', 'keyevent', 'KEYCODE_HOME'])));
   diagnostic.waitingFor = 'background_wait';
+  let backgroundPolls = 0;
   await waitFor(async () => {
-    const background = await diagnostic.at('background_snapshot', snapshot);
-    // HOME dispatch is not lifecycle proof. Even a slow successful command
-    // must not turn expiry-before-background into expiry-during-background.
-    assert.equal(await phaseClockReady(phaseContext, short.products), true);
-    return ['paused', 'hidden'].includes(background.current_lifecycle)
-      && background.lifecycle.includes(background.current_lifecycle) ? background : null;
+    diagnostic.noteTiming(() => ({ background_polls: ++backgroundPolls, callback_advance: null }));
+    // No full tree traversal or separate ADB clock query here. The current
+    // clock must still be valid, not merely the time of an older callback.
+    const background = await lifecycleWithinWindow(phaseContext, short.products);
+    return diagnostic.at('lifecycle_validate', () => {
+      assert.ok(background.callback_sequence >= baseline.callback_sequence);
+      diagnostic.noteTiming(() => ({ callback_advance: background.callback_sequence - baseline.callback_sequence }));
+      return background.callback_sequence > baseline.callback_sequence
+        && ['paused', 'hidden'].includes(background.current_lifecycle)
+        && background.callback_state === background.current_lifecycle ? background : null;
+    });
   });
   diagnostic.waitingFor = null;
   await diagnostic.at('background_pause', async () => { await sleep(6000); remaining(); });
@@ -734,6 +818,7 @@ async function main() {
   }
   let isolate;
   async function snapshot() { remaining(); return validateSnapshot(await vm.request(EXTENSION, { isolateId: isolate })); }
+  async function lifecycle() { remaining(); return readLifecycle(vm, isolate); }
   try {
     const initialPrepared = await prepareNativePhase({ control, waitFor, adb, diagnostic, remaining }, 'initial');
     const pid = await startInstalledApp({ adb, waitFor, diagnostic,
@@ -742,7 +827,7 @@ async function main() {
     isolate = await observeVm({ adb, waitFor, pid, diagnostic,
       ownForward(value) { forward = value; report.cleanup.forward_removed = false; },
       ownVm(value) { vm = value; report.cleanup.vm_closed = false; } });
-    await exerciseNativeProducts({ report, diagnostic, control, waitFor, snapshot, adb, remaining, initialPrepared });
+    await exerciseNativeProducts({ report, diagnostic, control, waitFor, snapshot, lifecycle, adb, remaining, initialPrepared });
   } catch (error) {
     recordDriverFailure(report, diagnostic, error);
   } finally {

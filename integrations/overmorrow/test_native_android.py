@@ -127,7 +127,7 @@ class ProfileTests(unittest.TestCase):
         source = (HERE / 'native-android-entrypoint.dart').read_text()
         self.assertIn('await app.main()', source)
         self.assertIn("registerExtension('ext.volparossa.native_snapshot'", source)
-        self.assertEqual(source.count('registerExtension('), 1)
+        self.assertEqual(source.count('registerExtension('), 2)
         self.assertIn('WidgetsBinding.instance.rootElement', source)
         self.assertIn('widget is DataTable', source)
         self.assertIn('hitTestInView(hit, center, view.viewId)', source)
@@ -172,7 +172,7 @@ class ProfileTests(unittest.TestCase):
             self.assertIn(operation, widget_test)
         self.assertNotIn('.onPressed!()', widget_test)
         driver = (HERE / 'native-android-driver.mjs').read_text()
-        self.assertIn('schema: 4, acceptance_evidence: false', driver)
+        self.assertIn('schema: 5, acceptance_evidence: false', driver)
         self.assertIn('current_lifecycle: LIFECYCLE.includes(snapshot.current_lifecycle)', driver)
         self.assertIn('button.safe_target && button.scroll?.idle === true', driver)
 
@@ -184,7 +184,8 @@ class ProfileTests(unittest.TestCase):
             self.assertIn(field, source)
         self.assertNotIn('weatherError.toString', source)
         self.assertNotIn('errorDesc', source)
-        self.assertNotIn('DateTime.now', source)
+        mounted = source.split('Map<String, Object?> _snapshot(', 1)[1].split('Future<void> main()', 1)[0]
+        self.assertNotIn('DateTime.now', mounted)
         provider = (HERE / 'overlay/lib/volparossa/provider.dart').read_text()
         driver = (HERE / 'native-android-driver.mjs').read_text()
         for dart_enum, key in (('_Stage', 'stage'), ('_Outcome', 'outcome'),
@@ -200,6 +201,32 @@ class ProfileTests(unittest.TestCase):
         self.assertIn('const providerProductDeadline = Duration(seconds: 195);', provider)
         self.assertLess(provider.index('final product = NativeProduct.parse('),
                         provider.index('observed.productValidated = true;'))
+
+    def test_separate_lifecycle_extension_is_constant_size_current_clock_and_read_only(self):
+        source = (HERE / 'native-android-entrypoint.dart').read_text()
+        observation = source.split('Map<String, Object?> _lifecycleSnapshot(', 1)[1].split('String _text(', 1)[0]
+        for expected in ("'schema': 1, 'kind': 'overmorrow-native-lifecycle'",
+                         "'current_lifecycle': WidgetsBinding.instance.lifecycleState?.name",
+                         "'callback_state': lifecycle.lastState", "'callback_sequence': lifecycle.sequence",
+                         "'guest_utc_ms': DateTime.now().toUtc().millisecondsSinceEpoch"):
+            self.assertIn(expected, observation)
+        for operation in ('visit', 'rootElement', 'endOfFrame', 'await', 'setState', 'observed', 'scheduleFrame'):
+            self.assertNotIn(operation, observation)
+        callback = source.split('void didChangeAppLifecycleState(', 1)[1].split('Map<String, Object?> _lifecycleSnapshot', 1)[0]
+        self.assertIn('sequence++;', callback)
+        self.assertIn('lastState = state.name;', callback)
+        self.assertNotIn('DateTime', callback)  # Never backdate acceptance to a callback time.
+        extension = source.split("registerExtension('ext.volparossa.native_lifecycle'", 1)[1].split('await app.main()', 1)[0]
+        self.assertIn("parameters.keys.any((key) => key != 'isolateId')", extension)
+        self.assertIn('jsonEncode(_lifecycleSnapshot(lifecycle))', extension)
+        self.assertIn('result.length > 1024', extension)
+        self.assertNotIn('_snapshot(', extension)
+        driver = (HERE / 'native-android-driver.mjs').read_text()
+        self.assertIn('async function lifecycle() { remaining(); return readLifecycle(vm, isolate); }', driver)
+        self.assertIn('vm.request(LIFECYCLE_EXTENSION, { isolateId: isolate })', driver)
+        self.assertIn('timeout: 8000, killSignal:', driver)
+        self.assertIn('}, 3000);', driver)
+        self.assertIn('deadline = started + 180000', driver)
 
     def test_existing_dart_groups_preserved_plus_system_inset_widget_regression(self):
         tests = list((HERE / 'overlay/test').glob('*_test.dart'))

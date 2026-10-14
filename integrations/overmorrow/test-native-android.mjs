@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { HEADERS, PACKAGE, COMPONENT, numberEqual, validateSnapshot, verifyTable, vmAddress,
   adbFailure, ObserverDiagnostic, observeVm, waitForObservation, startInstalledApp, resumeInstalledApp,
   recordDriverFailure, readFixtureControl, exerciseNativeProducts, productClockWindow,
-  phaseClockReady, prepareNativePhase, tapNativeRefresh } from './native-android-driver.mjs';
+  phaseClockReady, prepareNativePhase, tapNativeRefresh, validateLifecycle, readLifecycle, lifecycleWithinWindow } from './native-android-driver.mjs';
 import { nativeFixtureState, API_PORT, CONTROL_PORT } from './native-android-fixture.mjs';
 
 const NOW = '2026-10-12T02:00:00.000Z';
@@ -30,6 +30,10 @@ function snapshot(tables = []) {
     profile: true, origin: 'http://127.0.0.1:43210', tables, labels: [], refresh: [],
     lifecycle: ['resumed'], current_lifecycle: 'resumed', screen: { width: 1080, height: 1920,
       safe_area: { left: 0, top: 63, right: 1080, bottom: 1815 } } };
+}
+function lifecycleSnapshot(change = {}) {
+  return { schema: 1, kind: 'overmorrow-native-lifecycle', current_lifecycle: 'resumed',
+    callback_state: 'resumed', callback_sequence: 1, guest_utc_ms: Date.parse(NOW), ...change };
 }
 
 test('fixture separates loopback API/control and makes no core claim', () => {
@@ -294,7 +298,7 @@ test('VM address is one loopback service from bounded log text, never arbitrary 
 test('driver owns exact Android component and uses only observation RPC methods', async () => {
   assert.equal(COMPONENT, 'org.volparossa.weather.trial/com.marotidev.overmorrow.MainActivity');
   const source = await readFile(new URL('./native-android-driver.mjs', import.meta.url), 'utf8');
-  assert.ok(source.includes("['getVM', EXTENSION].includes(method)"));
+  assert.ok(source.includes("['getVM', EXTENSION, LIFECYCLE_EXTENSION].includes(method)"));
   assert.ok(!source.includes("vm.request('getIsolate'"));
   assert.ok(source.includes("['shell', 'input', 'tap'"));
   assert.ok(source.includes("['shell', 'input', 'keyevent', 'KEYCODE_HOME']"));
@@ -307,6 +311,7 @@ test('driver owns exact Android component and uses only observation RPC methods'
 const PRIVATE_TEXT = 'private-token http://127.0.0.1:43212/private/ /private/owner';
 const VM_LINE = 'The Dart VM service is listening on http://127.0.0.1:34567/private-token/';
 const EXTENSION = 'ext.volparossa.native_snapshot';
+const LIFECYCLE_EXTENSION = 'ext.volparossa.native_lifecycle';
 const flush = () => new Promise(done => setImmediate(done));
 function observerFixture(options = {}) {
   const diagnostic = options.diagnostic ?? new ObserverDiagnostic(), calls = [], owned = [], requests = [];
@@ -711,7 +716,7 @@ test('failure publisher keeps historical startup schema and resets product-phase
     diagnostic.beginProducts(1);
     recordDriverFailure(report, diagnostic, new TypeError(PRIVATE_TEXT));
     assert.equal(report.failure, 'NATIVE_TRIAL_PHASE_FAILED');
-    assert.equal(report.failure_diagnostic.schema, 4);
+    assert.equal(report.failure_diagnostic.schema, 5);
     assert.equal(report.failure_diagnostic.subphase, 'unobserved');
     assert.equal(report.failure_diagnostic.progress.weather_requests_observed, null);
   }
@@ -1033,7 +1038,7 @@ async function rejectedProducts(fixture) {
   recordDriverFailure(fixture.report, fixture.diagnostic, failure);
   assert.equal(fixture.report.passed, false);
   const receipt = fixture.report.failure_diagnostic;
-  assert.equal(receipt.schema, 4); assert.equal(receipt.acceptance_evidence, false);
+  assert.equal(receipt.schema, 5); assert.equal(receipt.acceptance_evidence, false);
   assert.equal(receipt.cause_established, false); assert.equal(receipt.raw_output_retained, false);
   assert.ok(Buffer.byteLength(JSON.stringify(receipt)) <= 2048);
   for (const raw of ['private-token', 'http://', '/private/', 'Expires ', 'Temperature']) {
@@ -1090,6 +1095,13 @@ function productExerciseFixture(options = {}) {
       options.snapshot?.(value, report, diagnostic);
       return validateSnapshot(value);
     },
+    async lifecycle() {
+      events.push(['lifecycle', diagnostic.subphase]);
+      const value = lifecycleSnapshot({ current_lifecycle: background ? 'paused' : 'resumed',
+        callback_state: background ? 'paused' : 'resumed', callback_sequence: background ? 4 : 1 });
+      options.lifecycle?.(value, report, diagnostic);
+      return value;
+    },
     async adb(args) {
       events.push(['adb', ...args]); options.adb?.(args, report, diagnostic);
       if (args[1] === '/system/bin/date') { assert.deepEqual(args, ['shell', '/system/bin/date', '+%s%3N']); return String(Date.parse(NOW)); }
@@ -1117,8 +1129,7 @@ test('actual product sequence retains exact initial/refresh/expiry gates, comman
   assert.deepEqual(fixture.events.filter(row => row[0] === 'adb').map(row => row.slice(1)), [
     ['shell', '/system/bin/date', '+%s%3N'], ['shell', 'input', 'tap', '540', '1800'],
     ['shell', '/system/bin/date', '+%s%3N'], ['shell', 'input', 'tap', '540', '1800'],
-    ['shell', '/system/bin/date', '+%s%3N'],
-    ['shell', 'input', 'keyevent', 'KEYCODE_HOME'], ['shell', '/system/bin/date', '+%s%3N'],
+    ['shell', 'input', 'keyevent', 'KEYCODE_HOME'],
     ['shell', 'am', 'start', '-n', COMPONENT]]);
   assert.deepEqual(fixture.events.filter(row => row[0] === 'sleep'), [['sleep', 6000]]);
 });
@@ -1129,7 +1140,7 @@ test('one fresh expiry snapshot supplies all pre-HOME predicates without an extr
   assert.ok(expiry >= 0 && home > expiry);
   assert.deepEqual(value.events.slice(expiry, home + 1), [
     ['snapshot', 'background-resume-expiry', 'expiry_snapshot'],
-    ['adb', 'shell', '/system/bin/date', '+%s%3N'],
+    ['lifecycle', 'lifecycle_baseline'],
     ['adb', 'shell', 'input', 'keyevent', 'KEYCODE_HOME'],
   ]);
   assert.equal(value.events.filter(row => row[0] === 'snapshot' && row[2] === 'before_background').length, 0);
@@ -1193,10 +1204,9 @@ test('TTL spent observing short-lived UI cannot become background expiry proof',
     const value = productExerciseFixture({ snapshot(value, report, diagnostic) {
       if (diagnostic.subphase === 'expiry_snapshot') homeReady = true;
     } });
-    const original = value.context.adb;
+    const original = value.context.lifecycle;
     value.context.clock = () => Date.parse(NOW) + (homeReady && expired === 'host' ? 4500 : 0);
-    value.context.adb = async args => homeReady && expired === 'guest' && args[1] === '/system/bin/date'
-      ? String(Date.parse(NOW) + 4500) : original(args);
+    value.context.lifecycle = async () => ({ ...await original(), guest_utc_ms: Date.parse(NOW) + (homeReady && expired === 'guest' ? 4500 : 0) });
     const { receipt } = await rejectedProducts(value);
     assert.equal(receipt.subphase, 'clock_validity'); assert.equal(receipt.code, 'clock_expired');
     assert.ok(!value.events.some(row => row.includes('KEYCODE_HOME')));
@@ -1208,10 +1218,9 @@ test('HOME latency crossing original expiry fails before the background sleep or
   for (const expired of ['host', 'guest']) {
     let homeSent = false;
     const value = productExerciseFixture({ adb(args) { if (args[3] === 'KEYCODE_HOME') homeSent = true; } });
-    const original = value.context.adb;
+    const original = value.context.lifecycle;
     value.context.clock = () => Date.parse(NOW) + (homeSent && expired === 'host' ? 4500 : 0);
-    value.context.adb = async args => homeSent && expired === 'guest' && args[1] === '/system/bin/date'
-      ? String(Date.parse(NOW) + 4500) : original(args);
+    value.context.lifecycle = async () => ({ ...await original(), guest_utc_ms: Date.parse(NOW) + (homeSent && expired === 'guest' ? 4500 : 0) });
     const { receipt } = await rejectedProducts(value);
     assert.equal(receipt.code, 'clock_expired'); assert.equal(receipt.subphase, 'clock_validity');
     assert.equal(value.events.filter(row => row.includes('KEYCODE_HOME')).length, 1);
@@ -1223,17 +1232,18 @@ test('HOME latency crossing original expiry fails before the background sleep or
 });
 test('background must actually be observed before expiry; HOME and old lifecycle history are insufficient', async () => {
   for (const change of [value => { value.current_lifecycle = 'resumed'; },
-    value => { value.current_lifecycle = 'inactive'; }, value => { value.lifecycle = ['resumed']; }]) {
-    const value = productExerciseFixture({ snapshot(value, report, diagnostic) {
-      if (diagnostic.subphase === 'background_snapshot') change(value);
+    value => { value.current_lifecycle = 'inactive'; }, value => { value.callback_state = 'resumed'; },
+    value => { value.callback_sequence = 1; }]) {
+    const value = productExerciseFixture({ lifecycle(value, report, diagnostic) {
+      if (diagnostic.subphase === 'lifecycle_read') change(value);
     } });
     const { receipt } = await rejectedProducts(value);
     assert.equal(receipt.code, 'observation_deadline'); assert.equal(receipt.subphase, 'background_wait');
     assert.ok(!value.events.some(row => row[0] === 'sleep' && row[1] === 6000));
     assert.deepEqual(value.state.status().calls, { weather: 3, air_quality: 3 });
   }
-  const hidden = productExerciseFixture({ snapshot(value, report, diagnostic) {
-    if (diagnostic.subphase === 'background_snapshot') value.current_lifecycle = 'hidden';
+  const hidden = productExerciseFixture({ lifecycle(value, report, diagnostic) {
+    if (diagnostic.subphase === 'lifecycle_read') value.current_lifecycle = value.callback_state = 'hidden';
   } });
   await hidden.run(); assert.equal(hidden.report.passed, true);
 });
@@ -1319,11 +1329,12 @@ test('16 mounted collection attempts retain exact tables and all six metadata fi
 test('snapshot/swipe/tap/background/resume failures bind actual awaited operation and preserve identity', async () => {
   const primary = adbFailure({ signal: 'SIGKILL' });
   for (const stage of ['product_snapshot', 'swipe', 'refresh_snapshot', 'tap', 'expiry_snapshot',
-    'background_home', 'background_snapshot', 'background_pause', 'resume_start', 'resume_snapshot']) {
+    'background_home', 'lifecycle_baseline', 'lifecycle_read', 'background_pause', 'resume_start', 'resume_snapshot']) {
     const fail = diagnostic => { if (diagnostic.subphase === stage) throw primary; };
     const fixture = productExerciseFixture({ snapshot(value, report, diagnostic) {
       fail(diagnostic); if (stage === 'swipe') value.labels = [];
-    }, adb(args, report, diagnostic) { fail(diagnostic); }, sleep(ms, report, diagnostic) { fail(diagnostic); } });
+    }, lifecycle(value, report, diagnostic) { fail(diagnostic); },
+    adb(args, report, diagnostic) { fail(diagnostic); }, sleep(ms, report, diagnostic) { fail(diagnostic); } });
     const { receipt, failure } = await rejectedProducts(fixture);
     assert.equal(failure, primary); assert.equal(receipt.subphase, stage); assert.equal(receipt.code, 'adb_signal');
   }
@@ -1364,7 +1375,7 @@ test('missing value, expiry consumption, real lifecycle, hidden tables and no-ex
     if (stage === 'expired_tables') assert.equal(receipt.progress.tables_remaining, 1);
   }
 });
-test('schema4 retains bounded progress, cannot echo arbitrary data, and optional diagnosis cannot mask failure', () => {
+test('schema5 retains bounded progress, cannot echo arbitrary data, and optional diagnosis cannot mask failure', () => {
   const diagnostic = new ObserverDiagnostic(); diagnostic.beginProducts(1);
   const keys = Object.keys(diagnostic.productFailure(new Error()).progress);
   for (const invalid of [PRIVATE_TEXT, {}, [], NaN, Infinity, -1, 999999, 1.5]) {
@@ -1429,7 +1440,7 @@ test('closed last-snapshot lifecycle distinguishes real current state without ex
   for (const state of ['resumed', 'inactive', 'hidden', 'paused', 'detached', null, undefined, PRIVATE_TEXT, {}, []]) {
     diagnostic.observeProducts({ diagnostic: appDiagnostic(), current_lifecycle: state, lifecycle: [PRIVATE_TEXT] });
     const receipt = diagnostic.productFailure(new Error(PRIVATE_TEXT));
-    assert.equal(receipt.schema, 4);
+    assert.equal(receipt.schema, 5);
     assert.equal(receipt.last_snapshot.current_lifecycle, typeof state === 'string' && state !== PRIVATE_TEXT ? state : null);
     assert.ok(!JSON.stringify(receipt).includes(PRIVATE_TEXT));
     assert.ok(!Object.hasOwn(receipt.last_snapshot, 'lifecycle'));
@@ -1581,5 +1592,192 @@ test('read-only outcomes are not final UI acceptance, and worst-case closed rece
   assert.equal(fixture.report.scope.mounted_widget_tables, true);
   // The contradictory synthetic diagnostic cannot override actual assertion results.
   fixture.diagnostic.subphase = 'background_pause';
+  const timing = fixture.diagnostic.productFailure(new Error()).timing;
+  fixture.diagnostic.timing = Object.fromEntries(Object.keys(timing).map(key =>
+    [key, key.endsWith('_ms') ? 180000 : key === 'clock_failure_side' ? 'host_before' : 64]));
   assert.ok(Buffer.byteLength(JSON.stringify(fixture.diagnostic.productFailure(adbFailure({ signal: 'SIGKILL' })))) <= 2048);
+});
+
+test('separate lifecycle response is closed and rejects malformed, unknown and overflowing fields', () => {
+  assert.deepEqual(validateLifecycle(lifecycleSnapshot()), lifecycleSnapshot());
+  validateLifecycle(lifecycleSnapshot({ callback_sequence: 0, callback_state: null }));
+  for (const change of [{ schema: 2 }, { kind: PRIVATE_TEXT }, { extra: PRIVATE_TEXT },
+    { current_lifecycle: PRIVATE_TEXT }, { callback_state: 'unknown' }, { callback_state: null },
+    { callback_sequence: 0 }, { callback_sequence: 65536 }, { callback_sequence: -1 },
+    { callback_sequence: 1.5 }, { callback_sequence: '1' }, { guest_utc_ms: String(Date.parse(NOW)) },
+    { guest_utc_ms: Date.parse(NOW) + .5 }, { guest_utc_ms: null }, { guest_utc_ms: 999999999999 },
+    { guest_utc_ms: 10000000000000 }]) {
+    assert.throws(() => validateLifecycle(lifecycleSnapshot(change)));
+  }
+  for (const invalid of [null, [], PRIVATE_TEXT, {}, { schema: 1 }]) assert.throws(() => validateLifecycle(invalid));
+});
+
+test('O(1) lifecycle method uses the retained VM/isolate and never treats method errors as readiness', async () => {
+  let response;
+  const value = observerFixture({ message(request, normal) {
+    return request.method !== LIFECYCLE_EXTENSION ? normal : response?.(request)
+      ?? JSON.stringify({ jsonrpc: '2.0', id: request.id, result: lifecycleSnapshot() });
+  } });
+  const isolate = await value.run(), vm = value.vm;
+  assert.deepEqual(await readLifecycle(vm, isolate), lifecycleSnapshot());
+  assert.deepEqual(value.requests.at(-1), { jsonrpc: '2.0', id: 3, method: LIFECYCLE_EXTENSION, params: { isolateId: isolate } });
+  for (const error of [missingExtension, snapshotPending, () => ({ code: -32000, message: PRIVATE_TEXT })]) {
+    response = request => errorMessage(request, error(request));
+    await assert.rejects(readLifecycle(vm, isolate), error => error.observerCode === 'vm_request_rejected' && error.extensionPending === false);
+  }
+  assert.equal(value.vm, vm); assert.equal(value.owned.filter(value => value === 'vm-owned').length, 1);
+  assert.deepEqual(value.requests.slice(2).map(value => value.params), Array(4).fill({ isolateId: isolate }));
+  await value.close();
+});
+
+test('lifecycle RPC retains original bounded response parsing and 3s request deadline', async t => {
+  for (const [message, code] of [[PRIVATE_TEXT, 'vm_response_json'], ['x'.repeat(131073), 'vm_response_bound'],
+    [new Uint8Array([1]), 'vm_response_type']]) {
+    const value = observerFixture({ message: (request, normal) => request.method === LIFECYCLE_EXTENSION ? message : normal });
+    const isolate = await value.run();
+    await assert.rejects(readLifecycle(value.vm, isolate), error => error.observerCode === code);
+    await value.close();
+  }
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100 });
+  const value = observerFixture({ pending: LIFECYCLE_EXTENSION });
+  const isolate = await value.run();
+  const result = assert.rejects(readLifecycle(value.vm, isolate), error => error.observerCode === 'vm_request_deadline');
+  await flush(); t.mock.timers.tick(3000); await result;
+  assert.equal(value.requests.filter(value => value.method === LIFECYCLE_EXTENSION).length, 1);
+  await value.close();
+});
+
+test('fresh baseline and new matching callback replace tree/date reads without changing real inputs or UI gates', async () => {
+  const value = productExerciseFixture(); await value.run();
+  const home = value.events.findIndex(row => row.includes('KEYCODE_HOME'));
+  const paused = value.events.findIndex(row => row[0] === 'sleep' && row[1] === 6000);
+  assert.deepEqual(value.events.slice(home - 1, paused + 1), [
+    ['lifecycle', 'lifecycle_baseline'], ['adb', 'shell', 'input', 'keyevent', 'KEYCODE_HOME'],
+    ['wait', 15000], ['lifecycle', 'lifecycle_read'], ['sleep', 6000],
+  ]);
+  assert.ok(!value.events.some(row => row[0] === 'snapshot' && row[2] === 'background_snapshot'));
+  assert.equal(value.events.filter(row => row[0] === 'adb' && row[2] === '/system/bin/date').length, 2);
+  assert.equal(value.events.filter(row => row.includes('KEYCODE_HOME')).length, 1);
+  assert.deepEqual(value.state.status().calls, { weather: 3, air_quality: 3 });
+  assert.equal(value.diagnostic.timing.background_polls, 1);
+  assert.equal(value.diagnostic.timing.callback_advance, 3);
+});
+
+test('fresh resumed baseline is required, while no earlier callback is distinct from an invented event', async () => {
+  for (const change of [{ current_lifecycle: 'hidden' }, { current_lifecycle: null }, { callback_state: 'inactive' }]) {
+    const value = productExerciseFixture({ lifecycle(value, report, diagnostic) {
+      if (diagnostic.subphase === 'lifecycle_baseline') Object.assign(value, change);
+    } });
+    const { receipt } = await rejectedProducts(value);
+    assert.equal(receipt.subphase, 'lifecycle_validate');
+    assert.ok(!value.events.some(row => row.includes('KEYCODE_HOME')));
+  }
+  const value = productExerciseFixture({ lifecycle(value, report, diagnostic) {
+    if (diagnostic.subphase === 'lifecycle_baseline') Object.assign(value, { callback_state: null, callback_sequence: 0 });
+  } });
+  await value.run(); assert.equal(value.report.passed, true);
+});
+
+test('callback sequence regression, malformed observation and stale or mismatched events never prove background', async () => {
+  for (const [change, code] of [[{ callback_sequence: 0, callback_state: null }, 'validation_failed'],
+    [{ guest_utc_ms: PRIVATE_TEXT }, 'validation_failed'], [{ callback_sequence: 1 }, 'observation_deadline'],
+    [{ current_lifecycle: 'paused', callback_state: 'hidden' }, 'observation_deadline'],
+    [{ current_lifecycle: 'resumed', callback_state: 'resumed' }, 'observation_deadline']]) {
+    const value = productExerciseFixture({ lifecycle(value, report, diagnostic) {
+      if (diagnostic.subphase === 'lifecycle_read') Object.assign(value, change);
+    } });
+    const { receipt } = await rejectedProducts(value);
+    assert.equal(receipt.code, code);
+    assert.ok(!value.events.some(row => row[0] === 'sleep' && row[1] === 6000));
+    assert.equal(value.report.checks.real_android_background_resume, undefined);
+  }
+});
+
+test('current host-before, host-after and guest clocks must all fit the same immutable window', async () => {
+  const { prepared } = fixture(), window = productClockWindow(prepared.products);
+  for (const [side, position] of [['host_before', 'expired'], ['host_after', 'expired'], ['guest', 'expired'],
+    ['host_before', 'early'], ['host_after', 'early'], ['guest', 'early']]) {
+    const diagnostic = new ObserverDiagnostic(); diagnostic.beginProducts(3);
+    let read = false, host = side === 'host_before' ? (position === 'early' ? window.acquired - 1 : window.expires) : window.acquired;
+    const context = { diagnostic, clock: () => host, remaining() {}, async lifecycle() {
+      read = true;
+      if (side === 'host_after') host = position === 'early' ? window.acquired - 1 : window.expires;
+      return lifecycleSnapshot({ guest_utc_ms: side === 'guest'
+        ? position === 'early' ? window.acquired - 1 : window.expires : window.acquired });
+    } };
+    await assert.rejects(lifecycleWithinWindow(context, prepared.products));
+    assert.equal(read, side !== 'host_before');
+    assert.equal(diagnostic.productFailure(new Error()).timing.clock_failure_side, side);
+  }
+  for (const now of [window.acquired, window.expires - 1]) {
+    const diagnostic = new ObserverDiagnostic(); diagnostic.beginProducts(3);
+    assert.equal((await lifecycleWithinWindow({ diagnostic, remaining() {}, clock: () => now,
+      lifecycle: async () => lifecycleSnapshot({ guest_utc_ms: now }) }, prepared.products)).guest_utc_ms, now);
+  }
+});
+
+test('late callback response and interruption cannot bypass original wait/global bounds', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse(NOW) });
+  for (const mode of ['wait', 'global', 'interrupted']) {
+    const value = productExerciseFixture(); let afterRead = false;
+    const primary = new (adbFailure({}).constructor)('interrupted');
+    const original = value.context.lifecycle;
+    value.context.remaining = () => { if (afterRead && mode === 'interrupted') throw primary; };
+    value.context.lifecycle = async () => {
+      const result = await original();
+      if (value.diagnostic.subphase === 'lifecycle_read') {
+        afterRead = true;
+        if (mode !== 'interrupted') t.mock.timers.tick(mode === 'global' ? 1000 : 15000);
+      }
+      return result;
+    };
+    const waiter = value.context.waitFor;
+    value.context.waitFor = (check, ms) => value.diagnostic.waitingFor === 'background_wait'
+      ? waitForObservation(check, Date.now() + (mode === 'global' ? 1000 : 180000), value.context.remaining)
+      : waiter(check, ms);
+    // Deliberately independent synthetic UTC clock: isolate monotonic wait gates.
+    const { receipt, failure } = await rejectedProducts(value);
+    assert.equal(receipt.code, mode === 'interrupted' ? 'interrupted' : 'observation_deadline');
+    if (mode === 'interrupted') assert.equal(failure, primary);
+    assert.ok(!value.events.some(row => row[0] === 'sleep' && row[1] === 6000));
+  }
+});
+
+test('timing is monotone, bounded and closed, retains original errors and resets between phases', async t => {
+  let monotonic = 100;
+  t.mock.method(performance, 'now', () => monotonic);
+  const diagnostic = new ObserverDiagnostic(); diagnostic.beginProducts(3);
+  const primary = new Error(PRIVATE_TEXT);
+  await assert.rejects(diagnostic.timed('baseline_read_ms', async () => { monotonic += 17; throw primary; }), error => error === primary);
+  assert.equal(diagnostic.productFailure(primary).timing.baseline_read_ms, 17);
+  const fields = Object.keys(diagnostic.productFailure(primary).timing);
+  for (const invalid of [PRIVATE_TEXT, {}, [], undefined, NaN, Infinity, -1, 180001, 1.5]) {
+    diagnostic.timing = Object.fromEntries(fields.map(key => [key, invalid]));
+    diagnostic.timing[PRIVATE_TEXT] = PRIVATE_TEXT;
+    const value = diagnostic.productFailure(primary).timing;
+    assert.deepEqual(Object.keys(value), fields); assert.ok(Object.values(value).every(value => value === null));
+  }
+  diagnostic.timing = Object.fromEntries(fields.map(key => [key, key.endsWith('_ms') ? 180000 : key === 'clock_failure_side' ? 'host_after' : 64]));
+  assert.equal(diagnostic.productFailure(primary).timing.clock_failure_side, 'host_after');
+  diagnostic.noteTiming(() => { throw primary; });
+  diagnostic.beginProducts(1); assert.ok(Object.values(diagnostic.productFailure(primary).timing).every(value => value === null));
+  diagnostic.noteTiming = () => { throw primary; };
+  const other = new Error('different primary');
+  await assert.rejects(diagnostic.timed('baseline_read_ms', async () => { throw other; }), error => error === other);
+  assert.equal(await diagnostic.timed('baseline_read_ms', async () => 7), 7);
+});
+
+test('deadline before a new lifecycle request cannot reuse the preceding request timing', async () => {
+  const { prepared } = fixture(), diagnostic = new ObserverDiagnostic(); diagnostic.beginProducts(3);
+  const window = productClockWindow(prepared.products);
+  let host = window.acquired, requests = 0;
+  const context = { diagnostic, remaining() {}, clock: () => host,
+    async lifecycle() { requests++; return lifecycleSnapshot(); } };
+  await lifecycleWithinWindow(context, prepared.products);
+  assert.ok(Number.isInteger(diagnostic.timing.background_read_ms));
+  host = window.expires;
+  await assert.rejects(lifecycleWithinWindow(context, prepared.products), error => error.observerCode === 'clock_expired');
+  assert.equal(requests, 1);
+  const timing = diagnostic.productFailure(new Error()).timing;
+  assert.equal(timing.background_read_ms, null); assert.equal(timing.clock_failure_side, 'host_before');
 });

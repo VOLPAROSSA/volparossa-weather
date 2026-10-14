@@ -16,12 +16,28 @@ import 'volparossa/views.dart';
 
 class _Lifecycle extends WidgetsBindingObserver {
   final List<String> observed = [];
+  int sequence = 0;
+  String? lastState;
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    sequence++;
+    lastState = state.name;
     observed.add(state.name);
     if (observed.length > 16) observed.removeAt(0);
   }
 }
+
+Map<String, Object?> _lifecycleSnapshot(_Lifecycle lifecycle) => {
+  // Constant-size read only: no mounted-tree walk, frame wait, input or clock
+  // adjustment. The driver checks this CURRENT clock, not a callback timestamp.
+  // Flutter f6ff1529 widgets/binding.dart updates the binding state before
+  // notifying observers; this sequence attests Flutter receipt, not OS timing.
+  'schema': 1, 'kind': 'overmorrow-native-lifecycle',
+  'current_lifecycle': WidgetsBinding.instance.lifecycleState?.name,
+  'callback_state': lifecycle.lastState,
+  'callback_sequence': lifecycle.sequence,
+  'guest_utc_ms': DateTime.now().toUtc().millisecondsSinceEpoch,
+};
 
 String _text(Widget widget) {
   if (widget is! Text || widget.data == null || widget.data!.length > 1024) {
@@ -202,6 +218,16 @@ Future<void> main() async {
     } catch (_) {
       return ServiceExtensionResponse.error(ServiceExtensionResponse.extensionError, 'Snapshot not ready');
     }
+  });
+  registerExtension('ext.volparossa.native_lifecycle', (method, parameters) async {
+    if (parameters.keys.any((key) => key != 'isolateId')) {
+      return ServiceExtensionResponse.error(ServiceExtensionResponse.invalidParams, 'No commands accepted');
+    }
+    final result = jsonEncode(_lifecycleSnapshot(lifecycle));
+    if (result.length > 1024) {
+      return ServiceExtensionResponse.error(ServiceExtensionResponse.extensionError, 'Lifecycle observation bound');
+    }
+    return ServiceExtensionResponse.result(result);
   });
   await app.main();
 }
