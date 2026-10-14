@@ -131,7 +131,7 @@ class ProfileTests(unittest.TestCase):
         self.assertIn('WidgetsBinding.instance.rootElement', source)
         self.assertIn('widget is DataTable', source)
         self.assertIn('hitTestInView(hit, center, view.viewId)', source)
-        self.assertIn("'schema': 2, 'kind': 'overmorrow-native-mounted-ui'", source)
+        self.assertIn("'schema': 3, 'kind': 'overmorrow-native-mounted-ui'", source)
         self.assertIn('ancestor.state is ScrollableState', source)
         self.assertIn('position.hasPixels && position.hasContentDimensions', source)
         self.assertIn('!position.isScrollingNotifier.value', source)
@@ -146,6 +146,35 @@ class ProfileTests(unittest.TestCase):
         self.assertNotIn('setState(', source)
         for operation in ('jumpTo(', 'animateTo(', 'goIdle(', 'goBallistic(', 'ensureVisible('):
             self.assertNotIn(operation, source)
+
+    def test_dynamic_system_insets_protect_footer_and_native_physical_target(self):
+        source = (HERE / 'native-android-entrypoint.dart').read_text()
+        self.assertIn('final padding = view.viewPadding, insets = view.viewInsets;', source)
+        for side in ('left', 'top', 'right', 'bottom'):
+            self.assertIn(f'math.max(padding.{side}, insets.{side})', source)
+        for check in ('topLeft.dx * scale >= safeLeft', 'topLeft.dy * scale >= safeTop',
+                      '(topLeft.dx + box.size.width) * scale <= safeRight',
+                      '(topLeft.dy + box.size.height) * scale <= safeBottom',
+                      'tapX > safeLeft && tapX < safeRight', 'tapY > safeTop && tapY < safeBottom'):
+            self.assertIn(check, source)
+        self.assertIn('(center.dx * scale).roundToDouble()', source)
+        self.assertIn('(center.dy * scale).roundToDouble()', source)
+        self.assertIn("'safe_target': safeTarget", source)
+        self.assertNotIn('systemGestureInsets', source)  # Gesture areas are not equivalent to tap interception.
+        patch_text = (HERE / 'upstream.patch').read_text()
+        self.assertIn('if (volparossaProfile) return SafeArea(top: false, child: Padding(padding: const EdgeInsets.all(24),', patch_text)
+        pin = json.loads((HERE / 'upstream.json').read_text())
+        self.assertEqual(pin['upstream_patch_sha256'], hashlib.sha256((HERE / 'upstream.patch').read_bytes()).hexdigest())
+        widget_test = (HERE / 'overlay/test/volparossa_ui_test.dart').read_text()
+        for operation in ('tester.view.padding = insets', 'tester.view.viewPadding = insets',
+                          'final rect = tester.getRect(refresh)', 'await tester.tap(refresh)',
+                          'layout.padding.bottom - 24', 'layout.padding.right - 24'):
+            self.assertIn(operation, widget_test)
+        self.assertNotIn('.onPressed!()', widget_test)
+        driver = (HERE / 'native-android-driver.mjs').read_text()
+        self.assertIn('schema: 4, acceptance_evidence: false', driver)
+        self.assertIn('current_lifecycle: LIFECYCLE.includes(snapshot.current_lifecycle)', driver)
+        self.assertIn('button.safe_target && button.scroll?.idle === true', driver)
 
     def test_read_only_product_observation_contract_and_no_raw_app_error(self):
         source = (HERE / 'native-android-entrypoint.dart').read_text()
@@ -172,12 +201,13 @@ class ProfileTests(unittest.TestCase):
         self.assertLess(provider.index('final product = NativeProduct.parse('),
                         provider.index('observed.productValidated = true;'))
 
-    def test_existing_23_dart_groups_preserved_with_closed_diagnostic_cases(self):
+    def test_existing_dart_groups_preserved_plus_system_inset_widget_regression(self):
         tests = list((HERE / 'overlay/test').glob('*_test.dart'))
-        # 22 declarations; the unchanged responsive UI declaration is run at
-        # two widths, producing the existing 23 hosted Flutter test cases.
+        # 23 declarations; the unchanged responsive UI declaration is run at
+        # two widths, producing 24 hosted Flutter test cases. The additional
+        # widget test exercises phone/side/zero insets through real tester.tap.
         self.assertEqual(sum(len(re.findall(r'\btest(?:Widgets)?\s*\(', path.read_text()))
-                             for path in tests), 22)
+                             for path in tests), 23)
         self.assertIn('for (final width in [390.0, 900.0])',
                       (HERE / 'overlay/test/volparossa_ui_test.dart').read_text())
         provider = (HERE / 'overlay/test/volparossa_provider_test.dart').read_text()

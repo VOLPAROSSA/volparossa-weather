@@ -26,9 +26,10 @@ function table(product, quality = false) {
         : `${sample.precipitation.start_at} → ${sample.precipitation.end_at}`] : [])]) };
 }
 function snapshot(tables = []) {
-  return { schema: 2, kind: 'overmorrow-native-mounted-ui', package: PACKAGE, platform: 'android',
+  return { schema: 3, kind: 'overmorrow-native-mounted-ui', package: PACKAGE, platform: 'android',
     profile: true, origin: 'http://127.0.0.1:43210', tables, labels: [], refresh: [],
-    lifecycle: ['resumed'], current_lifecycle: 'resumed', screen: { width: 1080, height: 1920 } };
+    lifecycle: ['resumed'], current_lifecycle: 'resumed', screen: { width: 1080, height: 1920,
+      safe_area: { left: 0, top: 63, right: 1080, bottom: 1815 } } };
 }
 
 test('fixture separates loopback API/control and makes no core claim', () => {
@@ -121,7 +122,8 @@ test('wrong app/profile/origin and unbounded data rejected', () => {
   }
 });
 function refreshButton() {
-  return { x: 540, y: 1800, enabled: true, visible: true, hit_testable: true, scroll: { ancestors: 1, idle: true } };
+  return { x: 540, y: 1800, enabled: true, visible: true, hit_testable: true, safe_target: true,
+    scroll: { ancestors: 1, idle: true } };
 }
 test('visible refresh is bounded and carries independent hit-test observation', () => {
   const value = snapshot(); value.refresh = [refreshButton()];
@@ -130,8 +132,8 @@ test('visible refresh is bounded and carries independent hit-test observation', 
   value.refresh[0].hit_testable = false; value.refresh[0].x = -2;
   assert.throws(() => validateSnapshot(value));
 });
-test('refresh snapshot v2 requires exact bounded ancestor-idle evidence; historical v1 is not readiness', () => {
-  for (const change of [value => { value.schema = 1; }, value => { delete value.refresh[0].scroll; },
+test('refresh snapshot v3 requires exact bounded ancestor-idle evidence; historical snapshots are not readiness', () => {
+  for (const change of [value => { value.schema = 1; }, value => { value.schema = 2; }, value => { delete value.refresh[0].scroll; },
     value => { value.refresh[0].extra = 'private'; }, value => { value.refresh[0].scroll.extra = 'private'; },
     value => { value.refresh[0].scroll.ancestors = 17; }, value => { value.refresh[0].scroll.ancestors = -1; },
     value => { value.refresh[0].scroll.ancestors = 1.5; }, value => { value.refresh[0].scroll.ancestors = '1'; },
@@ -142,6 +144,24 @@ test('refresh snapshot v2 requires exact bounded ancestor-idle evidence; histori
   }
   const value = snapshot(); value.refresh = [{ ...refreshButton(), scroll: { ancestors: 0, idle: null } }];
   validateSnapshot(value); // Explicit unknown, never affirmative idle.
+});
+test('safe physical target requires exact real view bounds and strictly interior rounded tap', () => {
+  for (const change of [value => { delete value.screen.safe_area; },
+    value => { value.screen.safe_area = {}; }, value => { value.screen.safe_area.extra = 'private'; },
+    value => { value.screen.safe_area.left = -1; }, value => { value.screen.safe_area.top = NaN; },
+    value => { value.screen.safe_area.right = 1081; }, value => { value.screen.safe_area.bottom = 1921; },
+    value => { value.screen.safe_area.left = value.screen.safe_area.right; },
+    value => { value.screen.safe_area.top = value.screen.safe_area.bottom; },
+    value => { value.screen.safe_area.bottom = '1815'; },
+    value => { value.screen.safe_area = null; }, value => { delete value.refresh[0].safe_target; },
+    value => { value.refresh[0].safe_target = 'true'; }, value => { value.refresh[0].visible = false; },
+    value => { value.refresh[0].x = 0.4; }, value => { value.refresh[0].x = 1079.6; },
+    value => { value.refresh[0].y = 63.4; }, value => { value.refresh[0].y = 1814.6; }]) {
+    const value = snapshot(); value.refresh = [refreshButton()]; change(value);
+    assert.throws(() => validateSnapshot(value));
+  }
+  const value = snapshot(); value.refresh = [{ ...refreshButton(), safe_target: false }];
+  value.screen.safe_area = null; validateSnapshot(value); // Unknown remains ineligible, not fabricated zero insets.
 });
 function refreshExercise(options = {}) {
   const diagnostic = new ObserverDiagnostic(); diagnostic.beginProducts(2);
@@ -191,12 +211,13 @@ test('moving or unknown-idle targets exhaust the same sixteen observations witho
     assert.ok(value.events.every(row => row[0] === 'snapshot'));
   }
 });
-test('readiness that moves, loses idle or changes dimensions must establish a new stable pair', async t => {
+test('readiness that moves, loses idle or changes safe view bounds must establish a new stable pair', async t => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100 });
-  for (const mode of ['subpixel', 'dimensions', 'ancestor', 'lost-idle']) {
+  for (const mode of ['subpixel', 'dimensions', 'insets', 'ancestor', 'lost-idle']) {
     const value = refreshExercise({ read(value, n) {
       if (n >= 2 && mode === 'subpixel') value.refresh[0].x += 0.1;
       if (n >= 2 && mode === 'dimensions') value.screen.width += 1;
+      if (n >= 2 && mode === 'insets') value.screen.safe_area.bottom -= 1;
       if (n >= 2 && mode === 'ancestor') value.refresh[0].scroll.ancestors = 2;
       if (n === 2 && mode === 'lost-idle') value.refresh[0].scroll.idle = false;
     } });
@@ -210,6 +231,30 @@ test('readiness that moves, loses idle or changes dimensions must establish a ne
     await result;
     assert.equal(value.events.filter(row => row[0] === 'adb').length, 1);
   }
+});
+test('unsafe system bar or keyboard targets are never tapped; safe scrolling still uses one tap', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100 });
+  for (const mode of ['bottom', 'keyboard', 'left', 'right', 'unknown', 'box-overlap']) {
+    const value = refreshExercise({ read(value) {
+      value.refresh[0].safe_target = false;
+      if (mode === 'bottom') value.screen.safe_area.bottom = 1800;
+      if (mode === 'keyboard') value.screen.safe_area.bottom = 1000;
+      if (mode === 'left') value.screen.safe_area.left = 600;
+      if (mode === 'right') value.screen.safe_area.right = 500;
+      if (mode === 'unknown') value.screen.safe_area = null;
+    } });
+    const result = assert.rejects(value.run()); await flush();
+    for (let i = 1; i < 16; i++) { t.mock.timers.tick(250); await flush(); }
+    await result;
+    assert.equal(value.diagnostic.progress.refresh_search_attempts, 16);
+    assert.ok(!value.events.some(row => row[0] === 'adb'));
+    assert.equal(value.events.filter(row => row[0] === 'swipe').length, mode === 'unknown' ? 0 : 15);
+  }
+  const value = refreshExercise({ read(value, n) { value.refresh[0].safe_target = n > 1; } });
+  const result = value.run(); await flush();
+  t.mock.timers.tick(250); await flush(); t.mock.timers.tick(250); await result;
+  assert.equal(value.events.filter(row => row[0] === 'swipe').length, 1);
+  assert.deepEqual(value.events.filter(row => row[0] === 'adb'), [['adb', 'shell', 'input', 'tap', '540', '1800']]);
 });
 test('stationary target returned at timeout, global deadline or interruption cannot be tapped', async t => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100 });
@@ -666,7 +711,7 @@ test('failure publisher keeps historical startup schema and resets product-phase
     diagnostic.beginProducts(1);
     recordDriverFailure(report, diagnostic, new TypeError(PRIVATE_TEXT));
     assert.equal(report.failure, 'NATIVE_TRIAL_PHASE_FAILED');
-    assert.equal(report.failure_diagnostic.schema, 3);
+    assert.equal(report.failure_diagnostic.schema, 4);
     assert.equal(report.failure_diagnostic.subphase, 'unobserved');
     assert.equal(report.failure_diagnostic.progress.weather_requests_observed, null);
   }
@@ -988,7 +1033,7 @@ async function rejectedProducts(fixture) {
   recordDriverFailure(fixture.report, fixture.diagnostic, failure);
   assert.equal(fixture.report.passed, false);
   const receipt = fixture.report.failure_diagnostic;
-  assert.equal(receipt.schema, 3); assert.equal(receipt.acceptance_evidence, false);
+  assert.equal(receipt.schema, 4); assert.equal(receipt.acceptance_evidence, false);
   assert.equal(receipt.cause_established, false); assert.equal(receipt.raw_output_retained, false);
   assert.ok(Buffer.byteLength(JSON.stringify(receipt)) <= 2048);
   for (const raw of ['private-token', 'http://', '/private/', 'Expires ', 'Temperature']) {
@@ -1278,7 +1323,7 @@ test('missing value, expiry consumption, real lifecycle, hidden tables and no-ex
     if (stage === 'expired_tables') assert.equal(receipt.progress.tables_remaining, 1);
   }
 });
-test('schema3 retains bounded progress, cannot echo arbitrary data, and optional diagnosis cannot mask failure', () => {
+test('schema4 retains bounded progress, cannot echo arbitrary data, and optional diagnosis cannot mask failure', () => {
   const diagnostic = new ObserverDiagnostic(); diagnostic.beginProducts(1);
   const keys = Object.keys(diagnostic.productFailure(new Error()).progress);
   for (const invalid of [PRIVATE_TEXT, {}, [], NaN, Infinity, -1, 999999, 1.5]) {
@@ -1312,6 +1357,7 @@ test('post-tap pending counts retain fresh closed app state, never a stale pre-t
     const value = productExerciseFixture({ snapshot(observation, report, diagnostic) {
       observation.diagnostic = appDiagnostic();
       if (diagnostic.subphase === 'post_tap_snapshot') {
+        observation.current_lifecycle = 'paused';
         if (mode === 'failure') throw new Error(PRIVATE_TEXT);
         if (mode === 'missing') delete observation.diagnostic;
         else observation.diagnostic.app.loading = true;
@@ -1330,10 +1376,23 @@ test('post-tap pending counts retain fresh closed app state, never a stale pre-t
     assert.equal(value.events.filter(row => row[0] === 'snapshot' && row[2] === 'post_tap_snapshot').length, 1);
     if (mode === 'current') {
       assert.equal(receipt.last_snapshot.snapshot_subphase, 'post_tap_snapshot');
+      assert.equal(receipt.last_snapshot.current_lifecycle, 'paused');
       assert.equal(receipt.last_snapshot.app.loading, true);
     } else assert.equal(receipt.last_snapshot, null);
     assert.equal(value.report.checks.initial_exact_native_rows, true);
     assert.equal(value.report.checks.actual_tap_refresh_and_missing_values, undefined);
+  }
+});
+test('closed last-snapshot lifecycle distinguishes real current state without exporting history or unknown input', () => {
+  const diagnostic = new ObserverDiagnostic(); diagnostic.beginProducts(2);
+  for (const state of ['resumed', 'inactive', 'hidden', 'paused', 'detached', null, undefined, PRIVATE_TEXT, {}, []]) {
+    diagnostic.observeProducts({ diagnostic: appDiagnostic(), current_lifecycle: state, lifecycle: [PRIVATE_TEXT] });
+    const receipt = diagnostic.productFailure(new Error(PRIVATE_TEXT));
+    assert.equal(receipt.schema, 4);
+    assert.equal(receipt.last_snapshot.current_lifecycle, typeof state === 'string' && state !== PRIVATE_TEXT ? state : null);
+    assert.ok(!JSON.stringify(receipt).includes(PRIVATE_TEXT));
+    assert.ok(!Object.hasOwn(receipt.last_snapshot, 'lifecycle'));
+    assert.ok(Buffer.byteLength(JSON.stringify(receipt)) <= 2048);
   }
 });
 test('optional post-tap observation cannot extend count deadline or mask interruption/control failure', async t => {

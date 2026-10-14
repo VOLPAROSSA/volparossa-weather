@@ -33,6 +33,7 @@ TABLE_PROOF = BUILD / "overmorrow-hosted-table-ci"
 WORKFLOW = "Build hosted Overmorrow client"
 GIB = 1024**3
 FLUTTER_MEMORY = 3 * GIB
+FLUTTER_TEST_COUNT = 24
 WHICH = Path("/usr/bin/which.debianutils")
 PROFILE_DIRS = ("profile", "config", "cache", "runtime", "tmp", "appdata")
 
@@ -373,7 +374,8 @@ def execute(helper, platform):
             raw = H.run(name, sandbox(flutter_command(action), mode="compile"), 900,
                         env=environment(), memory=FLUTTER_MEMORY)
             if action == "test":
-                require(re.search(rb"\+23(?:\s|:|\))", raw) and b"All tests passed!" in raw, "FLUTTER_TEST_COUNT_CHANGED")
+                require(re.search(rb"\+" + str(FLUTTER_TEST_COUNT).encode() + rb": All tests passed!", raw),
+                        "FLUTTER_TEST_COUNT_CHANGED")
         verify_phase_inputs(helper, pin)
         phase = "static-deploy"
         # Mode tightening applies solely to this new generated public build.
@@ -417,7 +419,7 @@ def execute(helper, platform):
             system_tools=tools,
             tool_state=tool_state,
             sdk_executed_in_disposable_sandbox=True, runtime=runtime, reports=reports,
-            deployment_sha256=H.sha(H.read(OUTPUT / "deployment.json")), flutter_tests=23,
+            deployment_sha256=H.sha(H.read(OUTPUT / "deployment.json")), flutter_tests=FLUTTER_TEST_COUNT,
             compiled_networkless=True, locked_dependencies=True, actual_synthetic_ui=True,
             actual_synthetic_tables=True, core_delivery=False, weather_origin=False, native_mobile=False,
             copyright_notices_preserved=True))

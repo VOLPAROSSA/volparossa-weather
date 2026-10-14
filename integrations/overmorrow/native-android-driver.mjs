@@ -19,6 +19,7 @@ export const HEADERS = Object.freeze({
 });
 const pause = ms => new Promise(done => setTimeout(done, ms));
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const LIFECYCLE = Object.freeze(['resumed', 'inactive', 'hidden', 'paused', 'detached']);
 
 function decimal(value) {
   assert.ok(typeof value === 'string' && value.length <= 40);
@@ -38,27 +39,34 @@ export function numberEqual(actual, expected) {
 }
 
 export function validateSnapshot(value) {
-  assert.ok(value && value.schema === 2 && value.kind === 'overmorrow-native-mounted-ui');
+  assert.ok(value && value.schema === 3 && value.kind === 'overmorrow-native-mounted-ui');
   assert.equal(value.package, PACKAGE); assert.equal(value.platform, 'android');
   assert.equal(value.profile, true); assert.equal(value.origin, ORIGIN);
   assert.ok(Array.isArray(value.tables) && value.tables.length <= 4);
   assert.ok(Array.isArray(value.labels) && value.labels.length <= 2048
     && value.labels.every(text => typeof text === 'string' && text.length <= 1024));
   assert.ok(Array.isArray(value.lifecycle) && value.lifecycle.length <= 16
-    && value.lifecycle.every(state => ['resumed', 'inactive', 'hidden', 'paused', 'detached'].includes(state)));
-  assert.ok(['resumed', 'inactive', 'hidden', 'paused', 'detached', null].includes(value.current_lifecycle));
-  assert.ok(value.screen && ['width', 'height'].every(key => Number.isInteger(value.screen[key])
+    && value.lifecycle.every(state => LIFECYCLE.includes(state)));
+  assert.ok(value.current_lifecycle === null || LIFECYCLE.includes(value.current_lifecycle));
+  assert.ok(exactKeys(value.screen, ['width', 'height', 'safe_area']) && ['width', 'height'].every(key => Number.isInteger(value.screen[key])
     && value.screen[key] >= 200 && value.screen[key] <= 4096));
+  const safe = value.screen.safe_area;
+  assert.ok(safe === null || (exactKeys(safe, ['left', 'top', 'right', 'bottom'])
+    && Object.values(safe).every(Number.isFinite) && safe.left >= 0 && safe.top >= 0
+    && safe.right <= value.screen.width && safe.bottom <= value.screen.height
+    && safe.left < safe.right && safe.top < safe.bottom));
   assert.ok(Array.isArray(value.refresh) && value.refresh.length <= 1);
   for (const button of value.refresh) {
-    assert.ok(exactKeys(button, ['enabled', 'visible', 'hit_testable', 'x', 'y', 'scroll']));
-    assert.ok(['enabled', 'visible', 'hit_testable'].every(key => typeof button[key] === 'boolean'));
+    assert.ok(exactKeys(button, ['enabled', 'visible', 'hit_testable', 'safe_target', 'x', 'y', 'scroll']));
+    assert.ok(['enabled', 'visible', 'hit_testable', 'safe_target'].every(key => typeof button[key] === 'boolean'));
     assert.ok(exactKeys(button.scroll, ['ancestors', 'idle']));
     assert.ok(Number.isInteger(button.scroll.ancestors) && button.scroll.ancestors >= 0 && button.scroll.ancestors <= 16);
     assert.ok(button.scroll.ancestors === 0 ? button.scroll.idle === null : typeof button.scroll.idle === 'boolean');
     assert.ok(Number.isFinite(button.x) && Number.isFinite(button.y));
     if (button.visible) assert.ok(button.x > 0 && button.x < value.screen.width
       && button.y > 0 && button.y < value.screen.height);
+    if (button.safe_target) assert.ok(button.visible && safe && Math.round(button.x) > safe.left
+      && Math.round(button.x) < safe.right && Math.round(button.y) > safe.top && Math.round(button.y) < safe.bottom);
   }
   for (const table of value.tables) {
     assert.ok(Object.hasOwn(HEADERS, table.product));
@@ -186,6 +194,7 @@ export class ObserverDiagnostic {
         ? { weather: projectProviderObservation(value.provider.weather), air_quality: projectProviderObservation(value.provider.air_quality) } : null;
       this.appObservation = {
         snapshot_subphase: OBSERVER_SUBPHASES.has(this.subphase) ? this.subphase : 'unobserved',
+        current_lifecycle: LIFECYCLE.includes(snapshot.current_lifecycle) ? snapshot.current_lifecycle : null,
         provider, app: projectAppObservation(value.app),
       };
     } catch { /* Optional observation cannot change the real snapshot outcome. */ }
@@ -197,12 +206,13 @@ export class ObserverDiagnostic {
     const count = (key, max) => Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= max ? value[key] : null;
     const flag = key => typeof value[key] === 'boolean' ? value[key] : null;
     const last = this.appObservation;
-    const lastSnapshot = exactKeys(last, ['snapshot_subphase', 'provider', 'app'])
+    const lastSnapshot = exactKeys(last, ['snapshot_subphase', 'current_lifecycle', 'provider', 'app'])
       ? { snapshot_subphase: OBSERVER_SUBPHASES.has(last.snapshot_subphase) ? last.snapshot_subphase : 'unobserved',
+        current_lifecycle: LIFECYCLE.includes(last.current_lifecycle) ? last.current_lifecycle : null,
         provider: exactKeys(last.provider, ['weather', 'air_quality'])
           ? { weather: projectProviderObservation(last.provider.weather), air_quality: projectProviderObservation(last.provider.air_quality) } : null,
         app: projectAppObservation(last.app) } : null;
-    return { ...this.failure(error), schema: 3, acceptance_evidence: false,
+    return { ...this.failure(error), schema: 4, acceptance_evidence: false,
       progress: {
         expected_requests_per_product: count('expected_requests_per_product', 3),
         weather_requests_observed: count('weather_requests_observed', 3),
@@ -396,9 +406,9 @@ export async function tapNativeRefresh({ diagnostic, waitFor, snapshot, swipe, a
     diagnostic.note(() => ({ refresh_search_attempts: attempts }));
     const value = await diagnostic.at('refresh_snapshot', snapshot), button = value.refresh[0];
     diagnostic.subphase = 'refresh_target';
-    const ready = button?.enabled && button.visible && button.hit_testable && button.scroll?.idle === true;
+    const ready = button?.enabled && button.visible && button.hit_testable && button.safe_target && button.scroll?.idle === true;
     const candidate = ready ? { x: button.x, y: button.y, width: value.screen.width, height: value.screen.height,
-      ancestors: button.scroll.ancestors } : null;
+      ancestors: button.scroll.ancestors, ...value.screen.safe_area } : null;
     // isScrollingNotifier covers drag/ballistic activity; equal unrounded
     // physical coordinates across separate polls also reject moving layouts.
     // Neither observation invokes the callback or repairs the app's state.
@@ -408,7 +418,7 @@ export async function tapNativeRefresh({ diagnostic, waitFor, snapshot, swipe, a
       diagnostic.subphase = 'refresh_unobserved';
       throw new Error('actual stationary refresh target not reachable');
     }
-    if (!button || (!button.visible && button.scroll?.idle === true)) await swipe(value);
+    if (!button || ((!button.visible || (!button.safe_target && value.screen.safe_area)) && button.scroll?.idle === true)) await swipe(value);
     return null;
   });
   diagnostic.waitingFor = null;

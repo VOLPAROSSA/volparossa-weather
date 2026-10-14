@@ -5,6 +5,7 @@ import hashlib
 import os
 from pathlib import Path
 import runpy
+import re
 import stat
 import subprocess
 import sys
@@ -44,6 +45,20 @@ def report(table=False):
 
 
 class HostedOvermorrow(unittest.TestCase):
+    def test_hosted_flutter_count_includes_system_inset_regression(self):
+        test_root = ROOT / 'integrations/overmorrow/overlay/test'
+        declarations = sum(len(re.findall(r'\btest(?:Widgets)?\s*\(', source.read_text()))
+                           for source in test_root.glob('*_test.dart'))
+        self.assertEqual(W['FLUTTER_TEST_COUNT'], 24)
+        self.assertEqual(declarations + 1, W['FLUTTER_TEST_COUNT'])
+        self.assertIn('for (final width in [390.0, 900.0])',
+                      (test_root / 'volparossa_ui_test.dart').read_text())
+        pattern = rb'\+' + str(W['FLUTTER_TEST_COUNT']).encode() + rb': All tests passed!'
+        self.assertIsNotNone(re.search(pattern, b'00:04 +24: All tests passed!\n'))
+        for raw in (b'+23: All tests passed!', b'+24: case\n+25: All tests passed!',
+                    b'+24 ~1: All tests passed!', b'+24 -1: Some tests failed!'):
+            self.assertIsNone(re.search(pattern, raw))
+
     def test_explicit_workflow_guard_rejects_development_or_other_workflow(self):
         env = dict(GITHUB_ACTIONS="true", RUNNER_OS="Linux", RUNNER_ENVIRONMENT="github-hosted",
             GITHUB_REPOSITORY="VOLPAROSSA/volparossa-weather", GITHUB_WORKFLOW=W["WORKFLOW"],

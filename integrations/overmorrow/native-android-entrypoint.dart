@@ -4,6 +4,7 @@
 import 'dart:convert';
 import 'dart:developer';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -40,6 +41,17 @@ Map<String, Object?> _snapshot(_Lifecycle lifecycle) {
   final root = WidgetsBinding.instance.rootElement;
   if (root == null) throw const FormatException('No mounted app');
   final view = WidgetsBinding.instance.platformDispatcher.views.single;
+  // Flutter hit testing cannot see Android system-window interception. These
+  // are actual physical view metrics, not guessed navigation-bar dimensions.
+  final physical = view.physicalSize;
+  final padding = view.viewPadding, insets = view.viewInsets;
+  final safeLeft = math.max(padding.left, insets.left);
+  final safeTop = math.max(padding.top, insets.top);
+  final safeRight = physical.width - math.max(padding.right, insets.right);
+  final safeBottom = physical.height - math.max(padding.bottom, insets.bottom);
+  final hasSafeArea = [safeLeft, safeTop, safeRight, safeBottom].every((v) => v.isFinite) &&
+      safeLeft >= 0 && safeTop >= 0 && safeRight <= physical.width && safeBottom <= physical.height &&
+      safeLeft < safeRight && safeTop < safeBottom;
   void visit(Element element) {
     if (++visited > 25000) throw const FormatException('Widget traversal bound');
     final widget = element.widget;
@@ -93,8 +105,13 @@ Map<String, Object?> _snapshot(_Lifecycle lifecycle) {
         if (box is RenderBox && box.attached && box.hasSize) {
           final topLeft = box.localToGlobal(Offset.zero);
           final center = box.localToGlobal(box.size.center(Offset.zero));
-          final physical = view.physicalSize;
           final scale = view.devicePixelRatio;
+          final tapX = (center.dx * scale).roundToDouble();
+          final tapY = (center.dy * scale).roundToDouble();
+          final safeTarget = hasSafeArea && topLeft.dx * scale >= safeLeft && topLeft.dy * scale >= safeTop &&
+              (topLeft.dx + box.size.width) * scale <= safeRight &&
+              (topLeft.dy + box.size.height) * scale <= safeBottom &&
+              tapX > safeLeft && tapX < safeRight && tapY > safeTop && tapY < safeBottom;
           final hit = HitTestResult();
           WidgetsBinding.instance.hitTestInView(hit, center, view.viewId);
           final hitTestable = hit.path.any((entry) {
@@ -122,6 +139,7 @@ Map<String, Object?> _snapshot(_Lifecycle lifecycle) {
           refresh.add({
             'enabled': widget.onPressed != null,
             'hit_testable': hitTestable,
+            'safe_target': safeTarget,
             'x': center.dx * scale, 'y': center.dy * scale,
             'visible': topLeft.dx >= 0 && topLeft.dy >= 0 &&
                 (topLeft.dx + box.size.width) * scale <= physical.width &&
@@ -139,13 +157,14 @@ Map<String, Object?> _snapshot(_Lifecycle lifecycle) {
   // is a substitute for the driver's exact native rows/lifecycle acceptance.
   final state = homes == 1 ? home : null;
   return {
-    'schema': 2, 'kind': 'overmorrow-native-mounted-ui',
+    'schema': 3, 'kind': 'overmorrow-native-mounted-ui',
     'package': 'org.volparossa.weather.trial', 'platform': 'android',
     'profile': volparossaProfile, 'origin': volparossaNativeOrigin,
     'tables': tables, 'labels': labels, 'refresh': refresh,
     'lifecycle': lifecycle.observed,
     'current_lifecycle': WidgetsBinding.instance.lifecycleState?.name,
-    'screen': {'width': view.physicalSize.width, 'height': view.physicalSize.height},
+    'screen': {'width': physical.width, 'height': physical.height,
+      'safe_area': hasSafeArea ? {'left': safeLeft, 'top': safeTop, 'right': safeRight, 'bottom': safeBottom} : null},
     'diagnostic': {
       'schema': 1, 'provider': providerObservation(),
       'app': {

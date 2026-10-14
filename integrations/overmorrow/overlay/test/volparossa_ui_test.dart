@@ -95,6 +95,69 @@ void main() {
     );
   }
   testWidgets(
+    'scrolled provider footer avoids platform view insets and receives a tester pointer tap',
+    (tester) async {
+      final fixture = jsonDecode(
+        File('test/volparossa/fixtures/products.json').readAsStringSync(),
+      );
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetPadding);
+      addTearDown(tester.view.resetViewPadding);
+      // Phone navigation, landscape side bars and zero-inset desktop layout.
+      // The test supplies platform metrics; it never calls onPressed directly.
+      for (final layout in [
+        (size: const Size(390, 800), padding: const EdgeInsets.only(bottom: 96)),
+        (size: const Size(900, 600), padding: const EdgeInsets.fromLTRB(80, 0, 72, 48)),
+        (size: const Size(900, 600), padding: EdgeInsets.zero),
+      ]) {
+        tester.view.devicePixelRatio = 2;
+        tester.view.physicalSize = layout.size * 2;
+        final insets = FakeViewPadding(left: layout.padding.left * 2,
+            top: layout.padding.top * 2, right: layout.padding.right * 2,
+            bottom: layout.padding.bottom * 2);
+        tester.view.padding = insets;
+        tester.view.viewPadding = insets;
+        final requests = <String>[];
+        final results = <NativeProducts>[];
+        final native = NativeProviderClient(
+          Uri.parse('http://127.0.0.1:43210'),
+          clock: () => DateTime.parse(fixture['now']),
+          createClient: () => MockClient((request) async {
+            requests.add(request.url.path);
+            return http.Response(jsonEncode(fixture[
+              request.url.path.endsWith('air-quality') ? 'air_quality' : 'weather'
+            ]), 200, headers: {'content-type': 'application/json'});
+          }),
+        );
+        await tester.pumpWidget(MaterialApp(home: Scaffold(
+          body: SingleChildScrollView(padding: EdgeInsets.zero, child: Column(children: [
+            const SizedBox(height: 1200),
+            ProviderSelector(loc: 'Configured public area', latLon: '52.52, 13.41',
+              updateLocation: (String _, String __) async { results.add(await native.load()); }),
+          ])),
+        )));
+        await tester.drag(find.byType(SingleChildScrollView), const Offset(0, -1800));
+        await tester.pumpAndSettle();
+        final refresh = find.widgetWithText(FilledButton, 'Refresh forecasts');
+        final rect = tester.getRect(refresh);
+        expect(rect.left, greaterThanOrEqualTo(layout.padding.left + 24));
+        expect(rect.right, lessThanOrEqualTo(layout.size.width - layout.padding.right - 24));
+        expect(rect.bottom, lessThanOrEqualTo(layout.size.height - layout.padding.bottom - 24));
+        expect(refresh.hitTestable(), findsOneWidget);
+        expect(requests, isEmpty);
+        await tester.tap(refresh);
+        await tester.pumpAndSettle();
+        expect(requests, ['/api/volparossa/forecast', '/api/volparossa/air-quality']);
+        expect(results, hasLength(1));
+        expect(results.single.weather, isNotNull);
+        expect(results.single.airQuality, isNotNull);
+        expect(tester.takeException(), null);
+        await tester.pumpWidget(const SizedBox());
+      }
+    },
+  );
+  testWidgets(
     'actual provider selector disables repeat input during a delayed native product pair',
     (tester) async {
       final fixture = jsonDecode(
