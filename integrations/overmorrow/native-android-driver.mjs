@@ -639,8 +639,10 @@ export async function exerciseNativeProducts({ report, diagnostic, control, wait
   const short = await products(3, shortPrepared);
   // App is at the footer after a real tap; the same native product widgets
   // must consume the response before Android takes the app to background.
+  // Use that one fresh snapshot for all pre-HOME UI predicates; a second VM
+  // tree traversal adds no predicate and spends the immutable product TTL.
   diagnostic.waitingFor = 'expiry_wait';
-  await waitFor(async () => {
+  const before = await waitFor(async () => {
     const value = await diagnostic.at('expiry_snapshot', snapshot);
     diagnostic.subphase = 'expiry_labels';
     diagnostic.note(() => ({ expiry_labels_matched: Object.values(short.products)
@@ -649,7 +651,7 @@ export async function exerciseNativeProducts({ report, diagnostic, control, wait
   }, 3000);
   diagnostic.waitingFor = null;
   await diagnostic.at('before_background', async () => {
-    const before = await snapshot(); assert.equal(before.current_lifecycle, 'resumed');
+    assert.equal(before.current_lifecycle, 'resumed');
     assert.ok(!before.labels.includes('Expired — refresh required; values are hidden'));
     for (const name of ['weather', 'air_quality']) {
       assert.ok(before.labels.includes(`Expires ${short.products[name].freshness.expires_at}`));

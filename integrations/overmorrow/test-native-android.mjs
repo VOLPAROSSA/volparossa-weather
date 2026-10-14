@@ -1122,6 +1122,48 @@ test('actual product sequence retains exact initial/refresh/expiry gates, comman
     ['shell', 'am', 'start', '-n', COMPONENT]]);
   assert.deepEqual(fixture.events.filter(row => row[0] === 'sleep'), [['sleep', 6000]]);
 });
+test('one fresh expiry snapshot supplies all pre-HOME predicates without an extra VM traversal', async () => {
+  const value = productExerciseFixture(); await value.run();
+  const expiry = value.events.findIndex(row => row[0] === 'snapshot' && row[2] === 'expiry_snapshot');
+  const home = value.events.findIndex(row => row.includes('KEYCODE_HOME'));
+  assert.ok(expiry >= 0 && home > expiry);
+  assert.deepEqual(value.events.slice(expiry, home + 1), [
+    ['snapshot', 'background-resume-expiry', 'expiry_snapshot'],
+    ['adb', 'shell', '/system/bin/date', '+%s%3N'],
+    ['adb', 'shell', 'input', 'keyevent', 'KEYCODE_HOME'],
+  ]);
+  assert.equal(value.events.filter(row => row[0] === 'snapshot' && row[2] === 'before_background').length, 0);
+  assert.equal(value.events.filter(row => row[0] === 'snapshot' && row[2] === 'expiry_snapshot').length, 1);
+  assert.deepEqual(value.state.status().calls, { weather: 3, air_quality: 3 });
+  assert.equal(Date.parse(value.state.status().products.weather.freshness.expires_at) - Date.parse(NOW), 4500);
+});
+test('ready expiry labels with invalid same-snapshot UI fail immediately without another snapshot', async () => {
+  for (const change of [value => { value.current_lifecycle = 'paused'; },
+    value => { value.tables = []; }, value => { value.tables[1].rows[0][1] = '900'; },
+    value => { value.labels.push('Expired — refresh required; values are hidden'); }]) {
+    const value = productExerciseFixture({ snapshot(observed, report, diagnostic) {
+      if (diagnostic.subphase === 'expiry_snapshot') change(observed);
+    } });
+    const { receipt } = await rejectedProducts(value);
+    assert.equal(receipt.subphase, 'before_background');
+    assert.equal(receipt.progress.expiry_labels_matched, 2);
+    assert.equal(value.events.filter(row => row[0] === 'snapshot' && row[2] === 'expiry_snapshot').length, 1);
+    assert.ok(!value.events.some(row => row.includes('KEYCODE_HOME')));
+    assert.equal(value.report.checks.real_android_background_resume, undefined);
+  }
+});
+test('incomplete expiry labels cannot borrow readiness from an older mounted snapshot', async () => {
+  const value = productExerciseFixture({ snapshot(observed, report, diagnostic) {
+    if (diagnostic.subphase === 'expiry_snapshot') {
+      const expiry = observed.labels.find(label => label.startsWith('Expires '));
+      observed.labels = observed.labels.filter(label => label !== expiry);
+    }
+  } });
+  const { receipt } = await rejectedProducts(value);
+  assert.equal(receipt.subphase, 'expiry_wait');
+  assert.equal(receipt.progress.expiry_labels_matched, 0);
+  assert.ok(!value.events.some(row => row.includes('KEYCODE_HOME')));
+});
 test('changed product bytes after preparation fail before native acceptance or lifecycle claims', async () => {
   for (const phase of ['initial-native-products', 'actual-refresh', 'background-resume-expiry']) {
     const value = productExerciseFixture({ control(result, path, report) {
@@ -1133,12 +1175,11 @@ test('changed product bytes after preparation fail before native acceptance or l
     assert.ok(!value.events.some(row => row.includes('KEYCODE_HOME')));
   }
 });
-test('pre-HOME requires both exact short-lived tables, no expired label and both new expiry labels', async () => {
+test('pre-HOME requires both exact short-lived tables and no expired label in the ready snapshot', async () => {
   for (const change of [value => { value.tables.pop(); }, value => { value.tables[0].rows[0][1] = '900'; },
-    value => { value.labels.push('Expired — refresh required; values are hidden'); },
-    value => { value.labels = value.labels.filter(label => !label.startsWith('Expires ')); }]) {
+    value => { value.labels.push('Expired — refresh required; values are hidden'); }]) {
     const value = productExerciseFixture({ snapshot(value, report, diagnostic) {
-      if (diagnostic.subphase === 'before_background') change(value);
+      if (diagnostic.subphase === 'expiry_snapshot') change(value);
     } });
     const { receipt } = await rejectedProducts(value);
     assert.equal(receipt.subphase, 'before_background');
@@ -1150,7 +1191,7 @@ test('TTL spent observing short-lived UI cannot become background expiry proof',
   for (const expired of ['host', 'guest']) {
     let homeReady = false;
     const value = productExerciseFixture({ snapshot(value, report, diagnostic) {
-      if (diagnostic.subphase === 'before_background') homeReady = true;
+      if (diagnostic.subphase === 'expiry_snapshot') homeReady = true;
     } });
     const original = value.context.adb;
     value.context.clock = () => Date.parse(NOW) + (homeReady && expired === 'host' ? 4500 : 0);
@@ -1278,7 +1319,7 @@ test('16 mounted collection attempts retain exact tables and all six metadata fi
 test('snapshot/swipe/tap/background/resume failures bind actual awaited operation and preserve identity', async () => {
   const primary = adbFailure({ signal: 'SIGKILL' });
   for (const stage of ['product_snapshot', 'swipe', 'refresh_snapshot', 'tap', 'expiry_snapshot',
-    'before_background', 'background_home', 'background_snapshot', 'background_pause', 'resume_start', 'resume_snapshot']) {
+    'background_home', 'background_snapshot', 'background_pause', 'resume_start', 'resume_snapshot']) {
     const fail = diagnostic => { if (diagnostic.subphase === stage) throw primary; };
     const fixture = productExerciseFixture({ snapshot(value, report, diagnostic) {
       fail(diagnostic); if (stage === 'swipe') value.labels = [];
@@ -1307,7 +1348,7 @@ test('missing value, expiry consumption, real lifecycle, hidden tables and no-ex
     }, snapshot(value, report, diagnostic) {
       if (stage === 'missing_values' && diagnostic.subphase === 'product_snapshot' && report.phase === 'actual-refresh') value.tables[0].rows[0][1] = '12';
       if (stage === 'expiry_wait' && diagnostic.subphase === 'expiry_snapshot') value.labels = [];
-      if (stage === 'before_background' && diagnostic.subphase === stage) value.current_lifecycle = 'paused';
+      if (stage === 'before_background' && diagnostic.subphase === 'expiry_snapshot') value.current_lifecycle = 'paused';
       if (diagnostic.subphase === 'resume_snapshot') {
         if (stage === 'resume_wait') value.lifecycle = ['resumed'];
         if (stage === 'expired_labels') value.labels.pop();
