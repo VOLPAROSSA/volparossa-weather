@@ -2,10 +2,13 @@
 // Inert observer/fixture contracts: no adb, emulator, server, SDK or app launch.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFile } from 'node:fs/promises';
+import { chmod, lstat, mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { HEADERS, PACKAGE, COMPONENT, numberEqual, validateSnapshot, verifyTable, vmAddress,
   adbFailure, ObserverDiagnostic, observeVm, waitForObservation, startInstalledApp, resumeInstalledApp,
-  recordDriverFailure, readFixtureControl, exerciseNativeProducts, productClockWindow,
+  recordDriverFailure, projectFirstDriverFailure, preserveFirstDriverFailure, FIRST_DRIVER_FAILURE,
+  FIRST_DRIVER_FAILURE_LIMIT, readFixtureControl, exerciseNativeProducts, productClockWindow,
   phaseClockReady, prepareNativePhase, tapNativeRefresh, validateLifecycle, readLifecycle, lifecycleWithinWindow } from './native-android-driver.mjs';
 import { nativeFixtureState, API_PORT, CONTROL_PORT } from './native-android-fixture.mjs';
 
@@ -624,9 +627,108 @@ test('diagnostic snapshot is frozen before cleanup and cannot be relabeled by la
   assert.equal(JSON.stringify(receipt), before);
   const source = await readFile(new URL('./native-android-driver.mjs', import.meta.url), 'utf8');
   assert.ok(source.indexOf('recordDriverFailure(report, diagnostic, error);') < source.indexOf('if (vm) try'));
+  const snapshot = source.indexOf('recordDriverFailure(report, diagnostic, error);');
+  const persisted = source.indexOf('await preserveFirstDriverFailure(output, report);');
+  assert.ok(snapshot < persisted && persisted < source.indexOf('if (vm) try'));
   assert.ok(source.includes("['installed-app', 'read-only-observer'].includes(report.phase)"));
   assert.ok(source.includes('timeout: 8000, killSignal: \'SIGKILL\', maxBuffer: 65536'));
   assert.ok(source.includes('deadline = started + 180000'));
+});
+
+function firstFailureReport(phase = 'actual-refresh') {
+  const report = { profile: 'protected-core', phase, passed: false };
+  const diagnostic = new ObserverDiagnostic();
+  diagnostic.beginProducts(2); diagnostic.subphase = 'product_count_wait';
+  recordDriverFailure(report, diagnostic, adbFailure({ code: 1, stdout: PRIVATE_TEXT, stderr: PRIVATE_TEXT }));
+  return { report, diagnostic };
+}
+
+test('first failure projects only the closed original observer and never claims a cause or cleanup', () => {
+  for (const phase of ['installed-app', 'read-only-observer', 'initial-native-products', 'actual-refresh', 'background-resume-fresh']) {
+    const { report } = firstFailureReport(phase);
+    report.private = PRIVATE_TEXT; report.failure_diagnostic.private = PRIVATE_TEXT;
+    const receipt = projectFirstDriverFailure(report);
+    assert.deepEqual(receipt, { schema: 1, kind: 'overmorrow-native-first-failure', profile: 'protected-core', phase,
+      failure: 'NATIVE_TRIAL_PHASE_FAILED', observer: {
+        source_schema: ['installed-app', 'read-only-observer'].includes(phase) ? 1 : 5,
+        subphase: 'product_count_wait', code: 'adb_exit', adb_exit_status: 1, adb_signal: null },
+      before_cleanup: true, diagnostic_only: true, cause_established: false,
+      joined_core_acceptance: false, raw_output_retained: false });
+    const raw = JSON.stringify(receipt);
+    assert.ok(Buffer.byteLength(raw) + 1 <= FIRST_DRIVER_FAILURE_LIMIT);
+    for (const privateField of ['private', 'snapshot', 'progress', 'timing', 'cleanup']) {
+      assert.ok(!Object.hasOwn(receipt, privateField)); assert.ok(!Object.hasOwn(receipt.observer, privateField));
+    }
+    assert.ok(!raw.includes(PRIVATE_TEXT));
+  }
+});
+
+test('missing or invalid observer stays unknown, without losing the recorded finite failure', () => {
+  for (const change of [value => { delete value.failure_diagnostic; },
+    value => { value.failure_diagnostic.schema = 1; },
+    value => { value.failure_diagnostic.subphase = PRIVATE_TEXT; },
+    value => { value.failure_diagnostic.code = PRIVATE_TEXT; },
+    value => { value.failure_diagnostic.adb_exit_status = true; },
+    value => { value.failure_diagnostic.adb_exit_status = 256; },
+    value => { value.failure_diagnostic.adb_signal = PRIVATE_TEXT; },
+    value => { value.failure_diagnostic.cause_established = true; },
+    value => { value.failure_diagnostic.raw_output_retained = true; }]) {
+    const { report } = firstFailureReport(); change(report);
+    const receipt = projectFirstDriverFailure(report);
+    assert.equal(receipt.observer, null); assert.equal(receipt.failure, 'NATIVE_TRIAL_PHASE_FAILED');
+    assert.ok(!JSON.stringify(receipt).includes(PRIVATE_TEXT));
+  }
+});
+
+test('first failure persists before interrupted cleanup and cannot be replaced by a later failure', async t => {
+  const output = await mkdtemp(join(tmpdir(), 'native-first-failure-'));
+  t.after(() => rm(output, { recursive: true })); await chmod(output, 0o700);
+  const { report, diagnostic } = firstFailureReport(), path = join(output, FIRST_DRIVER_FAILURE);
+  let original;
+  try {
+    assert.equal(await preserveFirstDriverFailure(output, report), true);
+    original = await readFile(path);
+    // Model the original finally path aborting after force-stop closes the
+    // active request. No report.json or final guest archive need exist.
+    diagnostic.subphase = 'force_stop';
+    throw new Error(PRIVATE_TEXT);
+  } catch (error) {
+    recordDriverFailure(report, diagnostic, error);
+    assert.equal(await preserveFirstDriverFailure(output, report), false);
+  }
+  assert.deepEqual(await readFile(path), original);
+  assert.equal(JSON.parse(original).observer.subphase, 'product_count_wait');
+  assert.equal((await lstat(path)).mode & 0o777, 0o600);
+  await assert.rejects(readFile(join(output, 'report.json')), { code: 'ENOENT' });
+});
+
+test('optional receipt failures never replace primary failure or suppress cleanup', async t => {
+  const output = await mkdtemp(join(tmpdir(), 'native-first-failure-'));
+  t.after(() => rm(output, { recursive: true }));
+  const { report } = firstFailureReport(), before = JSON.stringify(report);
+  for (const directory of [join(output, 'absent'), 'relative-output', output]) {
+    if (directory === output) await chmod(output, 0o755);
+    let cleaned = false;
+    try { assert.equal(await preserveFirstDriverFailure(directory, report), false); }
+    finally { cleaned = true; }
+    assert.equal(cleaned, true); assert.equal(JSON.stringify(report), before);
+  }
+  await chmod(output, 0o700);
+  const link = join(output, 'linked'); await symlink(output, link);
+  assert.equal(await preserveFirstDriverFailure(link, report), false);
+  await assert.rejects(readFile(join(output, FIRST_DRIVER_FAILURE)), { code: 'ENOENT' });
+});
+
+test('synthetic, successful, unrecorded or unknown phases produce no first failure artifact', async t => {
+  const output = await mkdtemp(join(tmpdir(), 'native-first-failure-'));
+  t.after(() => rm(output, { recursive: true })); await chmod(output, 0o700);
+  for (const change of [{ profile: 'synthetic' }, { passed: true }, { failure: undefined },
+    { phase: 'complete' }, { phase: 'background-resume-expiry' }, { phase: PRIVATE_TEXT }]) {
+    const { report } = firstFailureReport(); Object.assign(report, change);
+    assert.equal(projectFirstDriverFailure(report), null);
+    assert.equal(await preserveFirstDriverFailure(output, report), false);
+  }
+  await assert.rejects(readFile(join(output, FIRST_DRIVER_FAILURE)), { code: 'ENOENT' });
 });
 
 function installedFixture(options = {}) {
