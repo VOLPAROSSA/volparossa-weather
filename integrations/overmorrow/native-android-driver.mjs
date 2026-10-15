@@ -885,9 +885,10 @@ export async function exerciseLiveNativeProducts({ report, diagnostic, control, 
         return !current.active && Object.values(current.calls).every(value => value === count)
           && Object.values(current.completed).every(value => value === count) ? current : null;
       });
-    }, count === 1 ? 120000 : 15000);
-    // Cold acquisition has more room than an observer poll, but still shares
-    // the driver's original 180-second deadline with every remaining action.
+    }, 120000);
+    // Every live round observes two serial product responses, not a UI poll.
+    // This existing operational window still shares the driver's original
+    // absolute 180-second deadline with every remaining action.
     diagnostic.waitingFor = null;
     return value;
   }
