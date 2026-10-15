@@ -11,7 +11,8 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startLiveFixture, socketBinding, LIVE_BODY_LIMIT, LIVE_CONTROL_LIMIT } from './native-android-live-fixture.mjs';
 import { HEADERS, PACKAGE, COMPONENT, ObserverDiagnostic, adbFailure, validateSnapshot, validateLiveControl,
-  readFixtureControl, exerciseLiveNativeProducts, nativeDriverProfile, recordDriverFailure } from './native-android-driver.mjs';
+  readFixtureControl, exerciseLiveNativeProducts, nativeDriverProfile, recordDriverFailure,
+  waitForObservation } from './native-android-driver.mjs';
 import { nativeFixtureState } from './native-android-fixture.mjs';
 
 const NOW = '2026-10-12T02:00:00.000Z', API = '/api/volparossa/forecast', AQ = '/api/volparossa/air-quality';
@@ -281,6 +282,108 @@ function exercise(options = {}) {
   };
   return { context, report, diagnostic, events, products, run: () => exerciseLiveNativeProducts(context) };
 }
+
+// Use the production observer loop with a virtual clock and serial, valid
+// response snapshots. No Android, transport, provider or real elapsed wait.
+function clockedLiveExercise(t, { responseMs = 10000, refreshPreparationMs = 0,
+  lateControl = false, extraRequest = false } = {}) {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.parse(NOW) });
+  const deadline = Date.now() + 180000, starts = new Map(), states = [];
+  const fixture = exercise({
+    adb(args, report) {
+      if (args[2] !== 'tap') return;
+      if (report.phase === 'actual-refresh') t.mock.timers.tick(refreshPreparationMs);
+      starts.set(report.phase, Date.now());
+    },
+    control(value, report) {
+      const start = starts.get(report.phase);
+      if (start === undefined || report.observations.before_background) return;
+      const elapsed = Date.now() - start, count = value.calls.weather;
+      // Weather completes before air quality is requested; both parsed JSON
+      // products remain exactly the original response values and identities.
+      value.calls.air_quality = elapsed < responseMs ? count - 1 : count;
+      value.completed.weather = elapsed < responseMs ? count - 1 : count;
+      value.completed.air_quality = elapsed < 2 * responseMs ? count - 1 : count;
+      value.active = elapsed < 2 * responseMs;
+      if (lateControl && report.phase === 'actual-refresh') {
+        t.mock.timers.tick((lateControl === 'operation' ? start + 120000 : deadline) - Date.now());
+        value.calls.air_quality = count;
+        value.completed = { weather: count, air_quality: count };
+        value.active = false;
+      }
+      if (extraRequest && report.phase === 'actual-refresh') value.calls.weather++;
+      states.push({ phase: report.phase, elapsed, calls: { ...value.calls }, completed: { ...value.completed }, active: value.active });
+    },
+  });
+  fixture.context.clock = Date.now;
+  fixture.context.remaining = () => {
+    if (Date.now() >= deadline) throw new (adbFailure({}).constructor)('trial_deadline');
+  };
+  const lifecycle = fixture.context.lifecycle, sleep = fixture.context.sleep;
+  fixture.context.lifecycle = async () => ({ ...await lifecycle(), guest_utc_ms: Date.now() });
+  fixture.context.sleep = async milliseconds => { await sleep(milliseconds); t.mock.timers.tick(milliseconds); };
+  fixture.context.waitFor = (check, milliseconds = 15000) => {
+    fixture.events.push(['wait', milliseconds]);
+    return waitForObservation(check, deadline, fixture.context.remaining, milliseconds);
+  };
+  return { ...fixture, states, deadline, async settle() {
+    let outcome;
+    const pending = fixture.run().then(() => { outcome = { passed: true }; }, error => { outcome = { error }; });
+    for (let i = 0; !outcome && i < 800; i++) {
+      await new Promise(done => setImmediate(done));
+      if (!outcome) t.mock.timers.tick(250);
+    }
+    assert.ok(outcome, 'the unchanged absolute driver deadline bounds the inert regression');
+    await pending;
+    return outcome;
+  } };
+}
+
+test('live product rounds accept two serial valid responses after fifteen seconds within the original total deadline', async t => {
+  const fixture = clockedLiveExercise(t), original = JSON.stringify(fixture.products);
+  const result = await fixture.settle();
+  assert.equal(result.error?.observerCode, undefined);
+  assert.ifError(result.error);
+  assert.equal(fixture.report.passed, true);
+  assert.deepEqual(fixture.report.observations.requests, { weather: 3, air_quality: 3 });
+  for (const phase of ['actual-refresh', 'background-resume-fresh']) {
+    const states = fixture.states.filter(value => value.phase === phase);
+    assert.ok(states.some(value => value.completed.weather > value.completed.air_quality && value.active));
+    assert.ok(states.some(value => value.elapsed > 15000 && !value.active));
+  }
+  assert.ok(Date.now() < fixture.deadline);
+  assert.equal(JSON.stringify(fixture.products), original);
+  assert.equal(fixture.events.filter(event => event[0] === 'adb' && event[3] === 'tap').length, 2);
+  assert.equal(fixture.report.joined_core_acceptance, false);
+  assert.equal(fixture.report.scope.core_executed, false);
+});
+
+test('live operational observation retains absolute and per-round bounds and never accepts late or extra responses', async t => {
+  for (const [name, options, code] of [
+    ['preparation already consumed the total budget', { refreshPreparationMs: 165000 }, 'observation_deadline'],
+    ['otherwise-valid control returns at the absolute deadline', { lateControl: 'global' }, 'trial_deadline'],
+    ['otherwise-valid control returns at the operational deadline', { lateControl: 'operation' }, 'observation_deadline'],
+    ['an extra GET is not completion evidence', { extraRequest: true }, 'validation_failed'],
+  ]) await t.test(name, async sub => {
+    const fixture = clockedLiveExercise(sub, options), result = await fixture.settle();
+    assert.ok(result.error);
+    recordDriverFailure(fixture.report, fixture.diagnostic, result.error);
+    assert.equal(fixture.report.phase, 'actual-refresh');
+    assert.equal(fixture.report.failure_diagnostic.code, code);
+    assert.equal(fixture.report.passed, false);
+    assert.equal(fixture.report.observations.refresh, undefined);
+    assert.equal(fixture.report.checks.actual_tap_refresh, undefined);
+    assert.equal(fixture.report.joined_core_acceptance, false);
+    assert.equal(fixture.events.filter(event => event[0] === 'adb' && event[3] === 'tap').length, 1);
+    if (options.refreshPreparationMs || options.lateControl === 'global') assert.equal(Date.now(), fixture.deadline);
+    if (options.lateControl) {
+      const late = fixture.states.at(-1);
+      assert.deepEqual(late.completed, { weather: 2, air_quality: 2 });
+      assert.equal(late.active, false); // A late positive snapshot still cannot pass.
+    }
+  });
+});
+
 test('live sequence retains 4/5 exact rows, two actual taps, same observer resume and original freshness without expiry/core claims', async () => {
   const fixture = exercise(), before = JSON.stringify(fixture.products); await fixture.run();
   assert.equal(fixture.report.passed, true); assert.equal(fixture.report.joined_core_acceptance, false);
@@ -296,8 +399,8 @@ test('live sequence retains 4/5 exact rows, two actual taps, same observer resum
   assert.equal(fixture.events.filter(event => event[0] === 'control').length, 4);
   const waits = fixture.events.filter(event => event[0] === 'wait');
   assert.equal(waits[0][1], 120000);
-  assert.equal(waits.filter(event => event[1] === 120000).length, 1);
-  assert.ok(waits.slice(1).every(event => event[1] === 15000));
+  assert.equal(waits.filter(event => event[1] === 120000).length, 3);
+  assert.ok(waits.every(event => [15000, 120000].includes(event[1])));
   assert.equal(JSON.stringify(fixture.products), before);
   assert.ok(!JSON.stringify(fixture.report).includes('publisher_key'));
 });
