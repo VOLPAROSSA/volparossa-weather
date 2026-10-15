@@ -308,6 +308,51 @@ export function recordDriverFailure(report, diagnostic, error) {
   } catch { /* Diagnosis cannot mask the original failure or prevent cleanup. */ }
 }
 
+export const FIRST_DRIVER_FAILURE = 'first-failure.json';
+export const FIRST_DRIVER_FAILURE_LIMIT = 2048;
+
+export function projectFirstDriverFailure(report) {
+  // Preserve only the original finite failure, not private products, exception
+  // text, UI snapshots, addresses or a claim about the cause of a disconnect.
+  if (report.profile !== 'protected-core' || report.passed !== false
+      || report.failure !== 'NATIVE_TRIAL_PHASE_FAILED'
+      || !['installed-app', 'read-only-observer', 'initial-native-products',
+        'actual-refresh', 'background-resume-fresh'].includes(report.phase)) return null;
+  const source = report.failure_diagnostic;
+  const sourceSchema = ['installed-app', 'read-only-observer'].includes(report.phase) ? 1 : 5;
+  let observer = null;
+  if (source?.schema === sourceSchema && OBSERVER_SUBPHASES.has(source.subphase)
+      && OBSERVER_CODES.has(source.code)
+      && (source.adb_exit_status === null || Number.isInteger(source.adb_exit_status)
+        && source.adb_exit_status >= 0 && source.adb_exit_status <= 255)
+      && (source.adb_signal === null || ['SIGKILL', 'SIGTERM'].includes(source.adb_signal))
+      && source.cause_established === false && source.raw_output_retained === false) {
+    observer = { source_schema: sourceSchema, subphase: source.subphase, code: source.code,
+      adb_exit_status: source.adb_exit_status, adb_signal: source.adb_signal };
+  }
+  return { schema: 1, kind: 'overmorrow-native-first-failure', profile: 'protected-core',
+    phase: report.phase, failure: 'NATIVE_TRIAL_PHASE_FAILED', observer,
+    before_cleanup: true, diagnostic_only: true, cause_established: false,
+    joined_core_acceptance: false, raw_output_retained: false };
+}
+
+export async function preserveFirstDriverFailure(output, report) {
+  try {
+    const value = projectFirstDriverFailure(report);
+    if (value === null) return false;
+    const raw = JSON.stringify(value) + '\n';
+    assert.ok(Buffer.byteLength(raw) <= FIRST_DRIVER_FAILURE_LIMIT);
+    assert.ok(isAbsolute(output) && await realpath(output) === output);
+    const info = await lstat(output);
+    assert.ok(info.isDirectory() && info.uid === process.getuid() && (info.mode & 0o777) === 0o700);
+    // The host-bound proof directory survives early namespace/child cleanup.
+    // Exclusive creation retains the first observation, even if later cleanup
+    // also fails. This optional write grants no cleanup or acceptance evidence.
+    await writeFile(`${output}/${FIRST_DRIVER_FAILURE}`, raw, { flag: 'wx', mode: 0o600 });
+    return true;
+  } catch { return false; } // Original failure and all cleanup remain authoritative.
+}
+
 export async function startInstalledApp({ adb, waitFor, diagnostic, installed, ownApp }) {
   await diagnostic.at('package_check', async () => {
     assert.match(await adb(['shell', 'pm', 'path', PACKAGE]), /^package:\/data\/app\/[^\r\n]+\/base\.apk$/);
@@ -1030,6 +1075,7 @@ async function main() {
     await exercise({ report, diagnostic, control, waitFor, snapshot, lifecycle, adb, remaining, initialPrepared });
   } catch (error) {
     recordDriverFailure(report, diagnostic, error);
+    await preserveFirstDriverFailure(output, report);
   } finally {
     if (vm) try { await vm.close(); report.cleanup.vm_closed = true; } catch { /* retain uncertainty */ }
     if (forward) try { await adb(['forward', '--remove', forward], true); report.cleanup.forward_removed = true; } catch { /* retain uncertainty */ }
