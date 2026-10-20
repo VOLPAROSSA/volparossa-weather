@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { createHash } from 'node:crypto';
-import { lstat, realpath, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, realpath, mkdtemp, mkdir, open, writeFile, rm } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { MAX_AGE_SECONDS, MAX_RUN_AGE_SECONDS, SCHEMA, UNITS, WIND_UNITS, PRECIPITATION_UNITS,
   PRECIPITATION_SOURCES, WeatherError,
@@ -247,15 +248,35 @@ export function forecastFromSamples(input, samples, acquiredAt) {
       expires_at: new Date(Math.min(acquired + MAX_AGE_SECONDS * 1000, run + MAX_RUN_AGE_SECONDS * 1000)).toISOString() } });
 }
 
+async function pinnedDecoderBytes(path, digest) {
+  // Inspect and read the same opened object. O_NONBLOCK also prevents a replaced
+  // FIFO from blocking before fstat can reject it; never follow a leaf symlink.
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const before = await handle.stat();
+    requireThat(before.isFile() && before.size > 0 && before.size <= 64 * 1024 * 1024
+      && (before.mode & 0o111) !== 0, 'DECODER_PIN_MISMATCH');
+    // One extra byte detects growth without an unbounded readFile allocation.
+    const bytes = Buffer.alloc(before.size + 1); let size = 0;
+    while (size < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, size, bytes.length - size, size);
+      if (bytesRead === 0) break;
+      size += bytesRead;
+    }
+    const after = await handle.stat(), captured = bytes.subarray(0, size);
+    requireThat(size === before.size && ['size', 'mtimeMs', 'ctimeMs', 'mode', 'uid', 'gid', 'nlink']
+      .every(key => before[key] === after[key]) && sha256(captured) === digest, 'DECODER_PIN_MISMATCH');
+    return captured;
+  } finally { await handle.close(); }
+}
+
 export async function fetchForecast(input, { mode, acceptDataLicense, decoder, decoderSha256, scratchParent, signal } = {}) {
   const query = ecmwfRequest(input);
   requireThat(mode === 'origin' && acceptDataLicense === true, 'EXPLICIT_ORIGIN_LICENSE_REQUIRED');
   requireThat(process.platform === 'linux', 'DECODER_PLATFORM_UNAVAILABLE');
   requireThat(typeof decoderSha256 === 'string' && /^[a-f0-9]{64}$/.test(decoderSha256), 'DECODER_PIN_REQUIRED');
   requireThat(isAbsolute(decoder) && await realpath(decoder) === decoder, 'DECODER_PATH_INVALID');
-  const program = await lstat(decoder);
-  requireThat(program.isFile() && program.size <= 64 * 1024 * 1024
-    && sha256(await readFile(decoder)) === decoderSha256, 'DECODER_PIN_MISMATCH');
+  const program = await pinnedDecoderBytes(decoder, decoderSha256);
   const parent = await lstat(scratchParent);
   requireThat(parent.isDirectory() && parent.uid === process.getuid() && (parent.mode & 0o777) === 0o700
     && await realpath(scratchParent) === scratchParent, 'PRIVATE_PARENT_REQUIRED');
@@ -264,6 +285,13 @@ export async function fetchForecast(input, { mode, acceptDataLicense, decoder, d
   const work = await mkdtemp(join(scratchParent, 'ecmwf-'));
   const samples = [];
   try {
+    // The supported ecCodes build embeds its data and statically links ecCodes/libaec.
+    // A private snapshot binds execution to the captured pin, including if the source
+    // is replaced during HTTP acquisition. Adjacent files are not inherited; this
+    // does not isolate execution from root/same-UID tampering or system libraries.
+    const executableDirectory = join(work, 'decoder'), executable = join(executableDirectory, 'grib_ls');
+    await mkdir(executableDirectory, { mode: 0o700 });
+    await writeFile(executable, program, { mode: 0o500, flag: 'wx' });
     for (const step of query.steps) {
       const fields = await fetchFields(query, step, { mode, acceptDataLicense, signal });
       const decoded = {}, evidence = {};
@@ -274,7 +302,7 @@ export async function fetchForecast(input, { mode, acceptDataLicense, decoder, d
           + (query.includeWind || query.includePrecipitation ? ',' + GRID_KEYS.map(key => key + ':d').join(',') : '')
           + (parameter === '10u' || parameter === '10v' ? ',uvRelativeToGrid:i' : '')
           + (parameter === 'tp' ? ',typeOfStatisticalProcessing:i,numberOfTimeRanges:i' : '');
-        decoded[parameter] = await runOwnedJsonProcess('/usr/bin/prlimit', ['--as=536870912', '--cpu=20', '--', decoder,
+        decoded[parameter] = await runOwnedJsonProcess('/usr/bin/prlimit', ['--as=536870912', '--cpu=20', '--', executable,
           '-j', '-l', `${query.latitude},${query.longitude},1`, '-p', keys, path], work, signal, 30000);
         await rm(path); // Keep scratch disk bounded to one decoded field, not every requested lead.
         const definition = parameterDefinition(parameter, query.model);
