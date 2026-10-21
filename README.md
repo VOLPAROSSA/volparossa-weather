@@ -2,12 +2,20 @@
 
 # Project VOLPAROSSA Weather
 
-**Direct public weather models. Shared evidence. Learning that must earn its accuracy.**
+**One public forecast, useful in more than one weather app.**
 
-A framework-independent forecast contract for future cross-platform VOLPAROSSA
-apps, with direct public-data acquisition and a consumer for the existing core's
-shared content cache. The first adapter reads **ECMWF Open Data directly**;
-no intermediate weather API is required.
+Checking the forecast should let you see where the numbers came from and when
+they apply. VOLPAROSSA Weather reads **ECMWF Open Data directly** and shares
+verified forecast products through the
+[VOLPAROSSA core](https://github.com/VOLPAROSSA/volparossa), with Drizz.li and
+Overmorrow as the first application integrations. NOAA supplies a separate
+particulate forecast; missing values stay missing.
+
+An installed Overmorrow Android app has already retrieved real products through
+the core in an isolated emulator, then refreshed and resumed from the background.
+This is a tested delivery slice, not a complete service or proof of forecast
+accuracy. Contributors can help extend client delivery and compare predictions
+with real observations before claiming better forecasts.
 
 ## The first executable slice
 
@@ -34,12 +42,12 @@ component**, not yet a complete weather app. Overmorrow's web client displays an
 refreshes real weather and particulate products retrieved through protected
 peers; that trial fetches the products before opening the UI. Drizz.li has a
 separate real temperature/wind delivery proof and synthetic rain/particulate
-interaction tests. An installed Overmorrow Android debug app also passes refresh
-and background/resume checks in an isolated emulator, using synthetic products.
-Actual Android-to-core delivery, iOS support, observations, trained corrections,
-model comparison and automatic shared acquisition remain unfinished. Rain
-accumulation must not be presented as hourly rainfall; unsupported values are
-not invented.
+interaction tests. An installed Overmorrow Android debug app also passes actual
+app-triggered core delivery, refresh and background/resume with real products in
+an isolated emulator. Expiry behavior has only been demonstrated with synthetic
+products. Physical devices, iOS support, observations, trained corrections, model
+comparison and automatic shared acquisition remain unfinished. Rain accumulation
+must not be presented as hourly rainfall; unsupported values are not invented.
 
 The [real IFS origin-to-native-decoder smoke](third_party/ecmwf-smoke.json) passes:
 658,325 selected GRIB bytes produced a 15.396 °C nearest-grid forecast for the
@@ -65,8 +73,8 @@ proof of forecast accuracy or complete overlay-to-browser delivery.
 Use an existing Node.js 22+ installation. The ESM JSON contract has no framework
 dependency. The current ecCodes/core process adapters run on Linux; native mobile
 decoders are not implemented. The Android debug build and installed-emulator
-trial pass with synthetic data; they do not establish live mobile core delivery
-or a release-ready app.
+trials include synthetic interaction checks and a separate actual core-delivery
+proof below. They do not establish physical-device support or a release-ready app.
 
 The explicit [source-only decoder builder](third_party/eccodes/README.md) uses
 pinned official ecCodes/ecbuild/libaec sources and workspace-local output. It
@@ -339,15 +347,20 @@ The [Android trial](integrations/overmorrow/README.md#android-trial-candidate)
 passes the debug build, strict offline rebuild and installed-app checks in an
 isolated emulator. Synthetic loopback products are checked against mounted
 native tables, with actual refresh taps and expiry after backgrounding and
-resuming. This is not pixel-level visual verification, physical-device evidence
-or live core delivery. A mobile core, iOS execution, home-screen widgets and
-release packaging remain required.
+resuming. This synthetic expiry result is separate from actual core delivery;
+it is not pixel-level visual verification or physical-device evidence.
 
-The next [Android-to-core candidate](integrations/overmorrow/README.md#android-to-core-candidate)
-adds a private Unix-socket API and separates APK preparation from the installed
-trial. It forwards the original core-backed responses without generating sample
-weather or extending their expiry. Component checks are not yet evidence of a
-successful joint Android-and-peer trial.
+The subsequent [actual Android-to-core trial](https://github.com/VOLPAROSSA/volparossa/actions/runs/38717988016)
+passes on core `aac5be7f602fae9754153cdcb5c401ecb9ee7cb6` and Weather
+`3b90442a9d5be4db73ccf83cba2028364980c3ca`. The installed app initiates cold peer
+retrieval of real weather and particulate products, with exact native tables,
+two cache-backed refreshes, background/resume and cleanup. All six product
+requests record zero origin bytes. The products remain fresh during this trial:
+**actual expired-product recovery is still unverified**. The
+[core evidence ledger](https://github.com/VOLPAROSSA/volparossa/blob/main/docs/IMPLEMENTATION_STATUS.md#execution-priorities-and-next-milestones)
+records the result and earlier failures; the linked integration guide retains
+the earlier candidate history. Physical devices, a deployable mobile core, iOS,
+home-screen widgets and release packaging remain required.
 
 ### Additional weather data
 
@@ -355,17 +368,18 @@ successful joint Android-and-peer trial.
   units/time windows and missing values, with real origin/decoder trials.
 - [x] Drizz.li precipitation display and interaction: actual isolated Firefox
   with synthetic values and native accumulation windows, including refresh.
-- [ ] Complete precipitation delivery through the overlay and application clients;
-  the joined real core-to-browser proof currently covers temperature and wind.
-  Core-to-Overmorrow delivery remains a separate requirement.
+- [ ] Complete precipitation delivery across the required application clients;
+  Overmorrow's joined real-product delivery passes separately from Drizz.li's
+  temperature/wind proof and synthetic precipitation interaction checks.
 - [x] Particulate source and contract: real NOAA PM2.5/PM10 acquisition, native
   instantaneous concentrations, pinned decoder, five verified forecast steps.
 - [x] Particulate core-cache consumer and CLI: fixed trusted publication/query,
   hash and expiry checks, cancellation and private-output cleanup tested with a
-  synthetic core process. This is not a live particulate overlay trial.
+  synthetic core process. Real Overmorrow peer delivery is a separate result above.
 - [x] Drizz.li particulate display, refresh and independent expiry/failure handling:
   actual isolated Firefox and HTTP bridge with synthetic PM2.5/PM10 values.
-- [ ] Particulate delivery through the real overlay and application clients.
+- [ ] Complete particulate delivery across the required application clients;
+  Overmorrow's scoped real web/Android delivery passes; Drizz.li remains separate.
 - [ ] Additional pollutants and any derived air-quality index, with explicit
   averaging periods, index definition and independently tested transformations.
 
