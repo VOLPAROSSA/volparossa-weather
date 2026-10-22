@@ -1,6 +1,6 @@
 ![Project VOLPAROSSA Weather — a fox-shaped weather vane between storm clouds and a golden sky](docs/assets/banner-volparossa-weather.png)
 
-# Project VOLPAROSSA Weather
+# VOLPAROSSA Weather
 
 **One public forecast, useful in more than one weather app.**
 
