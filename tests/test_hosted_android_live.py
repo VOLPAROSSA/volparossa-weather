@@ -216,11 +216,23 @@ class Commands(unittest.TestCase):
                     prepare.assert_called_once_with("helper", "platform", prepare_only=True)
                     live.assert_not_called()
                 else:
-                    live.assert_called_once_with("helper", "platform", "/inert/api.sock")
+                    live.assert_called_once_with("helper", "platform", "/inert/api.sock", record_demo=False)
                     prepare.assert_not_called()
         with patch.object(M.sys, "argv", ["runner", "--run-protected-core", "--command", "anything"]), \
                 self.assertRaisesRegex(ValueError, "NO_ARBITRARY_COMMAND"):
             M.main()
+
+    def test_recording_cli_is_opt_in_and_has_no_arbitrary_options(self):
+        with patch.object(M.sys, "argv", ["runner", "--run-protected-core", "--upstream-socket", "/inert/api.sock", "--record-demo"]), \
+                patch.object(M, "guards", return_value=("helper", "platform")) as guard, \
+                patch.object(M, "run_protected_core") as live:
+            M.main()
+            guard.assert_called_once_with(os.environ, protected_core=True)
+            live.assert_called_once_with("helper", "platform", "/inert/api.sock", record_demo=True)
+        for flag in ("--record-anything", "--command"):
+            with patch.object(M.sys, "argv", ["runner", "--run-protected-core", "--upstream-socket", "/inert/api.sock", flag]), \
+                    self.assertRaisesRegex(ValueError, "NO_ARBITRARY_COMMAND"):
+                M.main()
 
     def test_fixed_live_trial_retains_memory_time_guest_and_cleanup_guards(self):
         tree = ast.parse((ROOT / "scripts/prepare_hosted_android_ci.py").read_text())
@@ -230,7 +242,7 @@ class Commands(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         with patch.object(M.H, "run", return_value=b"inert") as run, patch.object(M, "upstream_binding", return_value={}):
             eval(compile(ast.Expression(calls[0]), "<live-runtime>", "eval"),
-                dict(vars(M), netns="inert-netns", upstream_socket="/inert/api.sock"))
+                dict(vars(M), netns="inert-netns", upstream_socket="/inert/api.sock", record_demo=False))
         args, kwargs = run.call_args
         self.assertEqual(args[0], "installed-android-protected-core-trial")
         self.assertEqual(args[2], 520)

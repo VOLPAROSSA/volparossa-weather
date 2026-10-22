@@ -1941,12 +1941,13 @@ def execute(helper, platform, *, prepare_only=False):
                 signal.signal(s, handler)
 
 
-def run_protected_core(helper, platform, upstream_socket):
+def run_protected_core(helper, platform, upstream_socket, *, record_demo=False):
     """Run the prepared installed app through only the fixed private HTTP API.
 
     The enclosing core workflow must separately join packet captures, cache
     custody and publication records. This runner never asserts overlay proof.
     """
+    require(type(record_demo) is bool, "ANDROID_DEMO_RECORDING_SCOPE")
     prepared = prepared_core_inputs(helper)
     socket_identity = upstream_binding(upstream_socket)
     use_live_paths()
@@ -1989,7 +1990,7 @@ def run_protected_core(helper, platform, upstream_socket):
         preflight("emulator", netns)
         require(upstream_binding(upstream_socket) == socket_identity, "CORE_SOCKET_CHANGED")
         H.run("installed-android-protected-core-trial", sandbox(["/usr/bin/python3", "-B", str(Path(__file__)),
-            "--inside-protected-core", "--upstream-socket", str(SOCKET_MOUNT / Path(upstream_socket).name)],
+            "--inside-protected-core", "--upstream-socket", str(SOCKET_MOUNT / Path(upstream_socket).name)] + (["--record-demo"] if record_demo else []),
             "emulator", upstream_socket=upstream_socket), 520,
             env=dict(environment(), VOLPAROSSA_TEST_HOST_NETNS=netns), memory=LIVE_MEMORY)
         require(upstream_binding(upstream_socket) == socket_identity, "CORE_SOCKET_CHANGED")
@@ -2033,7 +2034,8 @@ def run_protected_core(helper, platform, upstream_socket):
                 signal.signal(s, handler)
 
 
-def inside(*, avd_only=False, upstream_socket=None):
+def inside(*, avd_only=False, upstream_socket=None, record_demo=False):
+    require(type(record_demo) is bool and (not record_demo or upstream_socket is not None), "ANDROID_DEMO_RECORDING_SCOPE")
     require(type(avd_only) is bool and (upstream_socket is None or not avd_only), "INSIDE_SCOPE")
     require(os.getuid() != 0 and "volparossa_ci_weather_clients_child" in Path("/proc/self/attr/current").read_text()
         and [n for _, n in socket.if_nameindex()] == ["lo"] and not Path("/etc/resolv.conf").exists(), "OFFLINE_SANDBOX_ONLY")
@@ -2202,14 +2204,44 @@ def inside(*, avd_only=False, upstream_socket=None):
         # Driver creates a fresh directory; existing outer root only holds the
         # final original report copied byte-for-byte below.
         diagnostic.phase = "app_driver"
+        recording = None
+        if record_demo:
+            media = PROOF / "demo-media"
+            media.mkdir(mode=0o700)
+            recording = spawn(["/usr/bin/python3", "-B", str(ROOT / "scripts/record_android_demo.py"), adb, str(media)],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            # Start before the original driver, with no app calls or changed
+            # deadlines. The source-bound recorder owns only screen pixels.
+            ready = selectors.DefaultSelector()
+            try:
+                ready.register(recording.stdout, selectors.EVENT_READ)
+                require(ready.select(5), "ANDROID_DEMO_RECORDING_READY")
+                require(os.read(recording.stdout.fileno(), 128) == b"ANDROID_DEMO_RECORDING_READY\n",
+                    "ANDROID_DEMO_RECORDING_READY")
+            finally:
+                ready.close()
+        driver_started = round(time.time() * 1000)
         try:
             command("app_driver", [str(H.NODE), str(W.HERE / "native-android-driver.mjs"), "--adb", adb,
                 "--serial", SERIAL, "--output", str(PROOF / "driver")]
                 + (["--profile", "protected-core"] if upstream_socket is not None else []), 190)
         finally:
-            original = PROOF / "driver/report.json"
-            if original.exists():
-                H.write(PROOF / "report.json", H.read(original))
+            driver_completed = round(time.time() * 1000)
+            try:
+                if recording is not None:
+                    try:
+                        recording.stdin.write(b"stop\n"); recording.stdin.flush(); recording.stdin.close()
+                        require(recording.wait(timeout=25) == 0, "ANDROID_DEMO_RECORDING_FAILED")
+                    finally:
+                        recording.stdout.close()
+            finally:
+                original = PROOF / "driver/report.json"
+                if original.exists():
+                    H.write(PROOF / "report.json", H.read(original))
+                    if record_demo:
+                        H.write(PROOF / "demo-media/driver-window.json", (json.dumps(dict(schema=1,
+                            started_unix_ms=driver_started, completed_unix_ms=driver_completed,
+                            installed_report_sha256=H.sha(H.read(original)))) + "\n").encode())
         complete = True
     except BaseException as error:
         diagnostic.publish_failure(error, avd=avd_only)
@@ -2245,18 +2277,20 @@ def main():
     if sys.argv[1:] == ["--inside-avd-preflight"]:
         inside(avd_only=True)
         return
-    if len(sys.argv) == 4 and sys.argv[1:3] == ["--inside-protected-core", "--upstream-socket"]:
+    if len(sys.argv) in (4, 5) and sys.argv[1:3] == ["--inside-protected-core", "--upstream-socket"]:
+        require(len(sys.argv) == 4 or sys.argv[4] == "--record-demo", "NO_ARBITRARY_COMMAND")
         use_live_paths()
-        inside(upstream_socket=sys.argv[3])
+        inside(upstream_socket=sys.argv[3], record_demo=len(sys.argv) == 5)
         return
     if sys.argv[1:] == ["--prepare-protected-core"]:
         helper, platform = guards(os.environ, protected_core=True)
         H.private_directory(OUTPUT)
         execute(helper, platform, prepare_only=True)
         return
-    if len(sys.argv) == 4 and sys.argv[1:3] == ["--run-protected-core", "--upstream-socket"]:
+    if len(sys.argv) in (4, 5) and sys.argv[1:3] == ["--run-protected-core", "--upstream-socket"]:
+        require(len(sys.argv) == 4 or sys.argv[4] == "--record-demo", "NO_ARBITRARY_COMMAND")
         helper, platform = guards(os.environ, protected_core=True)
-        run_protected_core(helper, platform, sys.argv[3])
+        run_protected_core(helper, platform, sys.argv[3], record_demo=len(sys.argv) == 5)
         return
     require(len(sys.argv) == 1, "NO_ARBITRARY_COMMAND")
     helper, platform = guards(os.environ)
