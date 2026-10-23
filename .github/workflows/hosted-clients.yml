@@ -8,6 +8,8 @@ on:
     paths:
       - .github/workflows/hosted-clients.yml
       - scripts/prepare_hosted_clients_ci.py
+      - scripts/prepare_hosted_source_recipe.py
+      - tests/test_hosted_source_recipe.py
       - scripts/prepare_hosted_decoder.py
       - scripts/prepare_hosted_decoder_ci.py
       - scripts/hosted-clients-bwrap.apparmor
@@ -93,29 +95,29 @@ jobs:
             build/hosted-clients-ci/*.log
             build/drizzli-hosted-browser-ci/report.json
             build/drizzli-hosted-browser-ci/*.log
-      - name: Retain only successful public assets and original notices
+      - name: Prepare the successful source recipe
+        if: success()
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 -B scripts/prepare_hosted_source_recipe.py --profile drizzli \
+            --expected-commit "$GITHUB_SHA" \
+            --output "$GITHUB_WORKSPACE/build/hosted-drizzli-source-recipe"
+      - name: Retain only the successful source recipe
         if: success()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: hosted-weather-client-assets-unadmitted-${{ github.sha }}
+          name: hosted-weather-client-source-recipe-${{ github.sha }}
           retention-days: 14
           if-no-files-found: error
+          include-hidden-files: true
           path: |
-            build/drizzli-hosted-ci/build
-            build/drizzli-hosted-ci/LICENSE
-            build/drizzli-hosted-ci/LICENSE.VOLPAROSSA
-            build/drizzli-hosted-ci/package-lock.json
-            build/drizzli-hosted-ci/volparossa-build-plugins/message-format.LICENSE
-            build/drizzli-hosted-ci/volparossa-build-plugins/m-function-matcher.LICENSE
-            build/hosted-browser-source/build/firefox-hosted-ci
-            build/hosted-client-runtime/node/bin/node
-            build/hosted-client-runtime/node/LICENSE
-            build/hosted-client-runtime/licenses/firefox-copyright
+            build/hosted-drizzli-source-recipe
       - name: State the scope of the trial
         if: always()
         run: |
           printf '%s\n' \
             'Inspect original outcomes and receipts: this is an actual Drizz.li build and synthetic browser trial.' \
             'No live Weather source request, core delivery, private bundle upload or native mobile proof.' \
-            'Public assets require a separate reviewed core input profile before joined execution.' \
+            'Source recipes contain references, not full upstream/dependency source or runtime acceptance.' \
             >> "$GITHUB_STEP_SUMMARY"

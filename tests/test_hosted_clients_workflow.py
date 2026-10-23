@@ -38,17 +38,45 @@ class HostedClientWorkflowTests(unittest.TestCase):
         self.assertNotIn("curl |", self.source)
         self.assertNotIn("sysctl -w", self.source)
 
-    def test_export_only_public_successful_inputs_and_bounded_diagnostics(self):
-        assets = self.source.split("- name: Retain only successful public assets and original notices\n", 1)[1]
+    def test_export_only_successful_source_recipe_and_bounded_diagnostics(self):
+        assets = self.source.split("- name: Retain only the successful source recipe\n", 1)[1]
         assets = assets.split("- name: State the scope", 1)[0]
         self.assertIn("if: success()", assets)
-        self.assertIn("build/drizzli-hosted-ci/build", assets)
-        self.assertIn("build/hosted-client-runtime/node/LICENSE", assets)
-        for forbidden in ("node_modules", "archives", ".git/", "inputs.tar", "profile/", "**", "~", "/home/"):
+        self.assertIn("name: hosted-weather-client-source-recipe-${{ github.sha }}", assets)
+        self.assertIn("include-hidden-files: true", assets)
+        self.assertEqual(self.source.count("include-hidden-files: true"), 1)
+        self.assertEqual([line.strip() for line in assets.split("path: |\n", 1)[1].splitlines()
+                          if line.strip()], ["build/hosted-drizzli-source-recipe"])
+        for forbidden in ("node_modules", "archives", ".git/", "inputs.tar", "profile/", "**", "~", "/home/",
+                          "drizzli-hosted-ci/build", "firefox-hosted-ci", "hosted-client-runtime",
+                          "assets-unadmitted", "LICENSE", "package-lock.json"):
             self.assertNotIn(forbidden, assets)
         self.assertNotRegex(self.source, r"(?m)^\s+build/?\s*$")
         self.assertIn("build/drizzli-hosted-browser-ci/report.json", self.source)
-        self.assertIn("core input profile before joined execution", self.source)
+        self.assertIn("not full upstream/dependency source or runtime acceptance", self.source)
+
+    def test_recipe_runs_after_real_build_and_before_success_export(self):
+        recipe = self.source.split("- name: Prepare the successful source recipe\n", 1)[1]
+        recipe = recipe.split("      - name:", 1)[0]
+        self.assertIn("if: success()", recipe)
+        self.assertIn("scripts/prepare_hosted_source_recipe.py --profile drizzli", recipe)
+        self.assertIn('--expected-commit "$GITHUB_SHA"', recipe)
+        self.assertIn('--output "$GITHUB_WORKSPACE/build/hosted-drizzli-source-recipe"', recipe)
+        self.assertLess(self.source.index("python3 -B scripts/prepare_hosted_clients_ci.py"),
+                        self.source.index("- name: Prepare the successful source recipe"))
+        self.assertLess(self.source.index("- name: Prepare the successful source recipe"),
+                        self.source.index("- name: Retain only the successful source recipe"))
+        for path in ("scripts/prepare_hosted_source_recipe.py", "tests/test_hosted_source_recipe.py"):
+            self.assertIn("      - " + path + "\n", self.source)
+        proof = self.source.split("- name: Retain bounded build and browser diagnostics\n", 1)[1]
+        proof = proof.split("      - name:", 1)[0]
+        self.assertIn("if: always()", proof)
+        self.assertEqual([line.strip() for line in proof.split("path: |\n", 1)[1].splitlines()
+                          if line.strip()], [
+            "build/hosted-client-packages.txt", "build/hosted-client-runtime/provenance.json",
+            "build/hosted-clients-ci/*.json", "build/hosted-clients-ci/*.log",
+            "build/drizzli-hosted-browser-ci/report.json", "build/drizzli-hosted-browser-ci/*.log",
+        ])
 
     def test_firefox_external_libraries_are_installed_and_recorded(self):
         # The exact admitted Debian Firefox libxul has these DT_NEEDED libraries;
@@ -66,7 +94,7 @@ class HostedClientWorkflowTests(unittest.TestCase):
 
     def test_embedded_shell_syntax(self):
         blocks = re.findall(r"(?m)^        run: \|\n((?:          .*\n|\n)+)", self.source)
-        self.assertEqual(len(blocks), 5)
+        self.assertEqual(len(blocks), 6)
         for block in blocks:
             script = "\n".join(line[10:] for line in block.splitlines())
             result = subprocess.run(["bash", "-n"], input=script, text=True,
