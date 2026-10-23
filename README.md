@@ -17,6 +17,26 @@ This is a tested delivery slice, not a complete service or proof of forecast
 accuracy. Contributors can help extend client delivery and compare predictions
 with real observations before claiming better forecasts.
 
+## Watch VOLPAROSSA Weather Demo 0
+
+[![Weather Demo 0: the genuine Overmorrow Android app beside a conceptual VOLPAROSSA network diagram](https://github.com/VOLPAROSSA/volparossa/releases/download/weather-demo-0.1.0/thumbnail-final-web.webp)](https://github.com/VOLPAROSSA/volparossa/releases/tag/weather-demo-0.1.0)
+
+**A real forecast, delivered through cooperating peers.** Watch the installed
+Overmorrow Android app display ECMWF IFS weather and NOAA GEFS-Aerosols PM2.5
+forecasts in an emulator, using an external VOLPAROSSA Core on Debian 13.
+
+[**Watch the video (MP4)**](https://github.com/VOLPAROSSA/volparossa/releases/download/weather-demo-0.1.0/weather-demo-0-final.mp4) · [Release and downloads](https://github.com/VOLPAROSSA/volparossa/releases/tag/weather-demo-0.1.0) · [Transcript](https://github.com/VOLPAROSSA/volparossa/releases/download/weather-demo-0.1.0/transcript-final.txt)
+
+The one-minute development preview runs at normal speed, with a labelled excerpt
+replay and a labelled 13-second loading cut. The network diagram is conceptual;
+separate reports establish peer delivery, cache reuse and background/resume.
+The video alone does not prove networking. Forecasts are model products, not
+observations or a complete AQI service. This is not a standalone Android Core or
+supported end-user release; physical devices and iOS remain unverified.
+
+Explore the [evidence and reproduction guide](https://github.com/VOLPAROSSA/volparossa/blob/a1f268d64dd3b2625c827f2ed77840c65d0a405c/docs/demos/weather-demo-0/README.md).
+Credits: ECMWF, NOAA and Overmorrow; see [attribution and notices](https://github.com/VOLPAROSSA/volparossa/blob/a1f268d64dd3b2625c827f2ed77840c65d0a405c/docs/demos/weather-demo-0/NOTICES.md).
+
 ## The first executable slice
 
 - Select an explicit IFS or AIFS Single initialization and forecast lead times.
