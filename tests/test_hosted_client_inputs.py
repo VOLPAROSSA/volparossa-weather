@@ -238,6 +238,38 @@ class ClientInputTests(unittest.TestCase):
             with self.subTest(encoded=encoded), self.assertRaisesRegex(ValueError, 'APT_URI'):
                 A['validate_uri_line'](line.replace('%2b', encoded))
 
+    def test_debian_archive_root_header_is_directory_only(self):
+        for name in ('.', './'):
+            root = tarfile.TarInfo(name)
+            root.type = tarfile.DIRTYPE
+            self.assertIsNone(A['package_member_name'](root))
+            for kind in (tarfile.REGTYPE, tarfile.SYMTYPE, tarfile.LNKTYPE):
+                root.type = kind
+                with self.subTest(name=name, kind=kind), self.assertRaisesRegex(ValueError, 'INPUT_PATH'):
+                    A['package_member_name'](root)
+        for name in ('', '/', './/', '././', './..', './usr/../escape', '/usr'):
+            root = tarfile.TarInfo(name)
+            root.type = tarfile.DIRTYPE
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'INPUT_PATH'):
+                A['package_member_name'](root)
+        self.assertEqual(A['package_member_name'](tarfile.TarInfo('./usr/share/doc/copyright')),
+                         'usr/share/doc/copyright')
+
+    def test_debian_posix_metadata_keeps_exact_unicode_and_literal_backslashes(self):
+        paths = ('usr/lib/systemd/system/system-systemd\\x2dcryptsetup.slice',
+                 'usr/share/ca-certificates/mozilla/NetLock_Arany_=Class_Gold=_Főtanúsítvány.crt')
+        for path in paths:
+            self.assertEqual(A['package_member_name'](tarfile.TarInfo('./' + path)), path)
+            with self.assertRaisesRegex(ValueError, 'INPUT_PATH'):
+                I['safe_path'](path)  # The generic acquisition-path policy is unchanged.
+        for path in ('usr/../escape', 'usr//file', '/usr/file', 'usr/./file', 'usr/file/',
+                     'usr/\x00file', 'usr/\x1ffile', 'usr/\x7ffile', 'usr/\x85file',
+                     'usr/\u202efile', 'usr/\ud800file'):
+            with self.subTest(path=repr(path)), self.assertRaisesRegex(ValueError, 'INPUT_PATH'):
+                A['package_member_name'](tarfile.TarInfo(path))
+        for exact in ('usr/cafe\u0301', 'usr/café', r'usr/\x2e\x2e'):
+            self.assertEqual(A['package_member_name'](tarfile.TarInfo(exact)), exact)
+
     def test_candidate_completed_and_partial_archives_stay_unadmitted(self):
         root = self.tmp / 'source'
         self.put(root / 'integrations/drizzli/build-plugins.json', b'{"plugins":[]}')

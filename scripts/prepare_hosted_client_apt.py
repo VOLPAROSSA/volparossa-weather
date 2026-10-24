@@ -16,6 +16,7 @@ import signal
 import tempfile
 import subprocess
 import time
+import unicodedata
 
 spec = importlib.util.spec_from_file_location('_client_inputs', Path(__file__).with_name('prepare_hosted_client_inputs.py'))
 I = importlib.util.module_from_spec(spec)
@@ -148,6 +149,24 @@ def validate_uri_line(line):
     return dict(url=parts[0], filename=filename, bytes=int(parts[2]), sha256=parts[3][7:])
 
 
+def package_member_name(member):
+    # Debian data archives may explicitly name their root directory '.'.
+    # Skip only that directory header, never a file/link or a normalized path.
+    if member.isdir() and member.name in ('.', './'):
+        return None
+    name = member.name.removeprefix('./')
+    if member.isdir():
+        name = name.removesuffix('/')
+    # These are POSIX names in authenticated Debian archives, recorded only
+    # as metadata. Keep Unicode and literal backslashes byte-for-byte (e.g.
+    # systemd's unit-name escapes). Never decode escapes, normalize Unicode,
+    # extract a path, or apply Windows path rules here.
+    I.require(type(name) is str and 0 < len(name) <= 1024
+        and not name.startswith('/') and all(p not in ('', '.', '..') for p in name.split('/'))
+        and all(not unicodedata.category(c).startswith('C') for c in name), 'INPUT_PATH')
+    return name
+
+
 def candidate(profile, output, *, downloader=I.fetch):
     global DIAGNOSTIC_OUTPUT, APT_CONFIG_FILE
     DIAGNOSTIC_OUTPUT = output
@@ -239,10 +258,9 @@ def candidate(profile, output, *, downloader=I.fetch):
             for member in archive:
                 count += 1
                 I.require(count <= 100000, 'APT_MEMBERS_BOUND')
-                name = member.name.removeprefix('./').rstrip('/')
-                if not name and member.isdir():
+                name = package_member_name(member)
+                if name is None:
                     continue
-                I.safe_path(name)
                 I.require(name not in files, 'APT_MEMBER_DUPLICATE')
                 if member.isdir():
                     files[name] = dict(type='directory')
