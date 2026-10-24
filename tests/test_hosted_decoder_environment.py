@@ -258,6 +258,51 @@ class Environment(unittest.TestCase):
             D['build_source'](Path('/archives'), output, Path('/manifest'))
         self.assertFalse((output / 'build-manifest.json').exists())
 
+    def test_source_capture_authenticates_aliases_before_first_execution(self):
+        output = self.directory / 'build/hosted-toolchain-test'
+        executed = Mock(side_effect=AssertionError('must authenticate before execution'))
+        binder = Mock(side_effect=ValueError('TOOL_PACKAGE_BYTES'))
+        def record(path):
+            return dict(path=str(path), bytes=8, sha256=H['digest'](b'compiler'), version_sha256=None)
+        with patch.object(os, 'geteuid', return_value=1000), \
+                patch.object(D['shutil'], 'which', side_effect=lambda name, **_kwargs: '/usr/bin/' + name), \
+                patch.dict(D['capture_toolchain'].__globals__, ROOT=self.directory,
+                    platform=lambda: {}, tool_record=record, captured_program=executed, run_step=executed):
+            with self.assertRaisesRegex(ValueError, 'TOOL_PACKAGE_BYTES'):
+                D['capture_toolchain'](output, pre_execute=binder)
+        executed.assert_not_called()
+        self.assertEqual(set(binder.call_args.args[0]), {'cc', 'cxx', 'python', 'bwrap', 'sh', 'ar',
+            'ranlib', 'cmake', 'ctest', 'make', 'git', 'mawk'})
+        self.assertFalse(output.exists())
+
+    def test_source_capture_checks_discovered_compiler_before_version_execution(self):
+        output = self.directory / 'build/hosted-toolchain-test'
+        versions = Mock(side_effect=AssertionError('untrusted compiler must not execute'))
+        discovery = Mock(return_value=(Path('/usr/bin/cc1'), {}))
+        seen = []
+        def binder(tools):
+            seen.append(set(tools))
+            if 'cc1' in tools: raise ValueError('TOOL_PACKAGE_BYTES')
+        def record(path):
+            return dict(path=str(path), bytes=8, sha256=H['digest'](b'compiler'), version_sha256=None)
+        with patch.object(os, 'geteuid', return_value=1000), \
+                patch.object(D['shutil'], 'which', side_effect=lambda name, **_kwargs: '/usr/bin/' + name), \
+                patch.dict(D['capture_toolchain'].__globals__, ROOT=self.directory,
+                    platform=lambda: {}, tool_record=record, captured_program=discovery, run_step=versions):
+            with self.assertRaisesRegex(ValueError, 'TOOL_PACKAGE_BYTES'):
+                D['capture_toolchain'](output, pre_execute=binder)
+        self.assertEqual(seen[-1], {'cc1'})
+        self.assertEqual(discovery.call_count, 1)
+        versions.assert_not_called()
+
+    def test_header_directory_link_cannot_hide_unchecked_library_tree_header(self):
+        def resolved(path, **_kwargs):
+            return Path('/usr/lib/unclassified-headers') if str(path) == '/usr/include/foo' else path
+        with patch.object(os, 'walk', return_value=[('/usr/include', ['foo'], [])]), \
+                patch.object(Path, 'is_symlink', return_value=True), patch.object(Path, 'resolve', resolved), \
+                self.assertRaisesRegex(ValueError, 'DEVELOPMENT_DIRECTORY_COVERAGE'):
+            H['verify_development_files'](dict(base_files={}, packages=[]))
+
 
 if __name__ == '__main__':
     unittest.main()

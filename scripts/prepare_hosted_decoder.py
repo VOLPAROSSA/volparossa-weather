@@ -256,7 +256,7 @@ COMPILER_PROGRAMS = (("cc1", "cc", "cc1"), ("cc1plus", "cxx", "cc1plus"),
     ("collect2", "cc", "collect2"), ("lto_wrapper", "cc", "lto-wrapper"), ("as", "cc", "as"), ("ld", "cc", "ld"))
 
 
-def capture_toolchain(output):
+def capture_toolchain(output, pre_execute=None):
     require(os.geteuid() != 0, "UNPRIVILEGED_AMD64_REQUIRED")
     os.umask(0o077)
     new_output(output, "hosted-toolchain-")
@@ -269,11 +269,15 @@ def capture_toolchain(output):
         require(path is not None, "TOOL_MISSING")
         tools[name] = tool_record(path)
     require(tools["mawk"]["path"] == MAWK_PATH, "MAWK_PATH_CHANGED")
+    if pre_execute is not None:
+        pre_execute(tools)
     create_output(output)
     deadline = time.monotonic() + 60
     for name, driver, program in COMPILER_PROGRAMS:
         path, _ = captured_program(output, tools, name, driver, program, deadline)
         tools[name] = tool_record(path)
+        if pre_execute is not None:
+            pre_execute({name: tools[name]})
     for name, args in sorted(VERSION_ARGS.items()):
         step = run_step(output, tools, "version-"+name, [tools[name]["path"], *args], deadline, 16384)
         tools[name]["version_sha256"] = step["log_sha256"]
@@ -449,7 +453,7 @@ def source_environment():
 def capture_source_toolchain(output):
     helper, environment = source_environment()
     development = helper["verify_development_files"](environment)
-    report = capture_toolchain(output)
+    report = capture_toolchain(output, pre_execute=lambda tools: helper["bind_tools"](tools, environment))
     manifest = load_toolchain(Path(report["toolchain_manifest"]), report["toolchain_manifest_sha256"])
     bindings = helper["bind_tools"](manifest["tools"], environment)
     require(helper["check_environment"]() == environment

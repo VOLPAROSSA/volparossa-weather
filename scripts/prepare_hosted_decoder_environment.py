@@ -480,14 +480,18 @@ def verify_development_files(environment):
                 actual = dict(bytes=len(raw), sha256=digest(raw))
                 require(actual == expected[str(resolved)], 'DEVELOPMENT_FILE_BYTES')
                 checked[str(resolved)] = actual
-            # Directory symlinks can affect compiler inputs too. Their target
-            # must be inside these already traversed /usr include/library roots.
+            # Header/compiler subtrees check every file, whereas the general
+            # library tree checks only linkable objects. A directory alias may
+            # not move headers into that more weakly classified tree.
             for name in directories:
                 path = Path(root, name)
                 if path.is_symlink():
                     resolved = path.resolve(strict=True)
                     require(resolved.is_relative_to('/usr/include') or resolved.is_relative_to('/usr/lib'),
                             'DEVELOPMENT_DIRECTORY_LINK')
+                    if path.is_relative_to('/usr/include') or path.is_relative_to('/usr/lib/gcc'):
+                        require(resolved.is_relative_to('/usr/include') or resolved.is_relative_to('/usr/lib/gcc'),
+                                'DEVELOPMENT_DIRECTORY_COVERAGE')
     return digest(canonical(checked))
 
 
