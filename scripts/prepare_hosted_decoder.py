@@ -436,22 +436,79 @@ def build(archives, output, manifest_path, manifest_sha):
     return report
 
 
+def source_environment():
+    # This helper reads only Core's fixed, source-reviewed environment lock.
+    # Captured tool hashes are still observations; package/image bytes supply
+    # the independent expected executable hashes in the explicit source mode.
+    helper = runpy.run_path(str(ROOT / "scripts/prepare_hosted_decoder_environment.py"))
+    environment = helper["check_environment"]()
+    require(platform()["os_id"] == "debian" and platform()["version_id"] == "13", "DEBIAN13_SOURCE_REQUIRED")
+    return helper, environment
+
+
+def capture_source_toolchain(output):
+    helper, environment = source_environment()
+    development = helper["verify_development_files"](environment)
+    report = capture_toolchain(output)
+    manifest = load_toolchain(Path(report["toolchain_manifest"]), report["toolchain_manifest_sha256"])
+    bindings = helper["bind_tools"](manifest["tools"], environment)
+    require(helper["check_environment"]() == environment
+            and helper["verify_development_files"](environment) == development, "SOURCE_ENVIRONMENT_CHANGED")
+    report.update(environment_lock_sha256=environment["environment_lock_sha256"],
+                  tool_package_bindings=bindings, development_files_sha256=development)
+    write_new(output / "source-toolchain-receipt.json", helper["canonical"](report))
+    return report
+
+
+def build_source(archives, output, manifest_path):
+    helper, environment = source_environment()
+    manifest_sha = sha(read_file(manifest_path))
+    toolchain = load_toolchain(manifest_path, manifest_sha)
+    bindings = helper["bind_tools"](toolchain["tools"], environment)
+    development = helper["verify_development_files"](environment)
+    report = build(archives, output, manifest_path, manifest_sha)
+    require(helper["check_environment"]() == environment
+            and helper["bind_tools"](toolchain["tools"], environment) == bindings
+            and helper["verify_development_files"](environment) == development, "SOURCE_ENVIRONMENT_CHANGED")
+    # Deliberately exclude run IDs, absolute output paths, times and step logs.
+    # This file is payload for the two cold-build comparison, never admission.
+    manifest = dict(schema=1, kind="volparossa-weather-source-build-manifest", admitted=False,
+        compiled=True, tests_passed=True, environment_lock_sha256=environment["environment_lock_sha256"],
+        source_pin_sha256=PIN_SHA, recipe_sha256=report["recipe_sha256"], source_helper_sha256=LEGACY_SHA,
+        environment_helper_sha256=sha(read_file(ROOT / "scripts/prepare_hosted_decoder_environment.py")),
+        tool_package_bindings=bindings, development_files_sha256=development,
+        source_date_epoch=EPOCH, namespace_build_path="/build", jobs=JOBS,
+        environment=ENV, effective_flags=report["effective_flags"], date_shim_sha256=sha(DATE_SHIM),
+        artifacts=report["artifacts"], licenses=report["licenses"], tests=report["tests"], scope=dict(SCOPE))
+    write_new(output / "build-manifest.json", helper["canonical"](manifest))
+    return manifest
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands_parser = parser.add_subparsers(dest="action", required=True)
     commands_parser.add_parser("plan")
     capture = commands_parser.add_parser("capture-toolchain")
     capture.add_argument("--output-dir", required=True, type=Path)
+    capture_source = commands_parser.add_parser("capture-source-toolchain")
+    capture_source.add_argument("--output-dir", required=True, type=Path)
     builder = commands_parser.add_parser("build")
     for name in ("archives", "output", "toolchain-manifest"):
         builder.add_argument("--" + name, required=True, type=Path)
     builder.add_argument("--toolchain-sha256", required=True)
+    source_builder = commands_parser.add_parser("build-source")
+    for name in ("archives", "output", "toolchain-manifest"):
+        source_builder.add_argument("--" + name, required=True, type=Path)
     args = parser.parse_args()
     try:
         if args.action == "plan":
             result = plan()
         elif args.action == "capture-toolchain":
             result = capture_toolchain(args.output_dir)
+        elif args.action == "capture-source-toolchain":
+            result = capture_source_toolchain(args.output_dir)
+        elif args.action == "build-source":
+            result = build_source(args.archives, args.output, args.toolchain_manifest)
         else:
             result = build(args.archives, args.output, args.toolchain_manifest, args.toolchain_sha256)
         print(json.dumps(result, sort_keys=True))
