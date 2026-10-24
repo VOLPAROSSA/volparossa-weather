@@ -622,6 +622,22 @@ def stage_source_payload(build_output, output):
     return report
 
 
+def preparation_failure(action, error):
+    # Logs are exported as diagnostics. Never include exception text, paths,
+    # argv, subprocess output or dynamically named exception subclasses.
+    actions = ('plan', 'capture-toolchain', 'capture-source-toolchain', 'build',
+               'build-source', 'stage-source-payload')
+    category = next((name for kind, name in (
+        (OSError, 'OSError'), (ValueError, 'ValueError'), (KeyError, 'KeyError'),
+        (TypeError, 'TypeError'), (subprocess.SubprocessError, 'SubprocessError'))
+        if isinstance(error, kind)), 'Exception')
+    code = error.args[0] if isinstance(error, ValueError) and len(error.args) == 1 else None
+    if type(code) is not str or re.fullmatch(r'[A-Z][A-Z0-9_]{0,63}', code) is None:
+        code = 'PREPARATION_FAILED'
+    return dict(schema=1, kind='hosted-decoder-preparation-failure',
+                action=action if action in actions else 'unknown', category=category, code=code)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands_parser = parser.add_subparsers(dest="action", required=True)
@@ -662,8 +678,9 @@ def main():
     except CleanupUnconfirmed:
         print("DECODER_CLEANUP_UNCONFIRMED", file=sys.stderr)
         return CLEANUP_UNCONFIRMED_EXIT
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         print("HOSTED_DECODER_PREPARATION_FAILED", file=sys.stderr)
+        print(json.dumps(preparation_failure(args.action, error), sort_keys=True), file=sys.stderr)
         return 1
 
 

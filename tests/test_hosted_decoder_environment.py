@@ -478,6 +478,60 @@ class Environment(unittest.TestCase):
                 self.assertRaisesRegex(ValueError, 'DEVELOPMENT_DIRECTORY_COVERAGE'):
             H['verify_development_files'](dict(base_files={}, packages=[]))
 
+    def verify_directory_alias_fixture(self, links, inventory=None):
+        rows = {}
+        for path in links:
+            rows.setdefault(str(Path(path).parent), []).append(Path(path).name)
+        def walk(base, *, followlinks):
+            self.assertIn(base, (Path('/usr/include'), Path('/usr/lib')))
+            self.assertFalse(followlinks)
+            return [(root, names, []) for root, names in rows.items() if Path(root).is_relative_to(base)]
+        def resolved(path, **_kwargs):
+            return Path(links[str(path)][1]) if str(path) in links else path
+        environment = dict(base_files={}, packages=[],
+            inventory=[dict(H['OPENSSL_DATA_PACKAGE'])] if inventory is None else inventory)
+        opened = Mock(side_effect=AssertionError('data aliases must never be opened'))
+        with patch.object(os, 'walk', side_effect=walk) as walked, \
+                patch.object(Path, 'exists', return_value=True), \
+                patch.object(Path, 'is_symlink', lambda path: str(path) in links), \
+                patch.object(Path, 'resolve', resolved), \
+                patch.object(os, 'readlink', side_effect=lambda path: links[str(path)][0]), \
+                patch.object(os, 'open', opened):
+            result = H['verify_development_files'](environment)
+        opened.assert_not_called()
+        self.assertEqual(walked.call_count, 2)  # Only the two fixed roots, never /etc/ssl.
+        return result
+
+    def test_exact_pinned_openssl_data_directory_aliases_are_not_followed(self):
+        links = {path: (target, target) for path, target in H['OPENSSL_DATA_DIRECTORY_ALIASES'].items()}
+        self.assertEqual(set(links), {'/usr/lib/ssl/certs', '/usr/lib/ssl/private'})
+        self.assertEqual(self.verify_directory_alias_fixture(links), H['digest'](H['canonical']({})))
+
+    def test_openssl_data_alias_requires_exact_raw_absolute_and_canonical_target(self):
+        for path, target in H['OPENSSL_DATA_DIRECTORY_ALIASES'].items():
+            for raw, resolved in ((target + '/', target), ('../../../' + target[1:], target),
+                                  (target, target + '-other'), (target + '-other', target + '-other')):
+                with self.subTest(path=path, raw=raw, resolved=resolved), \
+                        self.assertRaisesRegex(ValueError, '^DEVELOPMENT_SSL_DATA_LINK$'):
+                    self.verify_directory_alias_fixture({path: (raw, resolved)})
+
+    def test_openssl_data_alias_requires_unique_exact_validated_inventory_identity(self):
+        row = dict(H['OPENSSL_DATA_PACKAGE'])
+        link = {'/usr/lib/ssl/certs': ('/etc/ssl/certs', '/etc/ssl/certs')}
+        for inventory in ([], [dict(row, version='3.5.7-1~deb13u1')], [dict(row, architecture='all')],
+                          [dict(row, name='openssl-other')], [row, row]):
+            with self.subTest(inventory=inventory), \
+                    self.assertRaisesRegex(ValueError, '^DEVELOPMENT_SSL_DATA_LINK$'):
+                self.verify_directory_alias_fixture(link, inventory)
+
+    def test_openssl_allowlist_never_allows_other_etc_aliases_or_header_compiler_escape(self):
+        for path in ('/usr/lib/ssl/other', '/usr/include/certs', '/usr/lib/gcc/private'):
+            with self.subTest(path=path), self.assertRaisesRegex(ValueError, '^DEVELOPMENT_DIRECTORY_LINK$'):
+                self.verify_directory_alias_fixture({path: ('/etc/ssl/certs', '/etc/ssl/certs')})
+        for path in ('/usr/include/certs', '/usr/lib/gcc/private'):
+            with self.subTest(path=path), self.assertRaisesRegex(ValueError, '^DEVELOPMENT_DIRECTORY_COVERAGE$'):
+                self.verify_directory_alias_fixture({path: ('/usr/lib/ssl', '/usr/lib/ssl')})
+
     def payload_fixture(self):
         root = self.directory / 'recipe'
         root.mkdir()

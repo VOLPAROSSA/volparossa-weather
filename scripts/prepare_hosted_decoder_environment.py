@@ -60,6 +60,16 @@ REPOSITORIES = {
 MAX_INDEX = 128 * 1024**2
 MAX_RECORD = 32 * 1024**2
 STATUS_FORMAT = '${Package}\t${Version}\t${Architecture}\t${db:Status-Status}\n'
+# Exact directory aliases in openssl_3.5.7-1~deb13u2_amd64.deb, SHA256
+# 4ff006f431d8c2e69fa736885a3b6e779f2448535f69dbde821d9f0ff87ad8ea.
+# The package is unchanged in the pinned image's validated inventory. These
+# data directories are never traversed, opened or mounted into the builder's
+# empty /etc; they are not header/compiler/linkable-library inputs.
+OPENSSL_DATA_PACKAGE = dict(name='openssl', version='3.5.7-1~deb13u2', architecture='amd64')
+OPENSSL_DATA_DIRECTORY_ALIASES = {
+    '/usr/lib/ssl/certs': '/etc/ssl/certs',
+    '/usr/lib/ssl/private': '/etc/ssl/private',
+}
 
 
 def require(condition, code):
@@ -529,6 +539,7 @@ def verify_development_files(environment):
     Paths removed by an upgrade are not inputs. Any current regular library or
     header must match either its reviewed .deb member or the original image.
     Symlinks are resolved and the target, including directory links, is checked.
+    The two fixed OpenSSL data aliases are identity-checked, never traversed.
     """
     expected = dict(environment['base_files'])
     package_paths = set()
@@ -570,6 +581,13 @@ def verify_development_files(environment):
                 path = Path(root, name)
                 if path.is_symlink():
                     resolved = path.resolve(strict=True)
+                    if str(path) in OPENSSL_DATA_DIRECTORY_ALIASES:
+                        target = OPENSSL_DATA_DIRECTORY_ALIASES[str(path)]
+                        require(os.readlink(path) == target and resolved == Path(target)
+                                and [item for item in environment.get('inventory', [])
+                                     if item.get('name') == 'openssl'] == [OPENSSL_DATA_PACKAGE],
+                                'DEVELOPMENT_SSL_DATA_LINK')
+                        continue  # os.walk(followlinks=False) never enters the data target.
                     require(resolved.is_relative_to('/usr/include') or resolved.is_relative_to('/usr/lib'),
                             'DEVELOPMENT_DIRECTORY_LINK')
                     if path.is_relative_to('/usr/include') or path.is_relative_to('/usr/lib/gcc'):
