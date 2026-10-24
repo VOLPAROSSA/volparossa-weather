@@ -255,6 +255,38 @@ class ClientInputTests(unittest.TestCase):
         self.assertEqual(A['package_member_name'](tarfile.TarInfo('./usr/share/doc/copyright')),
                          'usr/share/doc/copyright')
 
+    def test_snapshot_keyring_bytes_are_authority_before_exclusive_private_copy(self):
+        raw = b'exact public keyring fixture'
+        source = self.put(self.tmp / 'system-keyring', raw)
+        source.chmod(0o666)
+        os.link(source, self.tmp / 'system-keyring-alias')
+        private = self.tmp / 'private'; private.mkdir(mode=0o700)
+        globals_ = A['pinned_keyring'].__globals__
+        with patch.dict(globals_, KEYRING=source, KEYRING_BYTES=len(raw), KEYRING_SHA256=I['sha'](raw)):
+            copy, observation = A['pinned_keyring'](private)
+            self.assertEqual(I['read'](copy), raw)
+            self.assertEqual(stat.S_IMODE(copy.stat().st_mode), 0o600)
+            self.assertEqual(copy.stat().st_nlink, 1)
+            self.assertEqual(observation['source_links'], 2)
+            self.assertEqual(observation['source_mode'], 0o666)
+            with self.assertRaises(FileExistsError):
+                A['pinned_keyring'](private)
+            source.write_bytes(b'x' * len(raw))
+            with self.assertRaisesRegex(ValueError, 'KEYRING_BYTES'):
+                A['pinned_keyring'](private)
+            source.write_bytes(raw + b'x')
+            with self.assertRaisesRegex(ValueError, 'TYPE_OR_SIZE'):
+                A['pinned_keyring'](private)
+            source.unlink(); source.symlink_to(self.tmp / 'system-keyring-alias')
+            with self.assertRaises(OSError):
+                A['pinned_keyring'](private)
+
+    def test_snapshot_keyring_rejects_special_files_without_blocking(self):
+        source = self.tmp / 'fifo'
+        os.mkfifo(source)
+        with patch.dict(A['pinned_keyring'].__globals__, KEYRING=source), self.assertRaisesRegex(ValueError, 'TYPE_OR_SIZE'):
+            A['pinned_keyring'](self.tmp)
+
     def test_debian_posix_metadata_keeps_exact_unicode_and_literal_backslashes(self):
         paths = ('usr/lib/systemd/system/system-systemd\\x2dcryptsetup.slice',
                  'usr/share/ca-certificates/mozilla/NetLock_Arany_=Class_Gold=_Főtanúsítvány.crt')

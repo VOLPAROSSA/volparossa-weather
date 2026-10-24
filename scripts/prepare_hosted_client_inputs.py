@@ -491,7 +491,7 @@ def hosted_guard(environment, profile):
     require('ID=ubuntu' in release.splitlines() and 'VERSION_ID="24.04"' in release.splitlines(), 'UBUNTU_24_REQUIRED')
 
 
-PUBLIC_NAMES = frozenset(('dependency-candidate.json', 'dependency-candidate.partial.json', 'apt-candidate.json', 'source-binding.json',
+PUBLIC_NAMES = frozenset(('dependency-candidate.json', 'dependency-candidate.partial.json', 'apt-candidate.json', 'source-binding.json', 'bootstrap-observations.json',
     'result.json', 'apt-update.log', 'apt-failure.log', 'apt-resolver.log', 'runner-packages.tsv', 'package-lock.json', 'pubspec.lock',
     'noble.InRelease', 'noble-updates.InRelease', 'noble-security.InRelease',
     'noble.signature.log', 'noble-updates.signature.log', 'noble-security.signature.log'))

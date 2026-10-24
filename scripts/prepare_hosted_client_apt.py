@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import shlex
 import signal
+import stat
 import tempfile
 import subprocess
 import time
@@ -25,6 +26,14 @@ ROOT = I.ROOT
 SNAPSHOT = '20261023T000000Z'
 BASE = f'https://snapshot.ubuntu.com/ubuntu/{SNAPSHOT}/'
 KEYRING = Path('/usr/share/keyrings/ubuntu-archive-keyring.gpg')
+# Original member of ubuntu-keyring_2023.11.28.1_all.deb (11124 bytes),
+# package SHA256 36de43b15853ccae0028e9a767613770c704833f82586f28eb262f0311adb8a8.
+# Independently verified against the fixed noble index and Ubuntu's published
+# archive-key fingerprints. The runner's mutable file metadata is observation,
+# never authority for these expected public-key bytes.
+KEYRING_BYTES = 3607
+KEYRING_SHA256 = '80a36b0a6de2f69f49d2df75ef473ccde121e9e190b9ea01d20a4f63778d5c31'
+ARCHIVE_SIGNER = 'F6ECB3762474EDA9D21B7022871920D1991BC93C'
 SUITES = {
     'noble': dict(bytes=255850, sha256='cdb2f31d809f589719a53c6ad15f255b27569c4059542ada282aaa21b8e164b0'),
     'noble-updates': dict(bytes=126125, sha256='600c42e6d50b8bd7200f6a5c9e0d2eaee24728bddeb6c1529da9fc38c753a088'),
@@ -113,6 +122,23 @@ def signature_identities(status):
     return [dict(subkey=a.decode(), primary=b.decode()) for a, b in signers]
 
 
+def pinned_keyring(private):
+    # Read the fixed system path as untrusted data, never as executable input.
+    # Hash the complete bounded bytes before making our own exclusive private
+    # copy; permissions or aliases of the original cannot authorize different
+    # keys. The general source-file reader remains unchanged.
+    fd = os.open(KEYRING, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        I.require(stat.S_ISREG(info.st_mode) and info.st_size == KEYRING_BYTES, 'UBUNTU_KEYRING_TYPE_OR_SIZE')
+        raw = stream.read(KEYRING_BYTES + 1)
+    I.require(len(raw) == KEYRING_BYTES and I.sha(raw) == KEYRING_SHA256, 'UBUNTU_KEYRING_BYTES')
+    path = private / 'ubuntu-snapshot-keyring.gpg'
+    I.write(path, raw)
+    return path, dict(bytes=len(raw), sha256=I.sha(raw), source_mode=stat.S_IMODE(info.st_mode),
+        source_uid=info.st_uid, source_links=info.st_nlink)
+
+
 def authenticated_release(raw, suite):
     I.require(raw.startswith(b'-----BEGIN PGP SIGNED MESSAGE-----\n') and raw.count(b'-----BEGIN PGP SIGNATURE-----') == 1, 'UBUNTU_CLEARTEXT')
     body = raw.split(b'\n\n', 1)[1].split(b'-----BEGIN PGP SIGNATURE-----', 1)[0]
@@ -173,6 +199,13 @@ def candidate(profile, output, *, downloader=I.fetch):
     I.require(profile in ('web', 'flutter'), 'CANDIDATE_APT_PROFILE')  # Android acquisition has its own later gate.
     private = output / 'apt-private'
     private.mkdir(mode=0o700)
+    keyring, keyring_observation = pinned_keyring(private)
+    # Fail before acquisition if bootstrap tools cannot be safely observed.
+    # These hashes describe this runner; they are not compiler/input admission.
+    bootstrap_tools = {str(path): I.sha(I.read(path)) for path in map(Path,
+        ('/usr/bin/apt-get', '/usr/bin/gpgv', '/usr/bin/dpkg-query', '/usr/bin/dpkg-deb', '/usr/lib/apt/apt-helper'))}
+    I.write(output / 'bootstrap-observations.json', I.canonical(dict(schema=1, admitted=False,
+        kind='client-input-bootstrap-observations', keyring=keyring_observation, tools=bootstrap_tools)))
     APT_CONFIG_FILE = private / 'apt.conf'
     # Set before apt reads its normal config fragments, not only as late CLI
     # overrides. This excludes host proxy/auth settings and update hooks.
@@ -181,7 +214,7 @@ def candidate(profile, output, *, downloader=I.fetch):
         (private / name).mkdir(mode=0o700)
     I.write(private / 'status', b'')  # resolve full transitive closure, including already installed roots
     I.write(private / 'preferences', b'')
-    I.write(private / 'sources.list', ''.join(f'deb [arch=amd64 signed-by={KEYRING}] {BASE} {suite} main restricted universe multiverse\n' for suite in SUITES).encode())
+    I.write(private / 'sources.list', ''.join(f'deb [arch=amd64 signed-by={keyring}] {BASE} {suite} main restricted universe multiverse\n' for suite in SUITES).encode())
     options = ['-o', 'Dir::Etc::main=/dev/null', '-o', 'Dir::Etc::parts=-',
         '-o', 'Dir::Etc::sourcelist=' + str(private / 'sources.list'),
         '-o', 'Dir::Etc::sourceparts=' + str(private / 'sourceparts'),
@@ -194,7 +227,7 @@ def candidate(profile, output, *, downloader=I.fetch):
         '-o', 'Acquire::https::AllowRedirect=false', '-o', 'Acquire::ForceHash=SHA256',
         '-o', 'Acquire::Retries=0', '-o', 'APT::Get::List-Cleanup=false', '-o', 'Debug::NoLocking=true']
     # The fixed release bytes are checked independently before apt can parse
-    # any repository indexes. gpgv uses the existing Ubuntu image trust store.
+    # any repository indexes. Both gpgv and apt use our exact private keyring.
     releases = {}
     for suite, pin in SUITES.items():
         raw = downloader(BASE + 'dists/' + suite + '/InRelease', pin['bytes'], sha256=pin['sha256'])
@@ -202,9 +235,10 @@ def candidate(profile, output, *, downloader=I.fetch):
         path = private / (suite + '.InRelease')
         I.write(path, raw)
         I.write(output / (suite + '.InRelease'), raw)
-        status = run(['/usr/bin/gpgv', '--status-fd', '1', '--keyring', str(KEYRING), str(path)], maximum=65536)
+        status = run(['/usr/bin/gpgv', '--status-fd', '1', '--keyring', str(keyring), str(path)], maximum=65536)
         I.write(output / (suite + '.signature.log'), status)
         signers = signature_identities(status)
+        I.require(signers == [dict(subkey=ARCHIVE_SIGNER, primary=ARCHIVE_SIGNER)], 'UBUNTU_SIGNATURE_IDENTITY')
         releases[suite] = dict(input=pin, signatures=signers,
             indexes=authenticated_release(raw, suite))
     raw = run(['/usr/bin/apt-get', *options, 'update'], seconds=300)
@@ -277,10 +311,9 @@ def candidate(profile, output, *, downloader=I.fetch):
     I.write(output / 'runner-packages.tsv', baseline)
     value = dict(schema=1, kind='volparossa-weather-client-apt-candidate', admitted=False, profile=profile,
         snapshot=SNAPSHOT, roots=list(PROFILES[profile]), repositories=releases, indexes=indexes, packages=bindings,
-        baseline=dict(packages_sha256=I.sha(baseline), keyring_sha256=I.sha(I.read(KEYRING)),
+        baseline=dict(packages_sha256=I.sha(baseline), keyring_sha256=I.sha(I.read(keyring)),
             image_os=os.environ.get('ImageOS'), image_version=os.environ.get('ImageVersion'),
-            bootstrap_tools={str(path): I.sha(I.read(path)) for path in map(Path,
-                ('/usr/bin/apt-get', '/usr/bin/gpgv', '/usr/bin/dpkg-query', '/usr/bin/dpkg-deb', '/usr/lib/apt/apt-helper'))}),
+            bootstrap_tools=bootstrap_tools),
         installed=False, compiled=False, full_build_environment_admitted=False,
         limitations=['runner-bootstrap-tools-observed-not-independent-authority', 'installed-file-config-alternatives-binding-required-before-build'])
     I.write(output / 'apt-candidate.json', I.canonical(value))
