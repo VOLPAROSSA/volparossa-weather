@@ -526,6 +526,31 @@ class Environment(unittest.TestCase):
                 D['stage_source_payload'](build, root / 'build/hosted-payload-large')
             self.assertFalse((root / 'build/hosted-payload-large').exists())
 
+    def test_payload_readback_detects_extra_missing_modes_and_changed_member_bytes(self):
+        root, build, environment, _manifest = self.payload_fixture()
+        output = root / 'build/hosted-payload-readback'
+        with self.payload_state(root, environment):
+            manifest = D['stage_source_payload'](build, output)
+            self.assertFalse(D['verify_source_payload_tree'](output, manifest, '1' * 64)['decoder_executed'])
+            extra = output / 'unexpected-file'
+            H['write_candidate_file'](extra, b'extra')
+            with self.assertRaisesRegex(ValueError, 'SOURCE_PAYLOAD_SET'):
+                D['verify_source_payload_tree'](output, manifest, '1' * 64)
+            extra.unlink()
+            probe = output / 'probe.grib2'
+            probe.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, 'SOURCE_PAYLOAD_SET'):
+                D['verify_source_payload_tree'](output, manifest, '1' * 64)
+            probe.write_bytes(b'changed'); probe.chmod(0o400)
+            with self.assertRaisesRegex(ValueError, 'SOURCE_PAYLOAD_BYTES'):
+                D['verify_source_payload_tree'](output, manifest, '1' * 64)
+            probe.unlink()
+            with self.assertRaisesRegex(ValueError, 'SOURCE_PAYLOAD_SET'):
+                D['verify_source_payload_tree'](output, manifest, '1' * 64)
+            for key, value in [('admitted', True), ('environment_lock_sha256', '0' * 64), ('bytes', True)]:
+                changed = copy.deepcopy(manifest); changed[key] = value
+                with self.assertRaises(ValueError): D['validate_payload_manifest'](changed, '1' * 64)
+
 
 if __name__ == '__main__':
     unittest.main()

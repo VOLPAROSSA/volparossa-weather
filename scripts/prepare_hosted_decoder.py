@@ -495,6 +495,58 @@ def build_source(archives, output, manifest_path):
     return manifest
 
 
+def source_payload_notices():
+    pin_raw = read_file(PIN)
+    require(sha(pin_raw) == PIN_SHA, "SOURCE_PIN_CHANGED")
+    pin = json.loads(pin_raw, object_pairs_hook=unique)
+    notices = {item["name"] + "-source/" + name for item in pin["sources"] for name in item["notices"]}
+    return notices | {"eccodes-source/third_party/expected/COPYING"}
+
+
+def validate_payload_manifest(value, environment_lock_sha):
+    require(type(value) is dict and set(value) == {"schema", "kind", "admitted", "compiled",
+        "environment_lock_sha256", "files", "bytes"} and type(value["schema"]) is int and value["schema"] == 1
+        and value["kind"] == "volparossa-weather-source-payload-manifest" and value["admitted"] is False
+        and value["compiled"] is True and value["environment_lock_sha256"] == environment_lock_sha,
+        "SOURCE_PAYLOAD_MANIFEST")
+    expected = set(SOURCE_ARTIFACTS) | source_payload_notices() | {"build-manifest.json"}
+    require(type(value["files"]) is dict and set(value["files"]) == expected, "SOURCE_PAYLOAD_SET")
+    total = 0
+    for name, item in value["files"].items():
+        require(type(item) is dict and set(item) == {"bytes", "mode", "sha256"}
+                and type(item["bytes"]) is int and 0 < item["bytes"] <=
+                (64 * 1024**2 if name in SOURCE_ARTIFACTS else 1024**2)
+                and type(item["mode"]) is int and item["mode"] == (0o500 if name in SOURCE_ARTIFACTS[:3] else 0o400)
+                and type(item["sha256"]) is str and re.fullmatch(r'[0-9a-f]{64}', item["sha256"]), "SOURCE_PAYLOAD_ENTRY")
+        total += item["bytes"]
+    require(type(value["bytes"]) is int and value["bytes"] == total and total <= MAX_SOURCE_PAYLOAD,
+            "SOURCE_PAYLOAD_BOUND")
+    return value
+
+
+def verify_source_payload_tree(directory, manifest, environment_lock_sha):
+    validate_payload_manifest(manifest, environment_lock_sha)
+    require(directory.is_absolute() and directory.resolve() == directory and directory.is_dir(), "SOURCE_PAYLOAD_PATH")
+    expected = manifest["files"]
+    parents = {str(parent) for name in expected for parent in Path(name).parents}
+    found, count = set(), 0
+    for path in directory.rglob('*'):
+        count += 1
+        require(count <= 256, "SOURCE_PAYLOAD_SET")
+        name = str(path.relative_to(directory))
+        info = path.lstat()
+        if stat.S_ISDIR(info.st_mode):
+            require(name in parents and stat.S_IMODE(info.st_mode) == 0o700, "SOURCE_PAYLOAD_DIRECTORY")
+            continue
+        require(name in expected and stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == expected[name]["mode"],
+                "SOURCE_PAYLOAD_SET")
+        raw = read_file(path, expected[name]["bytes"])
+        require(len(raw) == expected[name]["bytes"] and sha(raw) == expected[name]["sha256"], "SOURCE_PAYLOAD_BYTES")
+        found.add(name)
+    require(found == set(expected), "SOURCE_PAYLOAD_SET")
+    return dict(admitted=False, decoder_executed=False, files=len(found), bytes=manifest["bytes"], verified=True)
+
+
 def source_payload_files(build_output, environment):
     require(build_output.is_absolute() and build_output.parent == ROOT / "build"
             and build_output.resolve() == build_output and build_output.is_dir()
@@ -516,11 +568,7 @@ def source_payload_files(build_output, environment):
             and manifest["date_shim_sha256"] == sha(DATE_SHIM) and manifest["scope"] == SCOPE
             and all(type(item) is bool for item in manifest["scope"].values()),
             "SOURCE_MANIFEST_INPUTS")
-    pin_raw = read_file(PIN)
-    require(sha(pin_raw) == PIN_SHA, "SOURCE_PIN_CHANGED")
-    pin = json.loads(pin_raw, object_pairs_hook=unique)
-    notices = {item["name"] + "-source/" + name for item in pin["sources"] for name in item["notices"]}
-    notices.add("eccodes-source/third_party/expected/COPYING")
+    notices = source_payload_notices()
     require(type(manifest["artifacts"]) is list and len(manifest["artifacts"]) == len(SOURCE_ARTIFACTS)
             and {item["path"] for item in manifest["artifacts"]} == set(SOURCE_ARTIFACTS)
             and type(manifest["licenses"]) is list and len(manifest["licenses"]) == len(notices)
@@ -564,6 +612,7 @@ def stage_source_payload(build_output, output):
     report = dict(schema=1, kind="volparossa-weather-source-payload-manifest", admitted=False,
         compiled=True, environment_lock_sha256=environment["environment_lock_sha256"],
         files=payload, bytes=sum(item["bytes"] for item in payload.values()))
+    verify_source_payload_tree(output, report, environment["environment_lock_sha256"])
     # Keep this metadata beside the build logs. It is intentionally outside the
     # runner-local payload tree, and is never static decoder/ABI authority.
     write_new(build_output / "payload-manifest.json", helper["canonical"](report))
