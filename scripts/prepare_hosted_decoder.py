@@ -52,6 +52,13 @@ SCOPE = dict(network_during_build=False, downloaded_executables=False, original_
              decoder_authorized=False, origin_acquisition_proven=False, browser_proven=False,
              fully_hermetic_toolchain=False, bit_reproducibility_proven=False, debian13_abi_proven=False)
 CLEANUP_UNCONFIRMED_EXIT = 125
+SOURCE_ARTIFACTS = ("eccodes-build/bin/grib_ls", "eccodes-build/bin/grib_filter", "eccodes-build/bin/codes_info",
+                    "prefix/lib/libaec.a", "probe.grib2")
+MAX_SOURCE_PAYLOAD = 160 * 1024**2
+SOURCE_MANIFEST_FIELDS = {"schema", "kind", "admitted", "compiled", "tests_passed", "environment_lock_sha256",
+    "source_pin_sha256", "recipe_sha256", "source_helper_sha256", "environment_helper_sha256",
+    "tool_package_bindings", "development_files_sha256", "source_date_epoch", "namespace_build_path", "jobs",
+    "environment", "effective_flags", "date_shim_sha256", "artifacts", "licenses", "tests", "scope"}
 
 
 class CleanupUnconfirmed(ValueError):
@@ -256,7 +263,7 @@ COMPILER_PROGRAMS = (("cc1", "cc", "cc1"), ("cc1plus", "cxx", "cc1plus"),
     ("collect2", "cc", "collect2"), ("lto_wrapper", "cc", "lto-wrapper"), ("as", "cc", "as"), ("ld", "cc", "ld"))
 
 
-def capture_toolchain(output):
+def capture_toolchain(output, pre_execute=None):
     require(os.geteuid() != 0, "UNPRIVILEGED_AMD64_REQUIRED")
     os.umask(0o077)
     new_output(output, "hosted-toolchain-")
@@ -269,11 +276,15 @@ def capture_toolchain(output):
         require(path is not None, "TOOL_MISSING")
         tools[name] = tool_record(path)
     require(tools["mawk"]["path"] == MAWK_PATH, "MAWK_PATH_CHANGED")
+    if pre_execute is not None:
+        pre_execute(tools)
     create_output(output)
     deadline = time.monotonic() + 60
     for name, driver, program in COMPILER_PROGRAMS:
         path, _ = captured_program(output, tools, name, driver, program, deadline)
         tools[name] = tool_record(path)
+        if pre_execute is not None:
+            pre_execute({name: tools[name]})
     for name, args in sorted(VERSION_ARGS.items()):
         step = run_step(output, tools, "version-"+name, [tools[name]["path"], *args], deadline, 16384)
         tools[name]["version_sha256"] = step["log_sha256"]
@@ -436,22 +447,227 @@ def build(archives, output, manifest_path, manifest_sha):
     return report
 
 
+def source_environment():
+    # This helper reads only Core's fixed, source-reviewed environment lock.
+    # Captured tool hashes are still observations; package/image bytes supply
+    # the independent expected executable hashes in the explicit source mode.
+    helper = runpy.run_path(str(ROOT / "scripts/prepare_hosted_decoder_environment.py"))
+    environment = helper["check_environment"]()
+    require(platform()["os_id"] == "debian" and platform()["version_id"] == "13", "DEBIAN13_SOURCE_REQUIRED")
+    return helper, environment
+
+
+def capture_source_toolchain(output):
+    helper, environment = source_environment()
+    development = helper["verify_development_files"](environment)
+    report = capture_toolchain(output, pre_execute=lambda tools: helper["bind_tools"](tools, environment))
+    manifest = load_toolchain(Path(report["toolchain_manifest"]), report["toolchain_manifest_sha256"])
+    bindings = helper["bind_tools"](manifest["tools"], environment)
+    require(helper["check_environment"]() == environment
+            and helper["verify_development_files"](environment) == development, "SOURCE_ENVIRONMENT_CHANGED")
+    report.update(environment_lock_sha256=environment["environment_lock_sha256"],
+                  tool_package_bindings=bindings, development_files_sha256=development)
+    write_new(output / "source-toolchain-receipt.json", helper["canonical"](report))
+    return report
+
+
+def build_source(archives, output, manifest_path):
+    helper, environment = source_environment()
+    manifest_sha = sha(read_file(manifest_path))
+    toolchain = load_toolchain(manifest_path, manifest_sha)
+    bindings = helper["bind_tools"](toolchain["tools"], environment)
+    development = helper["verify_development_files"](environment)
+    report = build(archives, output, manifest_path, manifest_sha)
+    require(helper["check_environment"]() == environment
+            and helper["bind_tools"](toolchain["tools"], environment) == bindings
+            and helper["verify_development_files"](environment) == development, "SOURCE_ENVIRONMENT_CHANGED")
+    # Deliberately exclude run IDs, absolute output paths, times and step logs.
+    # This file is payload for the two cold-build comparison, never admission.
+    manifest = dict(schema=1, kind="volparossa-weather-source-build-manifest", admitted=False,
+        compiled=True, tests_passed=True, environment_lock_sha256=environment["environment_lock_sha256"],
+        source_pin_sha256=PIN_SHA, recipe_sha256=report["recipe_sha256"], source_helper_sha256=LEGACY_SHA,
+        environment_helper_sha256=sha(read_file(ROOT / "scripts/prepare_hosted_decoder_environment.py")),
+        tool_package_bindings=bindings, development_files_sha256=development,
+        source_date_epoch=EPOCH, namespace_build_path="/build", jobs=JOBS,
+        environment=ENV, effective_flags=report["effective_flags"], date_shim_sha256=sha(DATE_SHIM),
+        artifacts=report["artifacts"], licenses=report["licenses"], tests=report["tests"], scope=dict(SCOPE))
+    write_new(output / "build-manifest.json", helper["canonical"](manifest))
+    return manifest
+
+
+def source_payload_notices():
+    pin_raw = read_file(PIN)
+    require(sha(pin_raw) == PIN_SHA, "SOURCE_PIN_CHANGED")
+    pin = json.loads(pin_raw, object_pairs_hook=unique)
+    notices = {item["name"] + "-source/" + name for item in pin["sources"] for name in item["notices"]}
+    return notices | {"eccodes-source/third_party/expected/COPYING"}
+
+
+def validate_payload_manifest(value, environment_lock_sha):
+    require(type(value) is dict and set(value) == {"schema", "kind", "admitted", "compiled",
+        "environment_lock_sha256", "files", "bytes"} and type(value["schema"]) is int and value["schema"] == 1
+        and value["kind"] == "volparossa-weather-source-payload-manifest" and value["admitted"] is False
+        and value["compiled"] is True and value["environment_lock_sha256"] == environment_lock_sha,
+        "SOURCE_PAYLOAD_MANIFEST")
+    expected = set(SOURCE_ARTIFACTS) | source_payload_notices() | {"build-manifest.json"}
+    require(type(value["files"]) is dict and set(value["files"]) == expected, "SOURCE_PAYLOAD_SET")
+    total = 0
+    for name, item in value["files"].items():
+        require(type(item) is dict and set(item) == {"bytes", "mode", "sha256"}
+                and type(item["bytes"]) is int and 0 < item["bytes"] <=
+                (64 * 1024**2 if name in SOURCE_ARTIFACTS else 1024**2)
+                and type(item["mode"]) is int and item["mode"] == (0o500 if name in SOURCE_ARTIFACTS[:3] else 0o400)
+                and type(item["sha256"]) is str and re.fullmatch(r'[0-9a-f]{64}', item["sha256"]), "SOURCE_PAYLOAD_ENTRY")
+        total += item["bytes"]
+    require(type(value["bytes"]) is int and value["bytes"] == total and total <= MAX_SOURCE_PAYLOAD,
+            "SOURCE_PAYLOAD_BOUND")
+    return value
+
+
+def verify_source_payload_tree(directory, manifest, environment_lock_sha):
+    validate_payload_manifest(manifest, environment_lock_sha)
+    require(directory.is_absolute() and directory.resolve() == directory and directory.is_dir(), "SOURCE_PAYLOAD_PATH")
+    expected = manifest["files"]
+    parents = {str(parent) for name in expected for parent in Path(name).parents}
+    found, count = set(), 0
+    for path in directory.rglob('*'):
+        count += 1
+        require(count <= 256, "SOURCE_PAYLOAD_SET")
+        name = str(path.relative_to(directory))
+        info = path.lstat()
+        if stat.S_ISDIR(info.st_mode):
+            require(name in parents and stat.S_IMODE(info.st_mode) == 0o700, "SOURCE_PAYLOAD_DIRECTORY")
+            continue
+        require(name in expected and stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == expected[name]["mode"],
+                "SOURCE_PAYLOAD_SET")
+        raw = read_file(path, expected[name]["bytes"])
+        require(len(raw) == expected[name]["bytes"] and sha(raw) == expected[name]["sha256"], "SOURCE_PAYLOAD_BYTES")
+        found.add(name)
+    require(found == set(expected), "SOURCE_PAYLOAD_SET")
+    return dict(admitted=False, decoder_executed=False, files=len(found), bytes=manifest["bytes"], verified=True)
+
+
+def source_payload_files(build_output, environment):
+    require(build_output.is_absolute() and build_output.parent == ROOT / "build"
+            and build_output.resolve() == build_output and build_output.is_dir()
+            and re.fullmatch(r'hosted-decoder-[a-z0-9-]{1,48}', build_output.name), "SOURCE_BUILD_OUTPUT")
+    raw = read_file(build_output / "build-manifest.json")
+    manifest = json.loads(raw, object_pairs_hook=unique)
+    require(type(manifest) is dict and set(manifest) == SOURCE_MANIFEST_FIELDS
+            and type(manifest["schema"]) is int and manifest["schema"] == 1
+            and manifest["kind"] == "volparossa-weather-source-build-manifest"
+            and manifest["admitted"] is False and manifest["compiled"] is True
+            and manifest["tests_passed"] is True, "SOURCE_MANIFEST_SCHEMA")
+    require(manifest["environment_lock_sha256"] == environment["environment_lock_sha256"]
+            and manifest["source_pin_sha256"] == PIN_SHA and manifest["source_helper_sha256"] == LEGACY_SHA
+            and manifest["recipe_sha256"] == sha(read_file(Path(__file__)))
+            and manifest["environment_helper_sha256"] == sha(read_file(ROOT / "scripts/prepare_hosted_decoder_environment.py"))
+            and type(manifest["jobs"]) is int and manifest["jobs"] == JOBS
+            and type(manifest["source_date_epoch"]) is int and manifest["source_date_epoch"] == EPOCH
+            and manifest["namespace_build_path"] == "/build" and manifest["environment"] == ENV
+            and manifest["date_shim_sha256"] == sha(DATE_SHIM) and manifest["scope"] == SCOPE
+            and all(type(item) is bool for item in manifest["scope"].values()),
+            "SOURCE_MANIFEST_INPUTS")
+    notices = source_payload_notices()
+    require(type(manifest["artifacts"]) is list and len(manifest["artifacts"]) == len(SOURCE_ARTIFACTS)
+            and {item["path"] for item in manifest["artifacts"]} == set(SOURCE_ARTIFACTS)
+            and type(manifest["licenses"]) is list and len(manifest["licenses"]) == len(notices)
+            and {item["path"] for item in manifest["licenses"]} == notices, "SOURCE_PAYLOAD_SET")
+    files = {"build-manifest.json": (raw, 0o400)}
+    total = len(raw)
+    for item in manifest["artifacts"] + manifest["licenses"]:
+        name = item["path"]
+        is_notice = name in notices
+        require(type(item) is dict and set(item) == ({"path", "bytes", "sha256", "symlink_target"} if is_notice
+                else {"path", "bytes", "sha256"}) and type(item["bytes"]) is int and 0 < item["bytes"] <=
+                (1024**2 if is_notice else 64 * 1024**2) and type(item["sha256"]) is str
+                and re.fullmatch(r'[0-9a-f]{64}', item["sha256"]), "SOURCE_PAYLOAD_ENTRY")
+        path = build_output / name
+        resolved = path.resolve()
+        require(resolved.is_relative_to(build_output) and (is_notice or resolved == path), "SOURCE_PAYLOAD_PATH")
+        require(not is_notice or (os.readlink(path) if path.is_symlink() else None) == item["symlink_target"],
+                "SOURCE_NOTICE_LINK")
+        data = read_file(resolved, item["bytes"])
+        require(len(data) == item["bytes"] and sha(data) == item["sha256"], "SOURCE_PAYLOAD_BYTES")
+        if name in SOURCE_ARTIFACTS[:3]:
+            require(data.startswith(b'\x7fELF'), "SOURCE_PAYLOAD_ELF")
+        total += len(data)
+        require(total <= MAX_SOURCE_PAYLOAD, "SOURCE_PAYLOAD_BOUND")
+        files[name] = (data, 0o500 if name in SOURCE_ARTIFACTS[:3] else 0o400)
+    return files
+
+
+def stage_source_payload(build_output, output):
+    helper, environment = source_environment()
+    new_output(output, "hosted-payload-")
+    files = source_payload_files(build_output, environment)
+    output.mkdir(mode=0o700)
+    payload = {}
+    for name, (raw, mode) in sorted(files.items()):
+        path = output / name
+        parent = output
+        for part in Path(name).parts[:-1]:
+            parent /= part
+            parent.mkdir(mode=0o700, exist_ok=True)
+        write_new(path, raw, mode)
+        payload[name] = dict(bytes=len(raw), mode=mode, sha256=sha(raw))
+    require(helper["check_environment"]() == environment, "SOURCE_ENVIRONMENT_CHANGED")
+    report = dict(schema=1, kind="volparossa-weather-source-payload-manifest", admitted=False,
+        compiled=True, environment_lock_sha256=environment["environment_lock_sha256"],
+        files=payload, bytes=sum(item["bytes"] for item in payload.values()))
+    verify_source_payload_tree(output, report, environment["environment_lock_sha256"])
+    # Keep this metadata beside the build logs. It is intentionally outside the
+    # runner-local payload tree, and is never static decoder/ABI authority.
+    write_new(build_output / "payload-manifest.json", helper["canonical"](report))
+    return report
+
+
+def preparation_failure(action, error):
+    # Logs are exported as diagnostics. Never include exception text, paths,
+    # argv, subprocess output or dynamically named exception subclasses.
+    actions = ('plan', 'capture-toolchain', 'capture-source-toolchain', 'build',
+               'build-source', 'stage-source-payload')
+    category = next((name for kind, name in (
+        (OSError, 'OSError'), (ValueError, 'ValueError'), (KeyError, 'KeyError'),
+        (TypeError, 'TypeError'), (subprocess.SubprocessError, 'SubprocessError'))
+        if isinstance(error, kind)), 'Exception')
+    code = error.args[0] if isinstance(error, ValueError) and len(error.args) == 1 else None
+    if type(code) is not str or re.fullmatch(r'[A-Z][A-Z0-9_]{0,63}', code) is None:
+        code = 'PREPARATION_FAILED'
+    return dict(schema=1, kind='hosted-decoder-preparation-failure',
+                action=action if action in actions else 'unknown', category=category, code=code)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands_parser = parser.add_subparsers(dest="action", required=True)
     commands_parser.add_parser("plan")
     capture = commands_parser.add_parser("capture-toolchain")
     capture.add_argument("--output-dir", required=True, type=Path)
+    capture_source = commands_parser.add_parser("capture-source-toolchain")
+    capture_source.add_argument("--output-dir", required=True, type=Path)
     builder = commands_parser.add_parser("build")
     for name in ("archives", "output", "toolchain-manifest"):
         builder.add_argument("--" + name, required=True, type=Path)
     builder.add_argument("--toolchain-sha256", required=True)
+    source_builder = commands_parser.add_parser("build-source")
+    for name in ("archives", "output", "toolchain-manifest"):
+        source_builder.add_argument("--" + name, required=True, type=Path)
+    payload = commands_parser.add_parser("stage-source-payload")
+    payload.add_argument("--build-output", required=True, type=Path)
+    payload.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     try:
         if args.action == "plan":
             result = plan()
         elif args.action == "capture-toolchain":
             result = capture_toolchain(args.output_dir)
+        elif args.action == "capture-source-toolchain":
+            result = capture_source_toolchain(args.output_dir)
+        elif args.action == "build-source":
+            result = build_source(args.archives, args.output, args.toolchain_manifest)
+        elif args.action == "stage-source-payload":
+            result = stage_source_payload(args.build_output, args.output)
         else:
             result = build(args.archives, args.output, args.toolchain_manifest, args.toolchain_sha256)
         print(json.dumps(result, sort_keys=True))
@@ -462,8 +678,9 @@ def main():
     except CleanupUnconfirmed:
         print("DECODER_CLEANUP_UNCONFIRMED", file=sys.stderr)
         return CLEANUP_UNCONFIRMED_EXIT
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         print("HOSTED_DECODER_PREPARATION_FAILED", file=sys.stderr)
+        print(json.dumps(preparation_failure(args.action, error), sort_keys=True), file=sys.stderr)
         return 1
 
 
