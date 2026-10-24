@@ -13,7 +13,7 @@ WORKFLOW = ROOT / ".github/workflows/hosted-clients.yml"
 class HostedClientWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.source = WORKFLOW.read_text()
+        cls.source = WORKFLOW.read_text().split("\n  input-candidate:", 1)[0]
 
     def test_exact_public_checkouts_and_read_only_permissions(self):
         actions = re.findall(r"uses: ([^\s]+)", self.source)

@@ -3,6 +3,12 @@ run-name: Pinned Overmorrow build and isolated synthetic Firefox trials
 
 on:
   workflow_dispatch:
+    inputs:
+      input_mode:
+        description: Historical build or bounded input candidate (no compilation)
+        type: choice
+        default: historical-v1
+        options: [historical-v1, source-input-inventory]
   push:
     branches: [feature/hosted-overmorrow]
     paths:
@@ -11,6 +17,12 @@ on:
       - scripts/prepare_hosted_flutter.py
       - scripts/prepare_hosted_clients_ci.py
       - scripts/prepare_hosted_source_recipe.py
+      - scripts/prepare_hosted_client_inputs.py
+      - scripts/prepare_hosted_client_apt.py
+      - third_party/client-locks/**
+      - third_party/client-notices/**
+      - third_party/client-notices-v1.json
+      - tests/test_hosted_client_inputs.py
       - tests/test_hosted_source_recipe.py
       - scripts/prepare_hosted_decoder.py
       - scripts/prepare_hosted_decoder_ci.py
@@ -35,6 +47,7 @@ defaults:
 
 jobs:
   overmorrow:
+    if: github.event.inputs.input_mode != 'source-input-inventory'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -134,3 +147,48 @@ jobs:
             'SDK, pub cache, application profiles and Git data are never exported as artifacts.' \
             'Source recipes contain references, not full upstream/dependency source or runtime acceptance.' \
             >> "$GITHUB_STEP_SUMMARY"
+
+  input-candidate:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.input_mode == 'source-input-inventory'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify candidate source before primary data acquisition
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --short --untracked-files=all)"
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(id -u)" != 0
+          umask 077
+          mkdir -m 700 -p build
+          python3 -B -m unittest discover -s tests -p 'test_hosted_client_inputs.py'
+      - name: Acquire signed snapshot and locked dependency candidate as data
+        run: |
+          set -euo pipefail
+          umask 077
+          timeout --kill-after=15s 1500s python3 -B scripts/prepare_hosted_client_inputs.py --profile overmorrow --mode source-input-inventory
+      - name: Project closed source and metadata evidence
+        if: always()
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 -B scripts/prepare_hosted_client_inputs.py --profile overmorrow --mode stage-input-metadata
+      - name: Retain only candidate metadata and original source notices
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: hosted-overmorrow-input-candidate-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: build/hosted-overmorrow-input-candidate-public
+      - name: Remove runner-local package data
+        if: always()
+        run: |
+          set -euo pipefail
+          test "$GITHUB_WORKSPACE" = "$(pwd -P)"
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          rm -rf -- "$GITHUB_WORKSPACE/build/hosted-overmorrow-input-candidate" "$GITHUB_WORKSPACE/build/hosted-overmorrow-input-candidate-public"

@@ -1,0 +1,672 @@
+{
+  "admitted": false,
+  "coverage": "actual-new-output-graph-required",
+  "fonts": {
+    "MaterialIcons": {
+      "archive_bytes": 2306678,
+      "archive_sha256": "e56fa8e9bb4589fde964be3de451f3e5b251e4a1eafb1dc98d94add034dd5a86",
+      "attribution": "third_party/client-notices/MaterialIcons-ATTRIBUTION.txt",
+      "attribution_sha256": "c7a9e37bed9577f6f6d93a00e7f6f2e8872488894d9789a41e641e84d7569345",
+      "bytes": 18531,
+      "font_bytes": 1645184,
+      "font_sha256": "d9865b671a09d683d13a863089d8825e0f61a37696ce5d7d448bc8023aa62453",
+      "license": "CC-BY-4.0",
+      "member": "MaterialIcons-Regular.otf",
+      "modified": false,
+      "notice": "third_party/client-notices/MaterialIcons-LICENSE.txt",
+      "sha256": "be698262aecd042c0de6f886cc0af622f8def446462026992cc530275d8a9e74",
+      "source": "https://storage.googleapis.com/flutter_infra_release/flutter/fonts/3012db47f3130e62f7cc0beabff968a33cbec8d8/fonts.zip"
+    },
+    "NotoSans": {
+      "bytes": 4396,
+      "font_sha256": "a33452e68cae1307a4b168c501e12d143e18c210db45102d2e8d852ce7986bb5",
+      "notice": "third_party/client-notices/NotoSans-OFL.txt",
+      "sha256": "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a",
+      "source": "https://raw.githubusercontent.com/notofonts/latin-greek-cyrillic/c4a321e123e4d4ff315f57f4e0adf294fe3a95be/OFL.txt"
+    }
+  },
+  "kind": "volparossa-weather-client-notice-inputs",
+  "npm": {
+    "bundle": "third_party/client-notices/npm-originals.txt",
+    "bundle_sha256": "6deef6669788de82247d85b6e3fc4e8a2f69fe3c9dfd1d809e91d907dc275f49",
+    "components": {
+      "@floating-ui/core": {
+        "integrity": "sha512-0CIZ5itps/8x7BG8dEIhs53BvCUH2PCoogtakwRTut+Arm58sJooJ0AuZhLw2HJYIR5cMLNPBSS728sPho2khQ==",
+        "notices": [
+          "0e4c9a9b6c71019cbbea3bdc20b01223110a9035700f9c960c8fcbf78c2325ce"
+        ],
+        "origin": "https://registry.npmjs.org/@floating-ui/core/-/core-1.8.0.tgz",
+        "version": "1.8.0"
+      },
+      "@floating-ui/dom": {
+        "integrity": "sha512-yXSrzeHZBTZadLOlfyhCkJHNeLJnHRnRInwdZ40L7ZiaAtrBwoYlsDrX3v5zB1Utk7CLfzcOVnVVWoXEky7Ceg==",
+        "notices": [
+          "0e4c9a9b6c71019cbbea3bdc20b01223110a9035700f9c960c8fcbf78c2325ce"
+        ],
+        "origin": "https://registry.npmjs.org/@floating-ui/dom/-/dom-1.8.0.tgz",
+        "version": "1.8.0"
+      },
+      "@floating-ui/utils": {
+        "integrity": "sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww==",
+        "notices": [
+          "0e4c9a9b6c71019cbbea3bdc20b01223110a9035700f9c960c8fcbf78c2325ce"
+        ],
+        "origin": "https://registry.npmjs.org/@floating-ui/utils/-/utils-0.2.12.tgz",
+        "version": "0.2.12"
+      },
+      "@inlang/paraglide-js": {
+        "integrity": "sha512-a3Gw3md1S3WyJK1rFAP/FwDCsFKnu1b98rJ3k5bUl6nc3cmbglaSYpuK9qq9aLLlUlZhuCtB/Pb1LeKDUaLycg==",
+        "notices": [
+          "2b712711f7fe8ae830c0747eee4e3fe9bf55048567ca74cbfe6bd94d0ac9430d"
+        ],
+        "origin": "https://registry.npmjs.org/@inlang/paraglide-js/-/paraglide-js-2.25.0.tgz",
+        "version": "2.25.0"
+      },
+      "@internationalized/date": {
+        "integrity": "sha512-FY1Y+H64NDs+HAF6omlnWxm3mEpfgaCSWtL5l551ZZfImA+kGjPFgrnJrGjH6lfmLL0g8Z/mBu1R3kufeCp6Jw==",
+        "notices": [
+          "7dfe6526888bac51759c99f9a51262ba2711a8c12a067f2181609dd9a4066b84"
+        ],
+        "origin": "https://registry.npmjs.org/@internationalized/date/-/date-3.12.2.tgz",
+        "version": "3.12.2"
+      },
+      "@jridgewell/gen-mapping": {
+        "integrity": "sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==",
+        "notices": [
+          "769d154fbde32a915af110b1123650bc79f4cbe675acc66e005265bf069c6c6c"
+        ],
+        "origin": "https://registry.npmjs.org/@jridgewell/gen-mapping/-/gen-mapping-0.3.13.tgz",
+        "version": "0.3.13"
+      },
+      "@jridgewell/remapping": {
+        "integrity": "sha512-LI9u/+laYG4Ds1TDKSJW2YPrIlcVYOwi2fUC6xB43lueCjgxV4lffOCZCtYFiH6TNOX+tQKXx97T4IKHbhyHEQ==",
+        "notices": [
+          "769d154fbde32a915af110b1123650bc79f4cbe675acc66e005265bf069c6c6c"
+        ],
+        "origin": "https://registry.npmjs.org/@jridgewell/remapping/-/remapping-2.3.5.tgz",
+        "version": "2.3.5"
+      },
+      "@jridgewell/resolve-uri": {
+        "integrity": "sha512-bRISgCIjP20/tbWSPWMEi54QVPRZExkuD9lJL+UIxUKtwVJA8wW1Trb1jMs1RFXo1CBTNZ/5hpC9QvmKWdopKw==",
+        "notices": [
+          "b8778b155bfde5a28b023a558753c0fa058a52bb9de35c343c250be1bbcdedab"
+        ],
+        "origin": "https://registry.npmjs.org/@jridgewell/resolve-uri/-/resolve-uri-3.1.2.tgz",
+        "version": "3.1.2"
+      },
+      "@jridgewell/sourcemap-codec": {
+        "integrity": "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==",
+        "notices": [
+          "769d154fbde32a915af110b1123650bc79f4cbe675acc66e005265bf069c6c6c"
+        ],
+        "origin": "https://registry.npmjs.org/@jridgewell/sourcemap-codec/-/sourcemap-codec-1.5.5.tgz",
+        "version": "1.5.5"
+      },
+      "@jridgewell/trace-mapping": {
+        "integrity": "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==",
+        "notices": [
+          "769d154fbde32a915af110b1123650bc79f4cbe675acc66e005265bf069c6c6c"
+        ],
+        "origin": "https://registry.npmjs.org/@jridgewell/trace-mapping/-/trace-mapping-0.3.31.tgz",
+        "version": "0.3.31"
+      },
+      "@lucide/svelte": {
+        "integrity": "sha512-RFH6Vx7dj6hshcBa1qJ0nKAWwkh385jJbDwF1WVg7yflC89310BsA55SEmJnaSRfr03dAyZMMLUC1EMGBu0Z0Q==",
+        "notices": [
+          "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57"
+        ],
+        "origin": "https://registry.npmjs.org/@lucide/svelte/-/svelte-1.49.0.tgz",
+        "version": "1.49.0"
+      },
+      "@openmeteo/sdk": {
+        "integrity": "sha512-aCDyWjDqdT6kf73chJJ//kWlqwh8fZgMwtU9sO14ElRn++Yte/MuX6rnPPhFK+1KSP78vx/aGBlwh9o6Mrs1Jg==",
+        "notices": [
+          "06f7bdf604db150e13e7d898a775669db34d28d8bb3ee39bee201de666efae94"
+        ],
+        "origin": "https://registry.npmjs.org/@openmeteo/sdk/-/sdk-1.27.2.tgz",
+        "version": "1.27.2"
+      },
+      "@polka/url": {
+        "integrity": "sha512-wwQAWhWSuHaag8c4q/KN/vCoeOJYshAIvMQwD4GpSb3OiZklFfvAgmj0VCBBImRpuF/aFgIRzllXlVX93Jevww==",
+        "notices": [
+          "ba573393f24555ac0528612ad39665fab5bdcc80330a61096024bbf5f736526d"
+        ],
+        "origin": "https://registry.npmjs.org/@polka/url/-/url-1.0.0-next.29.tgz",
+        "version": "1.0.0-next.29"
+      },
+      "@standard-schema/spec": {
+        "integrity": "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==",
+        "notices": [
+          "653b779005a3a4d64a7288c940f7b9a0e8f0b1e0375f6aa6af9473caf131e564"
+        ],
+        "origin": "https://registry.npmjs.org/@standard-schema/spec/-/spec-1.1.0.tgz",
+        "version": "1.1.0"
+      },
+      "@sveltejs/acorn-typescript": {
+        "integrity": "sha512-LFuZUkjJ9iF7JZye/aG5XM0SFcQ5VyL0oVX4WJ9dc0Va3R3s0OauX1BESVCb+YN/ol8TAfqGDDAQsTG627Y5kw==",
+        "notices": [
+          "54e58ba168330ad6c315813fd50e729b2748d1ed38314fd30b833a4e89e15f2a"
+        ],
+        "origin": "https://registry.npmjs.org/@sveltejs/acorn-typescript/-/acorn-typescript-1.0.11.tgz",
+        "version": "1.0.11"
+      },
+      "@sveltejs/kit": {
+        "integrity": "sha512-nY9SPHGOZro3doud9vZXDBwl9tCZIouuJztjgSHs6PAIrv9M/z5O7eOhPV5xU7CgVHA976Jwu3BA1hIFvXztkA==",
+        "notices": [
+          "ac6ecdc526c9e6aec1db76f0e8dfe344d792380e974686476e7c512152ae2636"
+        ],
+        "origin": "https://registry.npmjs.org/@sveltejs/kit/-/kit-2.70.1.tgz",
+        "version": "2.70.1"
+      },
+      "@swc/helpers": {
+        "integrity": "sha512-5lSsMOTXURePglDfvuAQUqkGek9Hg2kksOYay2m0+XR++b2NWYL/4sWyuvVBIs8oKnJaxkdi9whaL/sqN13afw==",
+        "notices": [
+          "d96eba1f1881334d50ffc144276dfa98e147a415e7c591ecdfcb81680361dc91"
+        ],
+        "origin": "https://registry.npmjs.org/@swc/helpers/-/helpers-0.5.23.tgz",
+        "version": "0.5.23"
+      },
+      "@types/cookie": {
+        "integrity": "sha512-4Kh9a6B2bQciAhf7FSuMRRkUWecJgJu9nPnx3yzpsfXX/c50REIqpHY4C82bXP90qrLtXtkDxTZosYO3UpOwlA==",
+        "notices": [
+          "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+        ],
+        "origin": "https://registry.npmjs.org/@types/cookie/-/cookie-0.6.0.tgz",
+        "version": "0.6.0"
+      },
+      "@types/estree": {
+        "integrity": "sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==",
+        "notices": [
+          "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+        ],
+        "origin": "https://registry.npmjs.org/@types/estree/-/estree-1.0.9.tgz",
+        "version": "1.0.9"
+      },
+      "acorn": {
+        "integrity": "sha512-xRQbDb9BnwDafYNn6Vwl839DYVjqXYb1XVGtWAZ1kcDc6iwAL4hg3B1dZlRiuENFeO2H53gFG3in621AdERVAg==",
+        "notices": [
+          "76a876cf886ff9be2a8b5e2e86514fed06223c8c9f0c1e9ee9606e93841e00b7"
+        ],
+        "origin": "https://registry.npmjs.org/acorn/-/acorn-8.17.0.tgz",
+        "version": "8.17.0"
+      },
+      "aria-query": {
+        "integrity": "sha512-Z/ZeOgVl7bcSYZ/u/rh0fOpvEpq//LZmdbkXyc7syVzjPAhfOa9ebsdTSjEBDU4vs5nC98Kfduj1uFo0qyET3g==",
+        "notices": [
+          "c8df456c7ccba74b959087dff494d4ac2a12dfb0400c08b46b2494a08a000567"
+        ],
+        "origin": "https://registry.npmjs.org/aria-query/-/aria-query-5.3.1.tgz",
+        "version": "5.3.1"
+      },
+      "axobject-query": {
+        "integrity": "sha512-qIj0G9wZbMGNLjLmg1PT6v2mE9AH2zlnADJD/2tC6E00hgmhUOfEB6greHPAfLRSufHqROIUTkw6E+M3lH0PTQ==",
+        "notices": [
+          "c8df456c7ccba74b959087dff494d4ac2a12dfb0400c08b46b2494a08a000567"
+        ],
+        "origin": "https://registry.npmjs.org/axobject-query/-/axobject-query-4.1.0.tgz",
+        "version": "4.1.0"
+      },
+      "bits-ui": {
+        "integrity": "sha512-dHDm5Jw2NZJgLRvHAwPeuR4BnZij+AqTIq33OqVfo+qiMXontoC/yIvGT5TZaviv7OuBdJ2QUy2JPQ2yKBvF6w==",
+        "notices": [
+          "91b34549ceba8602e9a763d32443fa2ae92fba1a148b45e71ad480c723004818",
+          "ddbc663c5406c796b7fd364f09a89d02ad3d052c7121a270d0b180d861426b02"
+        ],
+        "origin": "https://registry.npmjs.org/bits-ui/-/bits-ui-2.19.0.tgz",
+        "version": "2.19.0"
+      },
+      "clsx": {
+        "integrity": "sha512-eYm0QWBtUrBWZWG0d386OGAw16Z995PiOVo2B7bjWSbHedGl5e0ZWaq65kOGgUSNesEIDkB9ISbTg/JK9dhCZA==",
+        "notices": [
+          "9a9edad7baae52622bddf3c15b2ef8a33d2c89f2d25408ad13e8a7481c6b0c97"
+        ],
+        "origin": "https://registry.npmjs.org/clsx/-/clsx-2.1.1.tgz",
+        "version": "2.1.1"
+      },
+      "cookie": {
+        "integrity": "sha512-U71cyTamuh1CRNCfpGY6to28lxvNwPG4Guz/EVjgf3Jmzv0vlDp1atT9eS5dDjMYHucpHbWns6Lwf3BKz6svdw==",
+        "notices": [
+          "c02110eedc16c7114f1a9bdc026c65626ce1d9c7e27fd51a8e0feee8a48a6858"
+        ],
+        "origin": "https://registry.npmjs.org/cookie/-/cookie-0.6.0.tgz",
+        "version": "0.6.0"
+      },
+      "date-fns": {
+        "integrity": "sha512-+1UMbeh68lH1SegH83CGWwpb6OHHbpSgr3+s5Eww5M4CAgswBpoWS0AjTOfEJ33HiYKz1hdj/KTFprzXHmq/6w==",
+        "notices": [
+          "8d3951c38967b964b1fe259bfd200c2647cc04c858b55a4414e3122a60f1ef4b"
+        ],
+        "origin": "https://registry.npmjs.org/date-fns/-/date-fns-4.4.0.tgz",
+        "version": "4.4.0"
+      },
+      "date-fns-tz": {
+        "integrity": "sha512-sg8HqoTEulcbbbVXeg84u5UnlsQa8GS5QXMqjjYIhS4abEVVKIUwe0/l/UhrZdKaL/W5eWZNlbTeEIiOXTcsBQ==",
+        "notices": [
+          "54a4274bc32c7e4f8db2f4169e7d5a1affab53625573eea780bed67ff7cd1f4b"
+        ],
+        "origin": "https://registry.npmjs.org/date-fns-tz/-/date-fns-tz-3.2.0.tgz",
+        "version": "3.2.0"
+      },
+      "dequal": {
+        "integrity": "sha512-0je+qPKHEMohvfRTCEo3CrPG6cAzAYgmzKyxRiYSSDkS6eGJdyVJm7WaYA5ECaAD9wLB2T4EEeymA5aFVcYXCA==",
+        "notices": [
+          "306fa513e39b23a6e8747520de761809d206b99800ef41907b530226574c59ae"
+        ],
+        "origin": "https://registry.npmjs.org/dequal/-/dequal-2.0.3.tgz",
+        "version": "2.0.3"
+      },
+      "devalue": {
+        "integrity": "sha512-4CXDYRBGqN+57wVJkuXBYmpAVUSg3L6JAQa/DFqm238G73E1wuyc/JhGQJzN7vUf/CMphYau2zXbfWzDR5aTEw==",
+        "notices": [
+          "e399db7e952e45cae84f1b53d72ba8dbad2daaa7ab8cd1f0ab72fea5ab73b225"
+        ],
+        "origin": "https://registry.npmjs.org/devalue/-/devalue-5.8.1.tgz",
+        "version": "5.8.1"
+      },
+      "esm-env": {
+        "integrity": "sha512-Epxrv+Nr/CaL4ZcFGPJIYLWFom+YeV1DqMLHJoEd9SYRxNbaFruBwfEX/kkHUJf55j2+TUbmDcmuilbP1TmXHA==",
+        "notices": [
+          "6df5276ee7531fcc5446f19082c12e77bb6c5f081fd2b6d6cf88180a5ee36acd"
+        ],
+        "origin": "https://registry.npmjs.org/esm-env/-/esm-env-1.2.2.tgz",
+        "version": "1.2.2"
+      },
+      "esrap": {
+        "integrity": "sha512-GQ/7RN8uOtEfNpzZzBMTzW9JBcX42oaSVtPzdF+6cEL8pqIL094iUpr9jzYGn4O4P/1S60dJ6izyT8F4LYARng==",
+        "notices": [
+          "8f8f0696ab4041a885d28bddf82e2ad673a6522cb644d6f972237f4f6e172a1d"
+        ],
+        "origin": "https://registry.npmjs.org/esrap/-/esrap-2.3.0.tgz",
+        "version": "2.3.0"
+      },
+      "flatbuffers": {
+        "integrity": "sha512-MI1qs7Lo4Syw0EOzUl0xjs2lsoeqFku44KpngfIduHBYvzm8h2+7K8YMQh1JtVVVrUvhLpNwqVi4DERegUJhPQ==",
+        "notices": [
+          "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        ],
+        "origin": "https://registry.npmjs.org/flatbuffers/-/flatbuffers-25.9.23.tgz",
+        "version": "25.9.23"
+      },
+      "inline-style-parser": {
+        "integrity": "sha512-Nb2ctOyNR8DqQoR0OwRG95uNWIC0C1lCgf5Naz5H6Ji72KZ8OcFZLz2P5sNgwlyoJ8Yif11oMuYs5pBQa86csA==",
+        "notices": [
+          "395c95f20598da653ff1eb1cb9d74947c7fac689697147f1d192fd0242a0e635"
+        ],
+        "origin": "https://registry.npmjs.org/inline-style-parser/-/inline-style-parser-0.2.7.tgz",
+        "version": "0.2.7"
+      },
+      "is-reference": {
+        "integrity": "sha512-ixkJoqQvAP88E6wLydLGGqCJsrFUnqoH6HnaczB8XmDH1oaWU+xxdptvikTgaEhtZ53Ky6YXiBuUI2WXLMCwjw==",
+        "notices": [],
+        "origin": "https://registry.npmjs.org/is-reference/-/is-reference-3.0.3.tgz",
+        "version": "3.0.3"
+      },
+      "kleur": {
+        "integrity": "sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ==",
+        "notices": [
+          "306fa513e39b23a6e8747520de761809d206b99800ef41907b530226574c59ae"
+        ],
+        "origin": "https://registry.npmjs.org/kleur/-/kleur-4.1.5.tgz",
+        "version": "4.1.5"
+      },
+      "locate-character": {
+        "integrity": "sha512-SW13ws7BjaeJ6p7Q6CO2nchbYEc3X3J6WrmTTDto7yMPqVSZTUyY5Tjbid+Ab8gLnATtygYtiDIJGQRRn2ZOiA==",
+        "notices": [],
+        "origin": "https://registry.npmjs.org/locate-character/-/locate-character-3.0.0.tgz",
+        "version": "3.0.0"
+      },
+      "lz-string": {
+        "integrity": "sha512-h5bgJWpxJNswbU7qCrV0tIKQCaS3blPDrqKWx+QxzuzL1zGUzij9XCWLrSLsJPu5t+eWA/ycetzYAO5IOMcWAQ==",
+        "notices": [
+          "433fc9dfe659dbfb1e91eed8351f13651e97bfa3ac6d03394c3d63f61d4bbc80"
+        ],
+        "origin": "https://registry.npmjs.org/lz-string/-/lz-string-1.5.0.tgz",
+        "version": "1.5.0"
+      },
+      "magic-string": {
+        "integrity": "sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==",
+        "notices": [
+          "1cbe51b907662f6cb1492b16c359384a595180bf0e4d101603ed525e75c4e484"
+        ],
+        "origin": "https://registry.npmjs.org/magic-string/-/magic-string-0.30.21.tgz",
+        "version": "0.30.21"
+      },
+      "mrmime": {
+        "integrity": "sha512-Y3wQdFg2Va6etvQ5I82yUhGdsKrcYox6p7FfL1LbK2J4V01F9TGlepTIhnK24t7koZibmg82KGglhA1XK5IsLQ==",
+        "notices": [
+          "ba573393f24555ac0528612ad39665fab5bdcc80330a61096024bbf5f736526d"
+        ],
+        "origin": "https://registry.npmjs.org/mrmime/-/mrmime-2.0.1.tgz",
+        "version": "2.0.1"
+      },
+      "openmeteo": {
+        "integrity": "sha512-3updmgCMnCAAjAgV3RfhMdIBPi/43RtbjQ4CizHGn52RP9SpgmVCDRpun+Ex75NG3jTF3pZp+d1BPlP9DWMHiQ==",
+        "notices": [
+          "a00b9fa0f93efce8a42930d22c4bc19311446c03ebee5ef99df9e04b148d0148"
+        ],
+        "origin": "https://registry.npmjs.org/openmeteo/-/openmeteo-1.2.3.tgz",
+        "version": "1.2.3"
+      },
+      "runed": {
+        "integrity": "sha512-2F4Q/FZzbeJTFdIS/PuOoPRSm92sA2LhzTnv6FXhCoENb3huf5+fDuNOg1LNvGOouy3u/225qxmuJvcV3IZK5Q==",
+        "notices": [
+          "8914f144af4333312a07b30438dc6b75dd8da7a665c3ae9fa751f229eb615e8b"
+        ],
+        "origin": "https://registry.npmjs.org/runed/-/runed-0.35.1.tgz",
+        "version": "0.35.1"
+      },
+      "set-cookie-parser": {
+        "integrity": "sha512-5/r/lTwbJ3zQ+qwdUFZYeRNqda7P5HD8zQKqlSjdGt1/S0cjLAphHusj4Y58ahDtWn/g32xrIS58/ikOvwl0Lw==",
+        "notices": [
+          "c5c6c5183a789d122f267c405f685037efb87e27fcde28ab1dd7378a2d2f5962"
+        ],
+        "origin": "https://registry.npmjs.org/set-cookie-parser/-/set-cookie-parser-3.1.2.tgz",
+        "version": "3.1.2"
+      },
+      "sirv": {
+        "integrity": "sha512-2wcC/oGxHis/BoHkkPwldgiPSYcpZK3JU28WoMVv55yHJgcZ8rlXvuG9iZggz+sU1d4bRgIGASwyWqjxu3FM0g==",
+        "notices": [
+          "ba573393f24555ac0528612ad39665fab5bdcc80330a61096024bbf5f736526d"
+        ],
+        "origin": "https://registry.npmjs.org/sirv/-/sirv-3.0.2.tgz",
+        "version": "3.0.2"
+      },
+      "style-to-object": {
+        "integrity": "sha512-LIN7rULI0jBscWQYaSswptyderlarFkjQ+t79nzty8tcIAceVomEVlLzH5VP4Cmsv6MtKhs7qaAiwlcp+Mgaxw==",
+        "notices": [
+          "896c9fd6b5fc48ac31800b9d29a6e3ffcb0c2d534ed077ebfa5c2fa388cc38b7"
+        ],
+        "origin": "https://registry.npmjs.org/style-to-object/-/style-to-object-1.0.14.tgz",
+        "version": "1.0.14"
+      },
+      "svelte": {
+        "integrity": "sha512-NdbDn7fl4be1ViUG0oq/lvG6OZy3oENolV2ONjiqqsfVoeAfzaQAKUcEX3MrQod/Bebv1PgwET9rfXhgn9s4Kg==",
+        "notices": [
+          "06257f4847b13a49a039efb17b944c141e71b12fd8d231b362d86919067d77a3"
+        ],
+        "origin": "https://registry.npmjs.org/svelte/-/svelte-5.57.0.tgz",
+        "version": "5.57.0"
+      },
+      "svelte-persisted-store": {
+        "integrity": "sha512-BdBQr2SGSJ+rDWH8/aEV5GthBJDapVP0GP3fuUCA7TjYG5ctcB+O9Mj9ZC0+Jo1oJMfZUd1y9H68NFRR5MyIJA==",
+        "notices": [
+          "578d4473efca440ea48e55c2122fd729aea9a1c1bf5b4de43258cc264c991884"
+        ],
+        "origin": "https://registry.npmjs.org/svelte-persisted-store/-/svelte-persisted-store-0.12.0.tgz",
+        "version": "0.12.0"
+      },
+      "svelte-toolbelt": {
+        "integrity": "sha512-YWuX+RE+CnWYx09yseAe4ZVMM7e7GRFZM6OYWpBKOb++s+SQ8RBIMMe+Bs/CznBMc0QPLjr+vDBxTAkozXsFXQ==",
+        "notices": [
+          "8914f144af4333312a07b30438dc6b75dd8da7a665c3ae9fa751f229eb615e8b"
+        ],
+        "origin": "https://registry.npmjs.org/svelte-toolbelt/-/svelte-toolbelt-0.10.6.tgz",
+        "version": "0.10.6"
+      },
+      "tabbable": {
+        "integrity": "sha512-wieBHXygIm7OyQOu5hQlkk62/WyCFYGlWg7L6/ZCUZwx0o398Zkn4pVmMyfYhfMG8kGrj/Krt8eIk6UKC6VzwA==",
+        "notices": [
+          "8e714750725e75c8b31172ef84c0805f94873f86e3b5cfca8a948553f0778fa1"
+        ],
+        "origin": "https://registry.npmjs.org/tabbable/-/tabbable-6.5.0.tgz",
+        "version": "6.5.0"
+      },
+      "tailwind-merge": {
+        "integrity": "sha512-XPPUyAc+cvspz3lHTcR/QgPfW2A0lv/xQNIjX3HGhLR+Nq2lHaLq5MtTesHn8GUr3W3DguT2KT5x3NVgRtYwmA==",
+        "notices": [
+          "d4c70c7ce38cea8778f0aed3fc0bef0a9dbd27f13bd8b6773cbd6d37941971e5"
+        ],
+        "origin": "https://registry.npmjs.org/tailwind-merge/-/tailwind-merge-3.7.0.tgz",
+        "version": "3.7.0"
+      },
+      "tailwind-variants": {
+        "integrity": "sha512-4pAvwUtM4HKBiRZftncAbpn6V9Hhwoa5Fl7O2u5zbp7Z5Cvu+/o/6+176WY3WCEES209543quG8zFIcXCsc5Jw==",
+        "notices": [
+          "f3f8984c684106a9ffb50c44ff5dd6f2082526d78a820235a6592423d376d650"
+        ],
+        "origin": "https://registry.npmjs.org/tailwind-variants/-/tailwind-variants-3.3.1.tgz",
+        "version": "3.3.1"
+      },
+      "tailwindcss": {
+        "integrity": "sha512-gOhV3P7ufE62QDGg1zVaTgCR+EtPv92k2nIhVcVKcLmxT1sUBsQGhnZj175j+MqRt4zLF7ic+sCYjfhxMxj7YQ==",
+        "notices": [
+          "60e0b68c0f35c078eef3a5d29419d0b03ff84ec1df9c3f9d6e39a519a5ae7985"
+        ],
+        "origin": "https://registry.npmjs.org/tailwindcss/-/tailwindcss-4.3.3.tgz",
+        "version": "4.3.3"
+      },
+      "totalist": {
+        "integrity": "sha512-sf4i37nQ2LBx4m3wB74y+ubopq6W/dIzXg0FDGjsYnZHVa1Da8FH853wlL2gtUhg+xJXjfk3kUZS3BRoQeoQBQ==",
+        "notices": [
+          "306fa513e39b23a6e8747520de761809d206b99800ef41907b530226574c59ae"
+        ],
+        "origin": "https://registry.npmjs.org/totalist/-/totalist-3.0.1.tgz",
+        "version": "3.0.1"
+      },
+      "tw-animate-css": {
+        "integrity": "sha512-7bziOlRqH0hJx80h/3mbicLW7o8qLsH5+RaLR2t+OHM3D0JlWGODQKQ4cxbK7WlvmUxpcj6Kgu6EKqjrGFe3QQ==",
+        "notices": [
+          "039184dfa0a822397b3f45a435b5b1e538721587fbade96b9fa80f86cb354109"
+        ],
+        "origin": "https://registry.npmjs.org/tw-animate-css/-/tw-animate-css-1.4.0.tgz",
+        "version": "1.4.0"
+      },
+      "zimmerframe": {
+        "integrity": "sha512-B58NGBEoc8Y9MWWCQGl/gq9xBCe4IiKM0a2x7GZdQKOW5Exr8S1W24J6OgM1njK8xCRGvAJIL/MxXHf6SkmQKQ==",
+        "notices": [
+          "5fde0201805ca0ffc8884fac6a3447b7f2918a6c22efb68b94019298d16bad9e"
+        ],
+        "origin": "https://registry.npmjs.org/zimmerframe/-/zimmerframe-1.1.4.tgz",
+        "version": "1.1.4"
+      }
+    },
+    "records": {
+      "039184dfa0a822397b3f45a435b5b1e538721587fbade96b9fa80f86cb354109": {
+        "bytes": 1068,
+        "offset": 86857,
+        "sha256": "039184dfa0a822397b3f45a435b5b1e538721587fbade96b9fa80f86cb354109"
+      },
+      "06257f4847b13a49a039efb17b944c141e71b12fd8d231b362d86919067d77a3": {
+        "bytes": 1126,
+        "offset": 79763,
+        "sha256": "06257f4847b13a49a039efb17b944c141e71b12fd8d231b362d86919067d77a3"
+      },
+      "06f7bdf604db150e13e7d898a775669db34d28d8bb3ee39bee201de666efae94": {
+        "bytes": 1067,
+        "offset": 19518,
+        "sha256": "06f7bdf604db150e13e7d898a775669db34d28d8bb3ee39bee201de666efae94"
+      },
+      "0e4c9a9b6c71019cbbea3bdc20b01223110a9035700f9c960c8fcbf78c2325ce": {
+        "bytes": 1089,
+        "offset": 94,
+        "sha256": "0e4c9a9b6c71019cbbea3bdc20b01223110a9035700f9c960c8fcbf78c2325ce"
+      },
+      "1cbe51b907662f6cb1492b16c359384a595180bf0e4d101603ed525e75c4e484": {
+        "bytes": 1051,
+        "offset": 73770,
+        "sha256": "1cbe51b907662f6cb1492b16c359384a595180bf0e4d101603ed525e75c4e484"
+      },
+      "2b712711f7fe8ae830c0747eee4e3fe9bf55048567ca74cbfe6bd94d0ac9430d": {
+        "bytes": 1069,
+        "offset": 1277,
+        "sha256": "2b712711f7fe8ae830c0747eee4e3fe9bf55048567ca74cbfe6bd94d0ac9430d"
+      },
+      "306fa513e39b23a6e8747520de761809d206b99800ef41907b530226574c59ae": {
+        "bytes": 1114,
+        "offset": 55176,
+        "sha256": "306fa513e39b23a6e8747520de761809d206b99800ef41907b530226574c59ae"
+      },
+      "395c95f20598da653ff1eb1cb9d74947c7fac689697147f1d192fd0242a0e635": {
+        "bytes": 1098,
+        "offset": 71420,
+        "sha256": "395c95f20598da653ff1eb1cb9d74947c7fac689697147f1d192fd0242a0e635"
+      },
+      "433fc9dfe659dbfb1e91eed8351f13651e97bfa3ac6d03394c3d63f61d4bbc80": {
+        "bytes": 1064,
+        "offset": 72612,
+        "sha256": "433fc9dfe659dbfb1e91eed8351f13651e97bfa3ac6d03394c3d63f61d4bbc80"
+      },
+      "54a4274bc32c7e4f8db2f4169e7d5a1affab53625573eea780bed67ff7cd1f4b": {
+        "bytes": 1091,
+        "offset": 53991,
+        "sha256": "54a4274bc32c7e4f8db2f4169e7d5a1affab53625573eea780bed67ff7cd1f4b"
+      },
+      "54e58ba168330ad6c315813fd50e729b2748d1ed38314fd30b833a4e89e15f2a": {
+        "bytes": 1101,
+        "offset": 23060,
+        "sha256": "54e58ba168330ad6c315813fd50e729b2748d1ed38314fd30b833a4e89e15f2a"
+      },
+      "578d4473efca440ea48e55c2122fd729aea9a1c1bf5b4de43258cc264c991884": {
+        "bytes": 1111,
+        "offset": 80983,
+        "sha256": "578d4473efca440ea48e55c2122fd729aea9a1c1bf5b4de43258cc264c991884"
+      },
+      "5fde0201805ca0ffc8884fac6a3447b7f2918a6c22efb68b94019298d16bad9e": {
+        "bytes": 1135,
+        "offset": 88019,
+        "sha256": "5fde0201805ca0ffc8884fac6a3447b7f2918a6c22efb68b94019298d16bad9e"
+      },
+      "60e0b68c0f35c078eef3a5d29419d0b03ff84ec1df9c3f9d6e39a519a5ae7985": {
+        "bytes": 1071,
+        "offset": 85692,
+        "sha256": "60e0b68c0f35c078eef3a5d29419d0b03ff84ec1df9c3f9d6e39a519a5ae7985"
+      },
+      "653b779005a3a4d64a7288c940f7b9a0e8f0b1e0375f6aa6af9473caf131e564": {
+        "bytes": 1071,
+        "offset": 21895,
+        "sha256": "653b779005a3a4d64a7288c940f7b9a0e8f0b1e0375f6aa6af9473caf131e564"
+      },
+      "6df5276ee7531fcc5446f19082c12e77bb6c5f081fd2b6d6cf88180a5ee36acd": {
+        "bytes": 1063,
+        "offset": 57599,
+        "sha256": "6df5276ee7531fcc5446f19082c12e77bb6c5f081fd2b6d6cf88180a5ee36acd"
+      },
+      "769d154fbde32a915af110b1123650bc79f4cbe675acc66e005265bf069c6c6c": {
+        "bytes": 1080,
+        "offset": 13869,
+        "sha256": "769d154fbde32a915af110b1123650bc79f4cbe675acc66e005265bf069c6c6c"
+      },
+      "76a876cf886ff9be2a8b5e2e86514fed06223c8c9f0c1e9ee9606e93841e00b7": {
+        "bytes": 1099,
+        "offset": 37624,
+        "sha256": "76a876cf886ff9be2a8b5e2e86514fed06223c8c9f0c1e9ee9606e93841e00b7"
+      },
+      "7dfe6526888bac51759c99f9a51262ba2711a8c12a067f2181609dd9a4066b84": {
+        "bytes": 11335,
+        "offset": 2440,
+        "sha256": "7dfe6526888bac51759c99f9a51262ba2711a8c12a067f2181609dd9a4066b84"
+      },
+      "8914f144af4333312a07b30438dc6b75dd8da7a665c3ae9fa751f229eb615e8b": {
+        "bytes": 1166,
+        "offset": 76079,
+        "sha256": "8914f144af4333312a07b30438dc6b75dd8da7a665c3ae9fa751f229eb615e8b"
+      },
+      "896c9fd6b5fc48ac31800b9d29a6e3ffcb0c2d534ed077ebfa5c2fa388cc38b7": {
+        "bytes": 1110,
+        "offset": 78559,
+        "sha256": "896c9fd6b5fc48ac31800b9d29a6e3ffcb0c2d534ed077ebfa5c2fa388cc38b7"
+      },
+      "8d3951c38967b964b1fe259bfd200c2647cc04c858b55a4414e3122a60f1ef4b": {
+        "bytes": 1117,
+        "offset": 52780,
+        "sha256": "8d3951c38967b964b1fe259bfd200c2647cc04c858b55a4414e3122a60f1ef4b"
+      },
+      "8e714750725e75c8b31172ef84c0805f94873f86e3b5cfca8a948553f0778fa1": {
+        "bytes": 1079,
+        "offset": 82188,
+        "sha256": "8e714750725e75c8b31172ef84c0805f94873f86e3b5cfca8a948553f0778fa1"
+      },
+      "8f8f0696ab4041a885d28bddf82e2ad673a6522cb644d6f972237f4f6e172a1d": {
+        "bytes": 1118,
+        "offset": 58756,
+        "sha256": "8f8f0696ab4041a885d28bddf82e2ad673a6522cb644d6f972237f4f6e172a1d"
+      },
+      "91b34549ceba8602e9a763d32443fa2ae92fba1a148b45e71ad480c723004818": {
+        "bytes": 1072,
+        "offset": 49147,
+        "sha256": "91b34549ceba8602e9a763d32443fa2ae92fba1a148b45e71ad480c723004818"
+      },
+      "9a9edad7baae52622bddf3c15b2ef8a33d2c89f2d25408ad13e8a7481c6b0c97": {
+        "bytes": 1104,
+        "offset": 50313,
+        "sha256": "9a9edad7baae52622bddf3c15b2ef8a33d2c89f2d25408ad13e8a7481c6b0c97"
+      },
+      "a00b9fa0f93efce8a42930d22c4bc19311446c03ebee5ef99df9e04b148d0148": {
+        "bytes": 1070,
+        "offset": 74915,
+        "sha256": "a00b9fa0f93efce8a42930d22c4bc19311446c03ebee5ef99df9e04b148d0148"
+      },
+      "ac6ecdc526c9e6aec1db76f0e8dfe344d792380e974686476e7c512152ae2636": {
+        "bytes": 1110,
+        "offset": 24255,
+        "sha256": "ac6ecdc526c9e6aec1db76f0e8dfe344d792380e974686476e7c512152ae2636"
+      },
+      "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57": {
+        "bytes": 3208,
+        "offset": 16216,
+        "sha256": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57"
+      },
+      "b8778b155bfde5a28b023a558753c0fa058a52bb9de35c343c250be1bbcdedab": {
+        "bytes": 1079,
+        "offset": 15043,
+        "sha256": "b8778b155bfde5a28b023a558753c0fa058a52bb9de35c343c250be1bbcdedab"
+      },
+      "ba573393f24555ac0528612ad39665fab5bdcc80330a61096024bbf5f736526d": {
+        "bytes": 1122,
+        "offset": 20679,
+        "sha256": "ba573393f24555ac0528612ad39665fab5bdcc80330a61096024bbf5f736526d"
+      },
+      "c02110eedc16c7114f1a9bdc026c65626ce1d9c7e27fd51a8e0feee8a48a6858": {
+        "bytes": 1175,
+        "offset": 51511,
+        "sha256": "c02110eedc16c7114f1a9bdc026c65626ce1d9c7e27fd51a8e0feee8a48a6858"
+      },
+      "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383": {
+        "bytes": 1141,
+        "offset": 36389,
+        "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+      },
+      "c5c6c5183a789d122f267c405f685037efb87e27fcde28ab1dd7378a2d2f5962": {
+        "bytes": 1126,
+        "offset": 77339,
+        "sha256": "c5c6c5183a789d122f267c405f685037efb87e27fcde28ab1dd7378a2d2f5962"
+      },
+      "c8df456c7ccba74b959087dff494d4ac2a12dfb0400c08b46b2494a08a000567": {
+        "bytes": 10236,
+        "offset": 38817,
+        "sha256": "c8df456c7ccba74b959087dff494d4ac2a12dfb0400c08b46b2494a08a000567"
+      },
+      "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30": {
+        "bytes": 11358,
+        "offset": 59968,
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      },
+      "d4c70c7ce38cea8778f0aed3fc0bef0a9dbd27f13bd8b6773cbd6d37941971e5": {
+        "bytes": 1070,
+        "offset": 83361,
+        "sha256": "d4c70c7ce38cea8778f0aed3fc0bef0a9dbd27f13bd8b6773cbd6d37941971e5"
+      },
+      "d96eba1f1881334d50ffc144276dfa98e147a415e7c591ecdfcb81680361dc91": {
+        "bytes": 10836,
+        "offset": 25459,
+        "sha256": "d96eba1f1881334d50ffc144276dfa98e147a415e7c591ecdfcb81680361dc91"
+      },
+      "ddbc663c5406c796b7fd364f09a89d02ad3d052c7121a270d0b180d861426b02": {
+        "bytes": 1233,
+        "offset": 89248,
+        "sha256": "ddbc663c5406c796b7fd364f09a89d02ad3d052c7121a270d0b180d861426b02"
+      },
+      "e399db7e952e45cae84f1b53d72ba8dbad2daaa7ab8cd1f0ab72fea5ab73b225": {
+        "bytes": 1121,
+        "offset": 56384,
+        "sha256": "e399db7e952e45cae84f1b53d72ba8dbad2daaa7ab8cd1f0ab72fea5ab73b225"
+      },
+      "f3f8984c684106a9ffb50c44ff5dd6f2082526d78a820235a6592423d376d650": {
+        "bytes": 1073,
+        "offset": 84525,
+        "sha256": "f3f8984c684106a9ffb50c44ff5dd6f2082526d78a820235a6592423d376d650"
+      }
+    }
+  },
+  "schema": 1
+}

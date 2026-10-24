@@ -1,3 +1,5 @@
 # Unified-diff context preserves upstream tabs and blank lines verbatim.
 # stage.py checks the applied source with git diff --check instead.
 integrations/drizzli/upstream.patch -whitespace
+# Preserve the exact upstream Noto OFL, including its original trailing space.
+third_party/client-notices/NotoSans-OFL.txt -whitespace

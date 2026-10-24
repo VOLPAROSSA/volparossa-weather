@@ -7,6 +7,7 @@ acquire weather. An existing local source clone may supply the pinned Git object
 its worktree changes are never copied. Failed stages remain for inspection.
 """
 import argparse
+import runpy
 import hashlib
 import json
 import pathlib
@@ -36,7 +37,7 @@ def verify_canonical_patch(destination, patch):
         raise ValueError("staged patch is not the exact canonical Git diff")
 
 
-def stage(destination, source=None):
+def stage(destination, source=None, *, source_recipe=False):
     pin = json.loads((HERE / "upstream.json").read_text())
     destination = pathlib.Path(destination).absolute()
     build = (ROOT / "build").resolve()
@@ -82,6 +83,10 @@ def stage(destination, source=None):
     shutil.copyfile(ROOT / "LICENSE", destination / "LICENSE.VOLPAROSSA")
     (destination / "LICENSE.VOLPAROSSA").chmod(0o600)
     git(destination, "diff", "--check")
+    if source_recipe:
+        # Data-only source preparation; no dependency/compiler execution.
+        inputs = runpy.run_path(str(ROOT / "scripts/prepare_hosted_client_inputs.py"))
+        inputs["prepare_source_stage"]("overmorrow", destination)
     return {"schema": 1, "upstream_commit": pin["commit"], "staged": True,
             "dependencies_installed": False, "built": False, "browser_tested": False,
             "native_clients_verified": False}
@@ -91,10 +96,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--destination", required=True)
     parser.add_argument("--source-clone")
+    parser.add_argument("--source-recipe", action="store_true", help="new source recipe only; historical recipe is the default")
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
     if not args.execute:
         print(json.dumps({"execute": False, "action": "stage pinned upstream and reviewed overlay only",
                           "install_dependencies": False, "run_upstream_scripts": False}))
     else:
-        print(json.dumps(stage(args.destination, args.source_clone)))
+        print(json.dumps(stage(args.destination, args.source_clone, source_recipe=args.source_recipe)))

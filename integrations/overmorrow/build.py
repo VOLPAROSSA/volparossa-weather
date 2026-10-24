@@ -34,6 +34,12 @@ ACTIONS = {
 }
 
 
+# A separate new-source recipe. The historical build flag list above stays
+# byte-identical; activation requires independently reviewed input bindings.
+def source_web_arguments():
+    return [*ACTIONS['build'], '--no-tree-shake-icons']
+
+
 def digest(path):
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
