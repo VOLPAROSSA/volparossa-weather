@@ -18,9 +18,16 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 
 LOCK = Path('/home/vpci/source/tests/helper/weather-source-build-environment-v1.json')
-KEYRING = Path('/usr/share/keyrings/debian-archive-keyring.gpg')
+KEYRING = Path('/usr/share/keyrings/debian-archive-keyring.pgp')
+KEYRING_BYTES = 55918
+KEYRING_SHA = '506b815cbb32d9b6066b4a2aa524071e071761e7e7f68c3ac74f3061ba852017'
+VERIFIER = Path('/usr/bin/sqv')
+VERIFIER_BYTES = 1870376
+VERIFIER_SHA = '48c720d78ad921e2f6d948ee4bf6d2e4bf5e2249e52a67a07f501c5a8b599815'
+CRYPTO_POLICY = Path('/etc/crypto-policies/back-ends/sequoia.config')
 SNAPSHOT = '20261023T000000Z'
 IMAGE_SHA512 = ('184761b0dad0f9ace02f9298050ca96ce3caa39a461a47706d47ff9698b59933918'
                 'b91b40177fbd4d392f6446af8b4d18ecb94caca988169b19641606bf34003')
@@ -37,14 +44,18 @@ REPOSITORIES = {
         inrelease_sha256='0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675',
         final_url='https://snapshot.debian.org/file/aa33cb317177428f33c9ff72fc3e9b634645f6ae/InRelease',
         signing_fingerprints=['4CB50190207B4758A3F73A796ED0E7B82643E131',
-            'B8E5F13176D2A7A75220028078DBA3BC47EF2265', '41587F7DB8C774BCCF131416762F67A0B2C39DE4']),
+            'B8E5F13176D2A7A75220028078DBA3BC47EF2265', '41587F7DB8C774BCCF131416762F67A0B2C39DE4'],
+        certificate_fingerprints=['B8B80B5B623EAB6AD8775C45B7C5D7D6350947F8',
+            '04B54C3CDCA79751B16BC6B5225629DF75B188BD', '41587F7DB8C774BCCF131416762F67A0B2C39DE4']),
     'debian-security': dict(codename='trixie-security', inrelease_bytes=43409,
         archive_url='https://snapshot.debian.org/archive/debian-security/20261023T000000Z/',
         inrelease_url='https://snapshot.debian.org/archive/debian-security/20261023T000000Z/dists/trixie-security/InRelease',
         inrelease_sha256='f439c50d207c42e50abd7db7804b0afa16eb57b67775cfa0996234176aeb26a1',
         final_url='https://snapshot.debian.org/file/7957d5dd5109d37741be18971cb12cb4d5c08b8b/InRelease',
         signing_fingerprints=['B0CAB9266E8C3929798B3EEEBDE6D2B9216EC7A8',
-            '89C87ACEA5DD6B8E6A7068808E9F831205B4BA95']),
+            '89C87ACEA5DD6B8E6A7068808E9F831205B4BA95'],
+        certificate_fingerprints=['05AB90340C0C5E797F44A8C8254CF3B5AEC0A8F0',
+            '5E04A1E3223A19A20706E20F9904613D4CCE68C6']),
 }
 MAX_INDEX = 128 * 1024**2
 MAX_RECORD = 32 * 1024**2
@@ -142,16 +153,29 @@ def verify_release(path, repository):
     pin = REPOSITORIES[repository]
     raw = read_file(path, 256 * 1024)
     require(len(raw) == pin['inrelease_bytes'] and digest(raw) == pin['inrelease_sha256'], 'INRELEASE_PIN')
-    # The keyring belongs to the already pinned guest image; never fetch a key.
-    result = subprocess.run(['/usr/bin/gpgv', '--keyring', str(KEYRING), '--status-fd', '2',
-                             '--output', '-', str(path)], capture_output=True, check=False,
-                            timeout=20, env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}, cwd='/')
-    require(result.returncode == 0 and len(result.stdout) <= 256 * 1024
-            and len(result.stderr) <= 64 * 1024, 'INRELEASE_SIGNATURE')
-    status = result.stderr.decode('ascii')
-    fingerprints = re.findall(r'^\[GNUPG:\] VALIDSIG ([A-F0-9]{40}) ', status, re.M)
-    require(sorted(fingerprints) == sorted(pin['signing_fingerprints']), 'INRELEASE_SIGNERS')
-    records = list(control_records(result.stdout))
+    # These pins belong to the already reviewed guest image, not a new fetched
+    # tool/key. sqv 1.3.0 prints validated primary certificate fingerprints;
+    # the unchanged exact InRelease hash also pins the original signing subkeys.
+    verifier = read_file(VERIFIER, VERIFIER_BYTES)
+    keyring = read_file(KEYRING, KEYRING_BYTES)
+    require(len(verifier) == VERIFIER_BYTES and digest(verifier) == VERIFIER_SHA
+            and VERIFIER.stat().st_mode & 0o111, 'BASE_VERIFIER_CHANGED')
+    require(len(keyring) == KEYRING_BYTES and digest(keyring) == KEYRING_SHA, 'BASE_KEYRING_CHANGED')
+    # Default crypto-policy absence is checked in this actual guest. An unknown
+    # policy file is never accepted just because the verifier exits successfully.
+    require(not CRYPTO_POLICY.exists() and not CRYPTO_POLICY.is_symlink(), 'UNREVIEWED_CRYPTO_POLICY')
+    with tempfile.TemporaryDirectory(prefix='.verify-inrelease-', dir=path.parent) as temporary:
+        authenticated = Path(temporary) / 'Release'
+        result = subprocess.run([str(VERIFIER), '--keyring', str(KEYRING), '--signatures',
+                str(len(pin['certificate_fingerprints'])), '--cleartext', '--output', str(authenticated), str(path)],
+            capture_output=True, check=False, timeout=20, umask=0o077,
+            env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}, cwd='/')
+        require(result.returncode == 0 and len(result.stdout) <= 4096
+                and len(result.stderr) <= 64 * 1024, 'INRELEASE_SIGNATURE')
+        fingerprints = result.stdout.decode('ascii').splitlines()
+        require(all(re.fullmatch('[A-F0-9]{40}', item) for item in fingerprints)
+                and sorted(fingerprints) == sorted(pin['certificate_fingerprints']), 'INRELEASE_SIGNERS')
+        records = list(control_records(read_file(authenticated, 256 * 1024)))
     require(len(records) == 1 and records[0].get('Codename') == pin['codename'], 'RELEASE_CODENAME')
     release = records[0]
     require('amd64' in release.get('Architectures', '').split()
@@ -166,7 +190,7 @@ def verify_release(path, repository):
         indexes[fields[2]] = dict(bytes=int(fields[1]), sha256=fields[0])
     require(INDEX_PATH in indexes and 0 < indexes[INDEX_PATH]['bytes'] <= 32 * 1024**2, 'MISSING_INDEX')
     return dict(**pin, index_path=INDEX_PATH, index=indexes[INDEX_PATH],
-                keyring_sha256=digest(read_file(KEYRING)))
+                keyring_sha256=digest(keyring), verifier_sha256=digest(verifier), crypto_policy_file_absent=True)
 
 
 def index_records(path, expected):
@@ -391,9 +415,11 @@ def validate_record(value, admitted):
     require(type(repositories) is dict and set(repositories) == set(REPOSITORIES), 'REPOSITORIES')
     for name, pin in REPOSITORIES.items():
         row = repositories[name]
-        require(type(row) is dict and set(row) == set(pin) | {'index_path', 'index', 'keyring_sha256'}
+        require(type(row) is dict and set(row) == set(pin) | {'index_path', 'index', 'keyring_sha256',
+                    'verifier_sha256', 'crypto_policy_file_absent'}
                 and all(row[key] == expected for key, expected in pin.items())
-                and row['index_path'] == INDEX_PATH and sha256(row['keyring_sha256']), 'REPOSITORY_PIN')
+                and row['index_path'] == INDEX_PATH and row['keyring_sha256'] == KEYRING_SHA
+                and row['verifier_sha256'] == VERIFIER_SHA and row['crypto_policy_file_absent'] is True, 'REPOSITORY_PIN')
         require(type(row['index']) is dict and set(row['index']) == {'bytes', 'sha256'}
                 and type(row['index']['bytes']) is int and 0 < row['index']['bytes'] <= 32 * 1024**2
                 and sha256(row['index']['sha256']), 'INDEX_SCHEMA')

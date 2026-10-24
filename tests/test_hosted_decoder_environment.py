@@ -47,6 +47,8 @@ class Environment(unittest.TestCase):
         self.directory = Path(self.temp.name)
         self.keyring = self.directory / 'keyring'
         self.keyring.write_bytes(b'pinned image keyring')
+        self.verifier = self.directory / 'sqv'
+        self.verifier.write_bytes(b'pinned image verifier')
         self.before = [dict(name=name, version='1.0', architecture='amd64') for name in H['ROOT_PACKAGES'] if name != 'build-essential']
         self.after = self.before + [dict(name='build-essential', version='2.0', architecture='amd64')]
         (self.directory / 'before.tsv').write_bytes(status(self.before))
@@ -71,16 +73,27 @@ class Environment(unittest.TestCase):
         for path in self.directory.rglob('*'):
             if path.is_file():
                 path.chmod(0o600)
+        self.verifier.chmod(0o700)
         def verify(argv, **kwargs):
-            self.assertEqual(argv[:4], ['/usr/bin/gpgv', '--keyring', str(self.keyring), '--status-fd'])
+            self.assertEqual(argv[:3], [str(self.verifier), '--keyring', str(self.keyring)])
             name = Path(argv[-1]).name.removesuffix('.InRelease')
-            return SimpleNamespace(returncode=0, stdout=self.releases[name], stderr=''.join(
-                '[GNUPG:] VALIDSIG ' + fp + ' rest\n' for fp in self.pins[name]['signing_fingerprints']).encode())
-        self.fake_gpg = Mock(side_effect=verify)
-        state = patch.dict(G, REPOSITORIES=self.pins, KEYRING=self.keyring)
+            self.assertEqual(argv[3:7], ['--signatures', str(len(self.pins[name]['certificate_fingerprints'])), '--cleartext', '--output'])
+            self.assertEqual(kwargs['env'], {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
+            self.assertEqual(kwargs['umask'], 0o077)
+            authenticated = Path(argv[7])
+            self.assertFalse(authenticated.exists())
+            authenticated.write_bytes(self.releases[name])
+            authenticated.chmod(0o600)
+            return SimpleNamespace(returncode=0, stdout=''.join(
+                fp + '\n' for fp in self.pins[name]['certificate_fingerprints']).encode(), stderr=b'')
+        self.fake_verifier = Mock(side_effect=verify)
+        state = patch.dict(G, REPOSITORIES=self.pins, KEYRING=self.keyring,
+            KEYRING_BYTES=len(self.keyring.read_bytes()), KEYRING_SHA=H['digest'](self.keyring.read_bytes()),
+            VERIFIER=self.verifier, VERIFIER_BYTES=len(self.verifier.read_bytes()),
+            VERIFIER_SHA=H['digest'](self.verifier.read_bytes()), CRYPTO_POLICY=self.directory / 'absent-policy')
         state.start()
         self.addCleanup(state.stop)
-        command = patch.object(subprocess, 'run', self.fake_gpg)
+        command = patch.object(subprocess, 'run', self.fake_verifier)
         command.start()
         self.addCleanup(command.stop)
 
@@ -98,7 +111,7 @@ class Environment(unittest.TestCase):
         self.assertFalse(value['admitted'])
         self.assertEqual(len(value['packages']), 1)
         self.assertEqual(value['packages'][0]['files']['/usr/bin/test-cc'], dict(bytes=8, sha256=H['digest'](b'compiler')))
-        self.assertEqual(self.fake_gpg.call_count, 2)
+        self.assertEqual(self.fake_verifier.call_count, 2)
         self.assertEqual(value['apt_options'], H['APT_OPTIONS'])
         self.assertFalse(value['scope']['compiled'])
 
@@ -170,6 +183,41 @@ class Environment(unittest.TestCase):
         for status, code in [(SimpleNamespace(returncode=1, stdout=b'', stderr=b''), 'INRELEASE_SIGNATURE'),
                              (SimpleNamespace(returncode=0, stdout=b'', stderr=b'[GNUPG:] VALIDSIG ' + b'A' * 40 + b' rest\n'), 'INRELEASE_SIGNERS')]:
             with patch.object(subprocess, 'run', return_value=status), self.assertRaisesRegex(ValueError, code): self.candidate()
+
+    def test_missing_or_changed_image_verifier_and_keyring_fail_before_execution(self):
+        for path, code in [(self.verifier, 'BASE_VERIFIER_CHANGED'), (self.keyring, 'BASE_KEYRING_CHANGED')]:
+            original = path.read_bytes()
+            path.write_bytes(b'X' + original[1:])
+            with self.subTest(path=path.name), self.assertRaisesRegex(ValueError, code): self.candidate()
+            path.write_bytes(original)
+        self.verifier.unlink()
+        with self.assertRaises(FileNotFoundError): self.candidate()
+        self.fake_verifier.assert_not_called()
+
+    def test_duplicate_certificates_and_unauthenticated_output_never_reach_parser(self):
+        expected = self.pins['debian']['certificate_fingerprints']
+        for signers, code in [(expected[:-1] + [expected[0]], 'INRELEASE_SIGNERS'),
+                              (['A' * 40] * 3, 'INRELEASE_SIGNERS'),
+                              (expected + [expected[0]], 'INRELEASE_SIGNERS')]:
+            result = SimpleNamespace(returncode=0, stdout=('\n'.join(signers) + '\n').encode(), stderr=b'')
+            with patch.object(subprocess, 'run', return_value=result), \
+                    patch.dict(G, control_records=Mock(side_effect=AssertionError('must not parse unauthenticated data'))), \
+                    self.assertRaisesRegex(ValueError, code): self.candidate()
+        result = SimpleNamespace(returncode=1, stdout=('\n'.join(expected) + '\n').encode(), stderr=b'bad signature')
+        with patch.object(subprocess, 'run', return_value=result), \
+                patch.dict(G, control_records=Mock(side_effect=AssertionError('must not parse failed signature output'))), \
+                self.assertRaisesRegex(ValueError, 'INRELEASE_SIGNATURE'): self.candidate()
+        result.returncode = 0
+        with patch.object(subprocess, 'run', return_value=result), self.assertRaises(FileNotFoundError): self.candidate()
+        self.assertFalse(list(self.directory.glob('.verify-inrelease-*')))
+
+    def test_unreviewed_default_policy_is_rejected_and_environment_injection_excluded(self):
+        with patch.dict(os.environ, SEQUOIA_CRYPTO_POLICY='/untrusted/policy'):
+            self.candidate()  # The fixed fake CLI asserts the complete sanitized child environment.
+        self.fake_verifier.reset_mock()
+        (self.directory / 'absent-policy').write_bytes(b'unreviewed policy')
+        with self.assertRaisesRegex(ValueError, 'UNREVIEWED_CRYPTO_POLICY'): self.candidate()
+        self.fake_verifier.assert_not_called()
 
     def test_removed_package_missing_root_and_resolver_delta_fail(self):
         for rows, resolver, code in [(self.after[1:], None, 'PACKAGE_REMOVAL'),
