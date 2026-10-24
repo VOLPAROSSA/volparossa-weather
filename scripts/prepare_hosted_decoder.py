@@ -605,7 +605,10 @@ def stage_source_payload(build_output, output):
     payload = {}
     for name, (raw, mode) in sorted(files.items()):
         path = output / name
-        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        parent = output
+        for part in Path(name).parts[:-1]:
+            parent /= part
+            parent.mkdir(mode=0o700, exist_ok=True)
         write_new(path, raw, mode)
         payload[name] = dict(bytes=len(raw), mode=mode, sha256=sha(raw))
     require(helper["check_environment"]() == environment, "SOURCE_ENVIRONMENT_CHANGED")
