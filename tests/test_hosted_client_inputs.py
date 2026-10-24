@@ -363,6 +363,37 @@ class ClientInputTests(unittest.TestCase):
         with patch.dict(G, ROOT=root), self.assertRaisesRegex(ValueError, 'AUTHORITY'):
             I['project_metadata']('overmorrow')
 
+    def test_projection_preserves_both_original_locks_without_candidate_fields(self):
+        for profile, spec in I['SOURCES'].items():
+            with self.subTest(profile=profile):
+                root = self.tmp / profile
+                source = root / 'build' / ('hosted-' + profile + '-input-candidate')
+                raw = I['read'](ROOT / 'third_party/client-locks' / (profile + '-' + spec['lock']))
+                self.put(source / spec['lock'], raw)
+                self.put(source / 'result.json', b'{"admitted":false,"phase":"complete"}')
+                with patch.dict(G, ROOT=root):
+                    destination = I['project_metadata'](profile)
+                self.assertEqual((destination / spec['lock']).read_bytes(), raw)
+                projection = json.loads((destination / 'projection.json').read_bytes())
+                self.assertEqual(projection['files'][spec['lock']],
+                    dict(bytes=len(raw), sha256=spec['sha256']))
+                self.assertFalse(projection['admitted'])
+
+    def test_projection_rejects_modified_and_wrong_profile_locks(self):
+        for profile, spec in I['SOURCES'].items():
+            raw = I['read'](ROOT / 'third_party/client-locks' / (profile + '-' + spec['lock']))
+            for case, value, candidate_profile in (
+                    ('changed', raw + b'\n', profile),
+                    ('forged-candidate', b'{"admitted":false}', profile),
+                    ('wrong-profile', raw, 'overmorrow' if profile == 'drizzli' else 'drizzli')):
+                with self.subTest(profile=profile, case=case):
+                    root = self.tmp / (profile + '-' + case)
+                    source = root / 'build' / ('hosted-' + candidate_profile + '-input-candidate')
+                    self.put(source / spec['lock'], value)
+                    self.put(source / 'result.json', b'{"admitted":false}')
+                    with patch.dict(G, ROOT=root), self.assertRaisesRegex(ValueError, 'PUBLIC_SOURCE_LOCK'):
+                        I['project_metadata'](candidate_profile)
+
     def test_ubuntu_release_and_exact_snapshot_uri_rules(self):
         raw = (b'-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nSuite: noble-security\nCodename: noble\nArchitectures: amd64 arm64\nSHA256:\n ' + b'a' * 64 + b' 12 main/binary-amd64/Packages\n-----BEGIN PGP SIGNATURE-----\nsignature-data\n')
         self.assertEqual(A['authenticated_release'](raw, 'noble-security')['main/binary-amd64/Packages']['bytes'], 12)

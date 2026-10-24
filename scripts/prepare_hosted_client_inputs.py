@@ -657,7 +657,13 @@ def project_metadata(profile):
         raw = read(path)
         total += len(raw)
         require(total <= 96 * 1024**2, 'PUBLIC_METADATA_BOUND')
-        if name.endswith('.json'):
+        if name in ('package-lock.json', 'pubspec.lock'):
+            # Original upstream locks have their own schema. Preserve their
+            # bytes and require the fixed source identity, not candidate fields.
+            require(name == SOURCES[profile]['lock']
+                and sha(raw) == SOURCES[profile]['sha256'], 'PUBLIC_SOURCE_LOCK')
+            raw.decode('utf-8')
+        elif name.endswith('.json'):
             value = document(raw)
             require(type(value) is dict and value.get('admitted') is False, 'PUBLIC_CANDIDATE_AUTHORITY')
         else:
