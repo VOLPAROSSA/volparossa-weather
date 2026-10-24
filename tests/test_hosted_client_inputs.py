@@ -3,6 +3,7 @@
 import base64
 import copy
 import hashlib
+import gzip
 import io
 import json
 import os
@@ -69,6 +70,141 @@ class ClientInputTests(unittest.TestCase):
         self.assertEqual(sum(p.get('source') == 'hosted' for p in pub_entries.values()), 152)
         self.assertEqual({p['sdk_commit'] for p in pub_entries.values() if p['source'] == 'sdk'}, {I['SDK_COMMIT']})
 
+    def test_fixed_npm_target_matches_exact_npm_11_list_semantics(self):
+        self.assertEqual(I['NPM_TARGET'], dict(os='linux', cpu='x64', libc='glibc'))
+        for selectors, included in (({}, True), ({'os': 'linux'}, True), ({'os': ['any']}, True),
+                ({'os': []}, True), ({'os': ['!darwin', '!win32']}, True),
+                ({'os': ['linux', '!linux']}, False), ({'os': ['any', 'darwin']}, False),
+                ({'os': ['darwin', 'linux']}, True), ({'cpu': ['arm64']}, False),
+                ({'cpu': 'x64', 'libc': 'glibc'}, True), ({'libc': ['musl']}, False),
+                ({'os': ['!any']}, True)):
+            with self.subTest(selectors=selectors):
+                value = I['npm_target_selection'](dict(selectors, optional=True))
+                self.assertEqual(value['included'], included)
+                self.assertEqual(value['selectors'], selectors)
+                self.assertEqual(bool(value['unsupported']), not included)
+        with self.assertRaisesRegex(ValueError, 'REQUIRED_PLATFORM_UNSUPPORTED'):
+            I['npm_target_selection'](dict(os='darwin'))
+        for entry in (dict(optional='true'), dict(optional=1), dict(optional=None), dict(os=None),
+                dict(os=False), dict(os={}), dict(cpu=[['x64']]), dict(os=['!']), dict(os=['!!linux']),
+                dict(os=['']), dict(os=['Linux']), dict(os=['linux'] * 65),
+                dict(optional=True, os='darwin', libc=['glibc', 1])):
+            with self.subTest(entry=entry), self.assertRaisesRegex(ValueError, 'NPM_'):
+                I['npm_target_selection'](entry)
+
+    def test_all_locked_entries_survive_target_selection_and_excluded_modules_are_forbidden(self):
+        packages = I['npm_lock'](I['read'](ROOT / 'third_party/client-locks/drizzli-package-lock.json'))
+        selected = {path: I['npm_target_selection'](entry) for path, entry in packages.items()}
+        self.assertEqual(len(packages), 347)
+        self.assertEqual(sum(entry['included'] for entry in selected.values()), 300)
+        self.assertEqual(sum(not entry['included'] for entry in selected.values()), 47)
+        for path, selection in selected.items():
+            if not selection['included']:
+                self.assertTrue(packages[path]['optional'])
+                self.assertTrue(packages[path]['integrity'].startswith('sha512-'))
+        I['reject_excluded_npm_modules'](['node_modules/svelte/index.js',
+            'node_modules/@lix-js/sdk-linux-x64/lix_js_sdk.node'], packages)
+        for path in ('node_modules/@lix-js/sdk-darwin-arm64',
+                'node_modules/@lix-js/sdk-darwin-arm64/package.json',
+                'node_modules/vite/node_modules/lightningcss-linux-arm64-gnu/index.node'):
+            with self.subTest(path=path), self.assertRaisesRegex(ValueError, 'EXCLUDED_NPM_MODULE_PRESENT'):
+                I['reject_excluded_npm_modules']([path], packages)
+        for rendered in (0, 1):
+            with self.assertRaisesRegex(ValueError, 'EXCLUDED_NPM_MODULE_PRESENT'):
+                I['graph_notice_closure'](self.graph('@lix-js/sdk-darwin-arm64', rendered), packages)
+
+    def test_optional_target_exclusion_retains_sri_and_never_downloads_archive(self):
+        root = self.tmp / 'target-source'
+        self.put(root / 'integrations/drizzli/build-plugins.json', b'{"plugins":[]}')
+        output = self.tmp / 'target-candidate'; output.mkdir(mode=0o700)
+        data = archive([('package/package.json', b'{"name":"svelte","version":"5.57.0"}', tarfile.REGTYPE)])
+        value = lock(); value['packages']['node_modules/svelte']['integrity'] = sri(data)
+        excluded = dict(version='1.0.0', resolved='https://registry.npmjs.org/darwin-only/-/darwin-only-1.0.0.tgz',
+            integrity=sri(b'never downloaded'), optional=True, os=['darwin'], cpu=['arm64'])
+        value['packages']['node_modules/darwin-only'] = excluded
+        raw = json.dumps(value).encode(); source = dict(I['SOURCES']['drizzli'], sha256=I['sha'](raw))
+        calls = []
+        def download(url, _maximum, **_expected):
+            calls.append(url)
+            self.assertNotEqual(url, excluded['resolved'])
+            return raw if url == source['url'] else data
+        with patch.dict(G, ROOT=root, SOURCES={'drizzli': source}):
+            result = I['candidate']('drizzli', output, downloader=download)
+        self.assertEqual(len(calls), 2)
+        entry = result['packages']['node_modules/darwin-only']
+        self.assertEqual(entry['input']['integrity'], excluded['integrity'])
+        self.assertEqual(entry['status'], 'excluded-for-target')
+        self.assertNotIn('archive', entry)
+        self.assertFalse(result['admitted'])
+
+    def test_large_native_member_exception_is_exact_and_all_generic_bounds_stay(self):
+        digest, name, size = I['LIX_ARCHIVE_SHA256'], I['LIX_MEMBER'], I['LIX_MEMBER_BYTES']
+        self.assertTrue(I['approved_large_member'](digest, name, size, True))
+        for args in (('0' * 64, name, size, True), (digest, name + '-other', size, True),
+                     (digest, name, size + 1, True), (digest, name, size - 1, True),
+                     (digest, name, size, False), (digest, name, size, 'true')):
+            with self.subTest(args=args):
+                self.assertFalse(I['approved_large_member'](*args))
+        self.assertEqual(I['MAX_MEMBER'], 128 * 1024**2)
+        self.assertEqual(I['MAX_ARCHIVE'], 96 * 1024**2)
+        self.assertEqual(I['MAX_EXPANDED'], 512 * 1024**2)
+        member = tarfile.TarInfo('package/' + name); member.size = size
+        raw = gzip.compress(member.tobuf() + b'\0' * 1024)
+        for npm in (True, False):
+            with self.subTest(npm=npm), self.assertRaisesRegex(ValueError, 'ARCHIVE_MEMBER_BOUND'):
+                I['archive_inventory'](raw, npm=npm)
+
+    def test_shell_and_runtime_tool_packages_are_explicit_shared_candidate_roots(self):
+        for profile, roots in A['PROFILES'].items():
+            for name in ('bash', 'dash', 'coreutils', 'grep', 'sed', 'findutils', 'gzip', 'libc-bin'):
+                with self.subTest(profile=profile, name=name):
+                    self.assertEqual(roots.count(name), 1)
+        self.assertFalse((ROOT / 'third_party/hosted-client-apt-v1.json').exists())
+
+    def test_exact_inactive_musl_data_is_distinct_from_npm_native_exclusion(self):
+        pins = I['npm_inactive_inputs']()
+        packages = I['npm_lock'](I['read'](ROOT / 'third_party/client-locks/drizzli-package-lock.json'))
+        self.assertEqual(len(pins), 2)
+        for path, pin in pins.items():
+            entry = packages[path]
+            self.assertTrue(entry['inactive_optional_data'])
+            self.assertNotIn('libc', entry)  # The original lock is not silently enriched.
+            self.assertTrue(I['npm_target_selection'](entry)['included'])
+            self.assertFalse(I['npm_target_selection'](dict(pin['archive_selectors'], optional=True))['included'])
+            observed = [path + '/package.json', path + '/module.node']
+            I['reject_excluded_npm_modules'](observed, packages)  # npm may install authenticated inactive data.
+            with self.assertRaisesRegex(ValueError, 'INACTIVE_NPM_MODULE_CONTRIBUTION'):
+                I['reject_inactive_npm_contributions'](observed, packages)
+            with self.assertRaisesRegex(ValueError, 'INACTIVE_NPM_MODULE_CONTRIBUTION'):
+                I['graph_notice_closure'](self.graph(pin['name']), packages)
+
+    def test_inactive_selector_record_requires_exact_bytes_and_original_lock_binding(self):
+        source = self.put(self.tmp / 'inactive.json', I['read'](I['NPM_INACTIVE_RECORD']) + b' ')
+        with patch.dict(G, NPM_INACTIVE_RECORD=source), self.assertRaisesRegex(ValueError, 'INPUT_CHANGED'):
+            I['npm_inactive_inputs']()
+        original = I['read'](ROOT / 'third_party/client-locks/drizzli-package-lock.json')
+        for change in ('integrity', 'optional', 'libc'):
+            value = json.loads(original)
+            entry = value['packages']['node_modules/@tailwindcss/oxide-linux-x64-musl']
+            entry[change] = sri(b'other') if change == 'integrity' else False if change == 'optional' else ['musl']
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, 'NPM_INACTIVE_LOCK_BINDING'):
+                I['npm_lock'](json.dumps(value).encode())
+
+    def test_changed_inactive_archive_cannot_be_labeled_inactive_data(self):
+        raw = I['read'](ROOT / 'third_party/client-locks/drizzli-package-lock.json')
+        packages = I['npm_lock'](raw)
+        path = 'node_modules/@tailwindcss/oxide-linux-x64-musl'; entry = packages[path]
+        manifest = dict(name=entry['name'], version=entry['version'], os=['linux'], cpu=['x64'], libc=['musl'])
+        data = archive([('package/package.json', json.dumps(manifest).encode(), tarfile.REGTYPE)])
+        output = self.tmp / 'inactive-failure'; output.mkdir(mode=0o700)
+        with patch.dict(G, npm_lock=lambda _: {path: entry}), self.assertRaisesRegex(ValueError, 'NPM_INACTIVE_ARCHIVE_BINDING'):
+            I['candidate']('drizzli', output, downloader=lambda url, *_args, **_kwargs:
+                raw if url == I['SOURCES']['drizzli']['url'] else data)
+        partial = json.loads((output / 'dependency-candidate.partial.json').read_bytes())
+        self.assertFalse(partial['admitted'])
+        self.assertEqual(partial['failed_input'], path)
+        self.assertNotIn(path, partial['packages'])
+
     def test_npm_exact_urls_sri_versions_and_nested_paths(self):
         self.assertEqual(len(I['npm_lock'](json.dumps(lock()).encode())), 1)
         for field, value in [('resolved', 'https://registry.npmjs.org.evil/svelte/-/svelte-5.57.0.tgz'),
@@ -123,6 +259,20 @@ class ClientInputTests(unittest.TestCase):
                 I['archive_inventory'](archive(entries), npm=True)
         with patch.dict(G, MAX_EXPANDED=1), self.assertRaisesRegex(ValueError, 'EXPANSION'):
             I['archive_inventory'](archive([('file', b'123', tarfile.REGTYPE)]), npm=False)
+
+    def test_types_tar_root_is_bound_to_exact_locked_package_name(self):
+        entries = [('chai', b'', tarfile.DIRTYPE),
+            ('chai/package.json', b'{"name":"@types/chai","version":"5.2.3"}', tarfile.REGTYPE),
+            ('chai/index.d.ts', b'type Example = number;', tarfile.REGTYPE)]
+        result = I['archive_inventory'](archive(entries), npm=True, npm_name='@types/chai')
+        self.assertEqual(result['npm_root'], 'chai')
+        self.assertEqual(set(result['files']), {'package.json', 'index.d.ts'})
+        for package_name in (None, '@types/other', 'chai'):
+            with self.subTest(package_name=package_name), self.assertRaisesRegex(ValueError, 'NPM_ARCHIVE_ROOT'):
+                I['archive_inventory'](archive(entries), npm=True, npm_name=package_name)
+        for extra in (('package/other', b'x', tarfile.REGTYPE), ('chai/../escape', b'x', tarfile.REGTYPE)):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                I['archive_inventory'](archive(entries + [extra]), npm=True, npm_name='@types/chai')
 
     def test_read_rejects_writable_symlink_hardlink_and_bounds(self):
         path = self.put(self.tmp / 'value', b'123')

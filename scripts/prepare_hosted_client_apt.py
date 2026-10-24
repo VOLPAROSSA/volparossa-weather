@@ -40,6 +40,7 @@ SUITES = {
     'noble-security': dict(bytes=126127, sha256='f90eb747b2e1edab8e85d0f897423a3d0a404e1480c4848a6e4b00bd4f99ad4e'),
 }
 COMMON = ('apparmor', 'bubblewrap', 'git', 'python3', 'mawk', 'util-linux', 'iproute2', 'ca-certificates',
+    'bash', 'dash', 'coreutils', 'grep', 'sed', 'findutils', 'gzip', 'libc-bin',
     'libgtk-3-0t64', 'libdbus-glib-1-2', 'libasound2t64', 'libx11-xcb1', 'libxt6t64', 'libpci3',
     'fontconfig', 'fonts-dejavu-core', 'libnspr4', 'libevent-2.1-7t64', 'libvpx9')
 FLUTTER = ('curl', 'unzip', 'xz-utils', 'zip', 'libglu1-mesa', 'debianutils')

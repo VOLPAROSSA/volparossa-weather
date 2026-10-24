@@ -27,6 +27,17 @@ MAX_JSON = 64 * 1024**2
 MAX_ARCHIVE = 96 * 1024**2
 MAX_EXPANDED = 512 * 1024**2
 MAX_MEMBER = 128 * 1024**2
+# Parser resource exception, not permission to execute this native module.
+# The fixed archive SHA256 also binds its original reviewed lockfile SRI.
+LIX_ARCHIVE_SHA256 = '44776b0a99ac3e441c87c1079dc7055ba7b813f8a605ad88b874f83145aeaa6e'
+LIX_MEMBER = 'lix_js_sdk.node'  # npm's normalized package/ member name
+LIX_MEMBER_BYTES = 272305120
+NPM_TARGET = dict(os='linux', cpu='x64', libc='glibc')
+NPM_INACTIVE_RECORD = ROOT / 'third_party/client-npm-inactive-v1.json'
+NPM_INACTIVE_SHA256 = '108d1659868109a98290c16e5f2e8bb4b60ee1297af89e2bc857e3f1997a3b0b'
+# npm 11.17.0, npm/cli commit 5866280804c68682d9cfd839e1902f6929ce333e,
+# node_modules/npm-install-checks/lib/index.js checkPlatform/checkList.
+# Original source SHA256 2372095fc73982184f77759432935af6259b51201c750464fe7ed52033ab0640.
 VERSION = r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?'
 NAME = r'(?:@[a-z0-9_.-]+/)?[a-z0-9_.-]+'
 SOURCES = {
@@ -109,12 +120,67 @@ def npm_archive(name, version, url, integrity):
     return dict(name=name, version=version, url=url, integrity=integrity)
 
 
+def npm_target_selection(entry):
+    require(type(entry) is dict and type(entry.get('optional', False)) is bool, 'NPM_OPTIONAL_TYPE')
+    selectors, unsupported = {}, []
+    for key, target in NPM_TARGET.items():
+        if key not in entry:
+            continue
+        raw = entry[key]
+        require(type(raw) is str or type(raw) is list, 'NPM_SELECTOR_TYPE')
+        values = [raw] if type(raw) is str else raw
+        require(len(values) <= 64 and all(type(value) is str and
+            re.fullmatch(r'!?[a-z0-9][a-z0-9_-]{0,31}', value) for value in values), 'NPM_SELECTOR_VALUE')
+        selectors[key] = raw if type(raw) is str else list(raw)
+        # Match npm's string/list, singleton 'any', negative veto, positive
+        # membership and all-negative/empty-list semantics for valid selectors.
+        supported = values == ['any'] or (('!' + target) not in values and
+            (target in values or all(value.startswith('!') for value in values)))
+        if not supported:
+            unsupported.append(key)
+    optional = entry.get('optional', False)
+    require(not unsupported or optional, 'NPM_REQUIRED_PLATFORM_UNSUPPORTED')
+    return dict(target=dict(NPM_TARGET), optional=optional, selectors=selectors,
+                included=not unsupported, unsupported=unsupported)
+
+
+def npm_inactive_inputs():
+    raw = read(NPM_INACTIVE_RECORD, 16384)
+    require(sha(raw) == NPM_INACTIVE_SHA256, 'NPM_INACTIVE_INPUT_CHANGED')
+    value = document(raw)
+    require(type(value) is dict and set(value) == {'schema', 'kind', 'admitted', 'profile', 'lock_sha256',
+        'target', 'npm_version', 'npm_source_commit', 'installation', 'packages', 'limitations'}
+        and type(value['schema']) is int and value['schema'] == 1 and value['admitted'] is False
+        and value['kind'] == 'volparossa-weather-npm-inactive-optional-inputs' and value['profile'] == 'drizzli'
+        and value['lock_sha256'] == '9b04f44d254fff82180b32716353c2e7b4e444de7da26cd3fad7eb92512f3454'
+        and value['target'] == NPM_TARGET and value['npm_version'] == '11.17.0'
+        and value['npm_source_commit'] == '5866280804c68682d9cfd839e1902f6929ce333e'
+        and value['installation'] == 'source-inference-pending-disposable-npm-ci'
+        and type(value['limitations']) is list and all(type(v) is str for v in value['limitations']),
+        'NPM_INACTIVE_INPUT_SCHEMA')
+    packages = value['packages']
+    require(type(packages) is dict and set(packages) == {'node_modules/@tailwindcss/oxide-linux-x64-musl',
+        'node_modules/lightningcss-linux-x64-musl'}, 'NPM_INACTIVE_INPUT_SET')
+    for path, item in packages.items():
+        require(type(item) is dict and set(item) == {'name', 'version', 'url', 'integrity', 'archive_bytes',
+            'archive_sha256', 'package_json_bytes', 'package_json_sha256', 'locked_selectors', 'archive_selectors'}
+            and item['name'] == path.removeprefix('node_modules/')
+            and type(item['archive_bytes']) is int and 0 < item['archive_bytes'] <= MAX_ARCHIVE
+            and type(item['package_json_bytes']) is int and 0 < item['package_json_bytes'] <= 512 * 1024
+            and all(type(item[k]) is str and re.fullmatch(r'[0-9a-f]{64}', item[k]) for k in
+                    ('archive_sha256', 'package_json_sha256'))
+            and item['locked_selectors'] == dict(os=['linux'], cpu=['x64'])
+            and item['archive_selectors'] == dict(os=['linux'], cpu=['x64'], libc=['musl']), 'NPM_INACTIVE_INPUT')
+        npm_archive(item['name'], item['version'], item['url'], item['integrity'])
+    return packages
+
+
 def npm_lock(raw):
     value = document(raw)
     require(type(value) is dict and type(value.get('lockfileVersion')) is int and value['lockfileVersion'] == 3
         and type(value.get('packages')) is dict and 1 < len(value['packages']) <= 4096
         and type(value['packages'].get('')) is dict, 'NPM_LOCK_SCHEMA')
-    result = {}
+    result, inactive = {}, npm_inactive_inputs()
     for path, entry in value['packages'].items():
         if not path:
             continue  # root dependency ranges are not resolved archive versions
@@ -125,8 +191,39 @@ def npm_lock(raw):
             'NPM_PACKAGE_PATH_OR_LINK')
         name = path.rsplit('node_modules/', 1)[1]
         require(entry.get('name', name) == name, 'NPM_ALIAS')
-        result[path] = npm_archive(name, entry.get('version'), entry.get('resolved'), entry.get('integrity'))
+        record = npm_archive(name, entry.get('version'), entry.get('resolved'), entry.get('integrity'))
+        record['optional'] = entry.get('optional', False)
+        record.update({key: entry[key] for key in NPM_TARGET if key in entry})
+        npm_target_selection(record)  # Validate all entries before acquisition.
+        if path in inactive:
+            pin = inactive[path]
+            require(all(record[k] == pin[k] for k in ('name', 'version', 'url', 'integrity'))
+                and record['optional'] is True
+                and {key: record[key] for key in NPM_TARGET if key in record} == pin['locked_selectors'],
+                'NPM_INACTIVE_LOCK_BINDING')
+            record['inactive_optional_data'] = True
+        result[path] = record
     return result
+
+
+def reject_excluded_npm_modules(paths, packages):
+    """Required by future installed-tree verification; never an admission alone."""
+    require(type(paths) in (list, tuple, dict) and len(paths) <= 200000, 'NPM_INSTALLED_TREE_BOUND')
+    excluded = [path for path, entry in packages.items() if not npm_target_selection(entry)['included']]
+    for name in paths:
+        safe_path(name)
+        require(not any(name == path or name.startswith(path + '/') for path in excluded),
+                'EXCLUDED_NPM_MODULE_PRESENT')
+
+
+def reject_inactive_npm_contributions(paths, packages):
+    """For future loaded-module/output evidence, distinct from installed data."""
+    require(type(paths) in (list, tuple, dict) and len(paths) <= 200000, 'NPM_MODULE_EVIDENCE_BOUND')
+    inactive = [path for path, entry in packages.items() if entry.get('inactive_optional_data') is True]
+    for name in paths:
+        safe_path(name)
+        require(not any(name == path or name.startswith(path + '/') for path in inactive),
+                'INACTIVE_NPM_MODULE_CONTRIBUTION')
 
 
 def scalar(text):
@@ -230,10 +327,18 @@ class BoundedGzip:
         return raw
 
 
-def archive_inventory(raw, *, npm):
+def approved_large_member(archive_sha256, name, size, npm):
+    return (npm is True and archive_sha256 == LIX_ARCHIVE_SHA256
+            and name == LIX_MEMBER and size == LIX_MEMBER_BYTES)
+
+
+def archive_inventory(raw, *, npm, npm_name=None):
     """Hash all members as data; never extract, import, load or execute them."""
-    require(len(raw) <= MAX_ARCHIVE, 'ARCHIVE_BOUND')
-    files, total = {}, 0
+    require(type(npm) is bool and len(raw) <= MAX_ARCHIVE, 'ARCHIVE_BOUND')
+    require(npm_name is None or (npm is True and type(npm_name) is str and re.fullmatch(NAME, npm_name)),
+            'NPM_ARCHIVE_IDENTITY')
+    archive_sha256 = sha(raw)
+    files, total, npm_root = {}, 0, None
     with tarfile.open(fileobj=BoundedGzip(raw), mode='r|') as archive:
         for member in archive:
             name = member.name.removeprefix('./').rstrip('/') if member.isdir() else member.name.removeprefix('./')
@@ -241,18 +346,23 @@ def archive_inventory(raw, *, npm):
                 continue
             safe_path(name)
             if npm:
-                if name == 'package' and member.isdir():
+                prefix, separator, relative = name.partition('/')
+                roots = {'package'}
+                if npm_name is not None and npm_name.startswith('@types/'):
+                    roots.add(npm_name.split('/')[1])
+                require(prefix in roots and (npm_root is None or prefix == npm_root), 'NPM_ARCHIVE_ROOT')
+                npm_root = prefix
+                if not separator and member.isdir():
                     continue
-                require(name.startswith('package/'), 'NPM_ARCHIVE_ROOT')
-                name = name[8:]
-                if not name and member.isdir():
-                    continue
+                require(separator, 'NPM_ARCHIVE_ROOT')
+                name = relative
             require(name not in files and len(files) < 100000, 'ARCHIVE_MEMBERS')
             require(member.isdir() or member.isreg(), 'ARCHIVE_LINK_OR_SPECIAL')
             if member.isdir():
                 files[name] = dict(type='directory')
                 continue
-            require(0 <= member.size <= MAX_MEMBER, 'ARCHIVE_MEMBER_BOUND')
+            require(0 <= member.size <= MAX_MEMBER or
+                approved_large_member(archive_sha256, name, member.size, npm), 'ARCHIVE_MEMBER_BOUND')
             total += member.size
             require(total <= MAX_EXPANDED, 'ARCHIVE_EXPANSION_BOUND')
             stream = archive.extractfile(member)
@@ -276,7 +386,8 @@ def archive_inventory(raw, *, npm):
             files[name] = item
     require(files, 'EMPTY_ARCHIVE')
     require(not npm or type(files.get('package.json', {}).get('package_json')) is dict, 'NPM_PACKAGE_JSON_MISSING')
-    return dict(bytes=len(raw), sha256=sha(raw), expanded_bytes=total, files=files)
+    return dict(bytes=len(raw), sha256=archive_sha256, expanded_bytes=total, files=files,
+                **(dict(npm_root=npm_root) if npm else {}))
 
 
 def prepare_source_stage(profile, stage):
@@ -363,11 +474,15 @@ def graph_notice_closure(graphs, packages):
                 require(module['kind'] != 'virtual', 'UNREVIEWED_VIRTUAL_MODULE')
                 path = module['id'].split('?', 1)[0]
                 safe_path(path)
-                if not path.startswith('node_modules/') or module['renderedLength'] == 0:
+                if not path.startswith('node_modules/'):
                     continue
                 matches = [p for p in packages if path.startswith(p + '/')]
                 require(matches, 'UNLOCKED_OUTPUT_MODULE')
                 package = packages[max(matches, key=len)]
+                require(npm_target_selection(package)['included'], 'EXCLUDED_NPM_MODULE_PRESENT')
+                require(not package.get('inactive_optional_data'), 'INACTIVE_NPM_MODULE_CONTRIBUTION')
+                if module['renderedLength'] == 0:
+                    continue
                 component = inputs['npm']['components'].get(package['name'])
                 require(component is not None and component['version'] == package['version']
                     and component['integrity'] == package['integrity'] and component['notices'], 'UNRESOLVED_RUNTIME_NOTICE')
@@ -436,6 +551,7 @@ def candidate(profile, output, *, downloader=fetch):
     raw = downloader(source['url'], 2 * 1024**2, sha256=source['sha256'])
     require(sha(raw) == source['sha256'], 'SOURCE_LOCK_CHANGED')
     entries = npm_lock(raw) if profile == 'drizzli' else pub_lock(raw)
+    inactive = npm_inactive_inputs() if profile == 'drizzli' else {}
     write(output / source['lock'], raw)
     result, plugins, started, total = {}, {}, time.monotonic(), 0
     current = None
@@ -446,23 +562,50 @@ def candidate(profile, output, *, downloader=fetch):
             if entry.get('source') == 'sdk':
                 result[name] = entry
                 continue
+            selection = npm_target_selection(entry) if profile == 'drizzli' else None
+            if selection is not None and not selection['included']:
+                result[name] = dict(input=entry, status='excluded-for-target', selection=selection)
+                continue
             kwargs = {'integrity': entry['integrity']} if profile == 'drizzli' else {'sha256': entry['sha256']}
             data = downloader(entry['url'], MAX_ARCHIVE, **kwargs)
             total += len(data)
             require(total <= 512 * 1024**2, 'CANDIDATE_DOWNLOAD_BOUND')
-            inventory = archive_inventory(data, npm=profile == 'drizzli')
+            inventory = archive_inventory(data, npm=profile == 'drizzli',
+                                          npm_name=entry['name'] if profile == 'drizzli' else None)
             if profile == 'drizzli':
                 manifest = inventory['files']['package.json']['package_json']
                 require(manifest.get('name') == entry['name'] and manifest.get('version') == entry['version'], 'NPM_ARCHIVE_IDENTITY')
-            result[name] = dict(input=entry, archive=inventory)
+                actual_selection = npm_target_selection(dict(manifest, optional=entry['optional']))
+                if name in inactive:
+                    pin, package_json = inactive[name], inventory['files']['package.json']
+                    require(not actual_selection['included'] and inventory['sha256'] == pin['archive_sha256']
+                        and inventory['bytes'] == pin['archive_bytes']
+                        and package_json['sha256'] == pin['package_json_sha256']
+                        and package_json['bytes'] == pin['package_json_bytes']
+                        and actual_selection['selectors'] == pin['archive_selectors'], 'NPM_INACTIVE_ARCHIVE_BINDING')
+                    result[name] = dict(input=entry, archive=inventory, status='inactive-optional-data',
+                        selection=selection, archive_target_selection=actual_selection,
+                        selector_input_sha256=NPM_INACTIVE_SHA256,
+                        npm_installation='source-inference-pending-disposable-npm-ci')
+                else:
+                    require(actual_selection['included'], 'NPM_ARCHIVE_TARGET_MISMATCH')
+                    result[name] = dict(input=entry, archive=inventory, status='acquired', selection=selection,
+                                       archive_target_selection=actual_selection)
+            else:
+                result[name] = dict(input=entry, archive=inventory)
         if profile == 'drizzli':
+            current = 'plugin-metadata'
             for p in document(read(ROOT / 'integrations/drizzli/build-plugins.json'))['plugins']:
                 current = 'plugin:' + p['local_name']
+                require(time.monotonic() - started < 900, 'CANDIDATE_DEADLINE')
                 entry = npm_archive(p['name'], p['version'], p['url'], p['integrity'])
                 data = downloader(entry['url'], MAX_ARCHIVE, integrity=entry['integrity'])
-                inventory = archive_inventory(data, npm=True)
+                total += len(data)
+                require(total <= 512 * 1024**2, 'CANDIDATE_DOWNLOAD_BOUND')
+                inventory = archive_inventory(data, npm=True, npm_name=entry['name'])
                 manifest = inventory['files']['package.json']['package_json']
                 require(manifest.get('name') == entry['name'] and manifest.get('version') == entry['version'], 'NPM_PLUGIN_IDENTITY')
+                npm_target_selection(dict(manifest, optional=False))
                 plugins[p['local_name']] = dict(input=entry, archive=inventory)
     except BaseException:
         write(output / 'dependency-candidate.partial.json', canonical(dict(schema=1,
@@ -471,9 +614,12 @@ def candidate(profile, output, *, downloader=fetch):
         raise
     value = dict(schema=1, kind='volparossa-weather-client-input-candidate', admitted=False,
         profile=profile, source=source, packages=result, plugins=plugins,
+        **(dict(target=dict(NPM_TARGET), npm_version='11.17.0') if profile == 'drizzli' else {}),
         compiled=False, dependencies_executed=False, environment_admitted=False,
         required_reviews=['signed-ubuntu-package-closure', 'package-member-inventory', 'runtime-input-closure',
-                          'actual-output-module-graph', 'complete-original-notices'])
+                          'actual-output-module-graph', 'complete-original-notices'] +
+                         (['disposable-npm-ci-installation-state', 'inactive-native-modules-not-loaded-or-emitted']
+                          if profile == 'drizzli' else []))
     write(output / 'dependency-candidate.json', canonical(value))
     return value
 

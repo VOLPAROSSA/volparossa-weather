@@ -1,0 +1,81 @@
+{
+  "admitted": false,
+  "installation": "source-inference-pending-disposable-npm-ci",
+  "kind": "volparossa-weather-npm-inactive-optional-inputs",
+  "limitations": [
+    "Original lock remains unchanged; npm checks its missing-libc entries before extraction.",
+    "These authenticated archives remain inactive optional data, not npm-native exclusions.",
+    "Independent archive and manifest review is required; no build or consumer admission.",
+    "Runtime/module evidence must prove no inactive musl native module loaded or emitted."
+  ],
+  "lock_sha256": "9b04f44d254fff82180b32716353c2e7b4e444de7da26cd3fad7eb92512f3454",
+  "npm_source_commit": "5866280804c68682d9cfd839e1902f6929ce333e",
+  "npm_version": "11.17.0",
+  "packages": {
+    "node_modules/@tailwindcss/oxide-linux-x64-musl": {
+      "archive_bytes": 1264267,
+      "archive_selectors": {
+        "cpu": [
+          "x64"
+        ],
+        "libc": [
+          "musl"
+        ],
+        "os": [
+          "linux"
+        ]
+      },
+      "archive_sha256": "f0fcecfabbb554dd7d39443473ad67912f45cd2612002930ae54e9084974b7b7",
+      "integrity": "sha512-SJxX60smvHgasZoBy11dX6YRjXJFovwWBoedhbQPOBzgFWBHGB+TVPWB9BxzR7TTxU8FQZAI2AyiNCMzFm8Img==",
+      "locked_selectors": {
+        "cpu": [
+          "x64"
+        ],
+        "os": [
+          "linux"
+        ]
+      },
+      "name": "@tailwindcss/oxide-linux-x64-musl",
+      "package_json_bytes": 556,
+      "package_json_sha256": "e7b97a224223bbe83a99b53884c47a16f9b6963b47b0b4c51a3e8e701841a765",
+      "url": "https://registry.npmjs.org/@tailwindcss/oxide-linux-x64-musl/-/oxide-linux-x64-musl-4.3.3.tgz",
+      "version": "4.3.3"
+    },
+    "node_modules/lightningcss-linux-x64-musl": {
+      "archive_bytes": 3846393,
+      "archive_selectors": {
+        "cpu": [
+          "x64"
+        ],
+        "libc": [
+          "musl"
+        ],
+        "os": [
+          "linux"
+        ]
+      },
+      "archive_sha256": "5217af406c6609b4ffbfdb937cff07473b84f5a8eb2cf0e87950240d230a5285",
+      "integrity": "sha512-bYcLp+Vb0awsiXg/80uCRezCYHNg1/l3mt0gzHnWV9XP1W5sKa5/TCdGWaR/zBM2PeF/HbsQv/j2URNOiVuxWg==",
+      "locked_selectors": {
+        "cpu": [
+          "x64"
+        ],
+        "os": [
+          "linux"
+        ]
+      },
+      "name": "lightningcss-linux-x64-musl",
+      "package_json_bytes": 747,
+      "package_json_sha256": "6d7a4bcc5fef739dae30dbf9852578f2d31b69a174f7b9333eb0dbdf03a959c9",
+      "url": "https://registry.npmjs.org/lightningcss-linux-x64-musl/-/lightningcss-linux-x64-musl-1.32.0.tgz",
+      "version": "1.32.0"
+    }
+  },
+  "profile": "drizzli",
+  "schema": 1,
+  "target": {
+    "cpu": "x64",
+    "libc": "glibc",
+    "os": "linux"
+  }
+}

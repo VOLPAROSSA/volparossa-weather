@@ -68,9 +68,9 @@ class SourceRecipeTests(unittest.TestCase):
 
     def test_fixed_profiles_and_self_inclusion(self):
         self.assertEqual(set(RECIPE.PROFILES), {"drizzli", "overmorrow"})
-        self.assertEqual(len(RECIPE.source_paths("drizzli")), 56)
-        self.assertEqual(len(RECIPE.source_paths("overmorrow")), 64)
-        self.assertEqual(len(set().union(*RECIPE.PROFILES.values())), 79)
+        self.assertEqual(len(RECIPE.source_paths("drizzli")), 57)
+        self.assertEqual(len(RECIPE.source_paths("overmorrow")), 65)
+        self.assertEqual(len(set().union(*RECIPE.PROFILES.values())), 80)
         for profile in RECIPE.PROFILES:
             self.assertIn(RECIPE.HELPER, RECIPE.source_paths(profile))
             self.assertIn("scripts/prepare_hosted_decoder_environment.py", RECIPE.source_paths(profile))
