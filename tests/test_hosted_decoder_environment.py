@@ -67,7 +67,7 @@ class Environment(unittest.TestCase):
             signed = ('synthetic signed metadata ' + name).encode()
             (self.directory / (name + '.InRelease')).write_bytes(signed)
             pin.update(inrelease_bytes=len(signed), inrelease_sha256=H['digest'](signed))
-            self.releases[name] = (f'Codename: {pin["codename"]}\nArchitectures: amd64\nComponents: main\nSHA256:\n'
+            self.releases[name] = (f'Codename: {pin["codename"]}\nArchitectures: amd64\nComponents: {pin["release_component"]}\nSHA256:\n'
                                    f' {H["digest"](compressed)} {len(compressed)} {H["INDEX_PATH"]}\n').encode()
         # Fixture safety must not depend on another test changing process umask.
         for path in self.directory.rglob('*'):
@@ -132,6 +132,15 @@ class Environment(unittest.TestCase):
                                   ('debian-security', 'pool/main/g/gcc/test.deb'),
                                   ('debian-security', 'pool/updates/main/../test.deb')]:
             with self.assertRaisesRegex(ValueError, 'DEB_FILENAME'): H['package_filename'](repository, path)
+
+    def test_release_component_label_is_fixed_per_repository_independent_of_index_path(self):
+        for name in self.pins:
+            self.assertRegex(H['release_index'](self.releases[name], name)['sha256'], '^[a-f0-9]{64}$')
+            expected = self.pins[name]['release_component'].encode()
+            other = b'updates/main' if name == 'debian' else b'main'
+            changed = self.releases[name].replace(b'Components: ' + expected + b'\n', b'Components: ' + other + b'\n')
+            with self.assertRaisesRegex(ValueError, 'RELEASE_COMPONENT'): H['release_index'](changed, name)
+        self.assertEqual(H['INDEX_PATH'], 'main/binary-amd64/Packages.xz')
 
     def test_realistic_apt_upgrade_diagnostics_do_not_change_selected_identity(self):
         line = 'Inst libc6 [2.41-12] (2.41-12+deb13u1 Debian-Security:13/stable-security [amd64])'

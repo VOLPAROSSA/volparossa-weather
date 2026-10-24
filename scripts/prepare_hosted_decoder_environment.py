@@ -38,7 +38,7 @@ APT_OPTIONS = ['--yes', '--no-install-recommends', '--no-remove',
 INDEX_PATH = 'main/binary-amd64/Packages.xz'
 SCOPE = dict(disposable_test_only=True, decoder_authorized=False, compiled=False)
 REPOSITORIES = {
-    'debian': dict(codename='trixie', inrelease_bytes=140421,
+    'debian': dict(codename='trixie', release_component='main', inrelease_bytes=140421,
         archive_url='https://snapshot.debian.org/archive/debian/20261023T000000Z/',
         inrelease_url='https://snapshot.debian.org/archive/debian/20261023T000000Z/dists/trixie/InRelease',
         inrelease_sha256='0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675',
@@ -47,7 +47,7 @@ REPOSITORIES = {
             'B8E5F13176D2A7A75220028078DBA3BC47EF2265', '41587F7DB8C774BCCF131416762F67A0B2C39DE4'],
         certificate_fingerprints=['B8B80B5B623EAB6AD8775C45B7C5D7D6350947F8',
             '04B54C3CDCA79751B16BC6B5225629DF75B188BD', '41587F7DB8C774BCCF131416762F67A0B2C39DE4']),
-    'debian-security': dict(codename='trixie-security', inrelease_bytes=43409,
+    'debian-security': dict(codename='trixie-security', release_component='updates/main', inrelease_bytes=43409,
         archive_url='https://snapshot.debian.org/archive/debian-security/20261023T000000Z/',
         inrelease_url='https://snapshot.debian.org/archive/debian-security/20261023T000000Z/dists/trixie-security/InRelease',
         inrelease_sha256='f439c50d207c42e50abd7db7804b0afa16eb57b67775cfa0996234176aeb26a1',
@@ -175,11 +175,18 @@ def verify_release(path, repository):
         fingerprints = result.stdout.decode('ascii').splitlines()
         require(all(re.fullmatch('[A-F0-9]{40}', item) for item in fingerprints)
                 and sorted(fingerprints) == sorted(pin['certificate_fingerprints']), 'INRELEASE_SIGNERS')
-        records = list(control_records(read_file(authenticated, 256 * 1024)))
+        index = release_index(read_file(authenticated, 256 * 1024), repository)
+    return dict(**pin, index_path=INDEX_PATH, index=index,
+                keyring_sha256=digest(keyring), verifier_sha256=digest(verifier), crypto_policy_file_absent=True)
+
+
+def release_index(authenticated, repository):
+    pin = REPOSITORIES[repository]
+    records = list(control_records(authenticated))
     require(len(records) == 1 and records[0].get('Codename') == pin['codename'], 'RELEASE_CODENAME')
     release = records[0]
     require('amd64' in release.get('Architectures', '').split()
-            and 'main' in release.get('Components', '').split(), 'RELEASE_COMPONENT')
+            and pin['release_component'] in release.get('Components', '').split(), 'RELEASE_COMPONENT')
     indexes = {}
     for line in release.get('SHA256', '').splitlines():
         if not line.strip():
@@ -189,8 +196,7 @@ def verify_release(path, repository):
                 and fields[2] not in indexes, 'RELEASE_INDEX')
         indexes[fields[2]] = dict(bytes=int(fields[1]), sha256=fields[0])
     require(INDEX_PATH in indexes and 0 < indexes[INDEX_PATH]['bytes'] <= 32 * 1024**2, 'MISSING_INDEX')
-    return dict(**pin, index_path=INDEX_PATH, index=indexes[INDEX_PATH],
-                keyring_sha256=digest(keyring), verifier_sha256=digest(verifier), crypto_policy_file_absent=True)
+    return indexes[INDEX_PATH]
 
 
 def index_records(path, expected):
