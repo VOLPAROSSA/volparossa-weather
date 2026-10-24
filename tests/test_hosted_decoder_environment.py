@@ -142,6 +142,44 @@ class Environment(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'RELEASE_COMPONENT'): H['release_index'](changed, name)
         self.assertEqual(H['INDEX_PATH'], 'main/binary-amd64/Packages.xz')
 
+    def test_identical_dual_publication_uses_fixed_repository_but_conflicting_bytes_fail(self):
+        original = lzma.decompress((self.directory / 'debian.Packages.xz').read_bytes())
+        def security_index(raw):
+            compressed = lzma.compress(raw)
+            (self.directory / 'debian-security.Packages.xz').write_bytes(compressed)
+            self.releases['debian-security'] = (
+                'Codename: trixie-security\nArchitectures: amd64\nComponents: updates/main\nSHA256:\n '
+                + H['digest'](compressed) + ' ' + str(len(compressed)) + ' ' + H['INDEX_PATH'] + '\n').encode()
+        security_index(original.replace(b'pool/main/', b'pool/updates/main/'))
+        value = self.candidate()
+        self.assertEqual(value['packages'][0]['repository'], 'debian')
+        self.assertEqual(value['packages'][0]['filename'], 'pool/main/t/test/test.deb')
+        reversed_repositories = dict(reversed(list(value['repositories'].items())))
+        selected = H['indexed_packages'](self.directory, H['package_delta'](value['before'], value['after']), reversed_repositories)
+        self.assertEqual(selected[0]['repository'], 'debian')
+        conflict = original.replace(b'pool/main/', b'pool/updates/main/')
+        checksum = value['packages'][0]['sha256'].encode()
+        security_index(conflict.replace(checksum, b'0' * 64))
+        with self.assertRaisesRegex(ValueError, 'AMBIGUOUS_PACKAGE'): self.candidate()
+        size = str(value['packages'][0]['bytes']).encode()
+        security_index(conflict.replace(b'Size: ' + size + b'\n', b'Size: ' + str(int(size) + 1).encode() + b'\n'))
+        with self.assertRaisesRegex(ValueError, 'AMBIGUOUS_PACKAGE'): self.candidate()
+
+    def test_actual_bubblewrap_identity_has_identical_bytes_in_both_signed_indexes(self):
+        record = ('Package: bubblewrap\nVersion: 0.12.0-1~deb13u1\nArchitecture: amd64\nSize: 56876\n'
+            'SHA256: 70aca4fa8daeacb677ec00e8063eb586f08ae3d94b1f11e684370b5524c43431\n'
+            'Filename: pool/main/b/bubblewrap/bubblewrap_0.12.0-1~deb13u1_amd64.deb\n\n').encode()
+        repositories = {}
+        for name in self.pins:
+            raw = record if name == 'debian' else record.replace(b'pool/main/', b'pool/updates/main/')
+            compressed = lzma.compress(raw)
+            (self.directory / (name + '.Packages.xz')).write_bytes(compressed)
+            repositories[name] = dict(index=dict(bytes=len(compressed), sha256=H['digest'](compressed)))
+        selected = H['indexed_packages'](self.directory,
+            [dict(name='bubblewrap', version='0.12.0-1~deb13u1', architecture='amd64')], repositories)
+        self.assertEqual(selected[0]['repository'], 'debian')
+        self.assertEqual(selected[0]['sha256'], '70aca4fa8daeacb677ec00e8063eb586f08ae3d94b1f11e684370b5524c43431')
+
     def test_realistic_apt_upgrade_diagnostics_do_not_change_selected_identity(self):
         line = 'Inst libc6 [2.41-12] (2.41-12+deb13u1 Debian-Security:13/stable-security [amd64])'
         expected = [dict(name='libc6', version='2.41-12+deb13u1', architecture='amd64')]

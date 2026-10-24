@@ -229,7 +229,9 @@ def package_filename(repository, filename):
 def indexed_packages(directory, changes, repositories):
     needed = {(item['name'], item['version'], item['architecture']) for item in changes}
     found = {}
-    for repository, pin in repositories.items():
+    require(set(repositories) == set(REPOSITORIES), 'REPOSITORIES')
+    for repository in REPOSITORIES:
+        pin = repositories[repository]
         for record in index_records(directory / (repository + '.Packages.xz'), pin['index']):
             identity = tuple(record.get(key) for key in ('Package', 'Version', 'Architecture'))
             if identity not in needed:
@@ -240,7 +242,13 @@ def indexed_packages(directory, changes, repositories):
             require(size.isdigit() and 0 < int(size) <= 128 * 1024**2 and sha256(checksum), 'DEB_METADATA')
             item = dict(name=identity[0], version=identity[1], architecture=identity[2],
                         repository=repository, filename=filename, bytes=int(size), sha256=checksum)
-            require(identity not in found, 'AMBIGUOUS_PACKAGE')
+            if identity in found:
+                # Debian/security can publish identical package bytes at
+                # different pool paths. Keep the first fixed repository only;
+                # a failed fetch never switches sources, and conflicts fail.
+                require((found[identity]['bytes'], found[identity]['sha256']) == (item['bytes'], item['sha256']),
+                        'AMBIGUOUS_PACKAGE')
+                continue
             found[identity] = item
     require(set(found) == needed, 'PACKAGE_NOT_IN_SIGNED_INDEX')
     return sorted(found.values(), key=lambda item: item['name'])
