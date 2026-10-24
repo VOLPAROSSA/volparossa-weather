@@ -227,6 +227,17 @@ class ClientInputTests(unittest.TestCase):
             with self.subTest(line=bad), self.assertRaises(ValueError):
                 A['validate_uri_line'](bad)
 
+    def test_observed_apt_quoted_plus_and_tilde_preserve_url_and_signed_filename(self):
+        filename = 'pool/main/x/xz-utils/example_1.0+dfsg~24.04_amd64.deb'
+        url = A['BASE'] + filename.replace('+', '%2b').replace('~', '%7e')
+        line = "'" + url + "' example_1%3a1.0+dfsg~24.04_amd64.deb 123 SHA256:" + 'a' * 64
+        result = A['validate_uri_line'](line)
+        self.assertEqual(result['url'], url)
+        self.assertEqual(result['filename'], filename)
+        for encoded in ('%252b', '%2f', '%2e%2e', '%23', '%3f', '%3a', '%2B', '%7E'):
+            with self.subTest(encoded=encoded), self.assertRaisesRegex(ValueError, 'APT_URI'):
+                A['validate_uri_line'](line.replace('%2b', encoded))
+
     def test_candidate_completed_and_partial_archives_stay_unadmitted(self):
         root = self.tmp / 'source'
         self.put(root / 'integrations/drizzli/build-plugins.json', b'{"plugins":[]}')

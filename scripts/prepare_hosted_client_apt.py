@@ -135,11 +135,17 @@ def authenticated_release(raw, suite):
 def validate_uri_line(line):
     parts = shlex.split(line)
     I.require(len(parts) == 4 and parts[0].startswith(BASE + 'pool/') and '?' not in parts[0]
-        and '#' not in parts[0] and '%' not in parts[0] and I.safe_path(parts[0][len(BASE):])
-        and re.fullmatch(r'pool/(?:main|restricted|universe|multiverse)/[A-Za-z0-9+_.~/-]+\.deb', parts[0][len(BASE):])
+        and '#' not in parts[0], 'APT_URI')
+    # APT's observed URI spelling quotes '+' and '~' with lowercase hex.
+    # Decode only these two non-separator characters for the signed Filename
+    # comparison; retain the original exact URL for acquisition. Never apply
+    # general URL decoding to an authenticated package path.
+    filename = parts[0][len(BASE):].replace('%2b', '+').replace('%7e', '~')
+    I.require('%' not in filename and I.safe_path(filename)
+        and re.fullmatch(r'pool/(?:main|restricted|universe|multiverse)/[A-Za-z0-9+_.~/-]+\.deb', filename)
         and re.fullmatch(r'[A-Za-z0-9_+.~:%-]+\.deb', parts[1])
         and parts[2].isdigit() and re.fullmatch(r'SHA256:[0-9a-f]{64}', parts[3]), 'APT_URI')
-    return dict(url=parts[0], filename=parts[0][len(BASE):], bytes=int(parts[2]), sha256=parts[3][7:])
+    return dict(url=parts[0], filename=filename, bytes=int(parts[2]), sha256=parts[3][7:])
 
 
 def candidate(profile, output, *, downloader=I.fetch):
