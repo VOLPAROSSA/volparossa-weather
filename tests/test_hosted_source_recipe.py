@@ -42,7 +42,11 @@ class SourceRecipeTests(unittest.TestCase):
                        "GIT_CONFIG_GLOBAL": os.devnull, "LC_ALL": "C",
                        "GIT_AUTHOR_NAME": "Source fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
                        "GIT_COMMITTER_NAME": "Source fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
+        # Disposable repositories must not leave auto-maintenance writers behind
+        # when TemporaryDirectory removes their object directories.
         return REAL_RUN(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
+                         "-c", "maintenance.auto=false", "-c", "gc.auto=0",
+                         "-c", "gc.autoDetach=false",
                          "-C", str(self.root), *args], env=environment, check=True,
                         capture_output=True, text=True, timeout=10).stdout.strip()
 
