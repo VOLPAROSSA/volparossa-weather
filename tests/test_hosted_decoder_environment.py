@@ -67,6 +67,10 @@ class Environment(unittest.TestCase):
             pin.update(inrelease_bytes=len(signed), inrelease_sha256=H['digest'](signed))
             self.releases[name] = (f'Codename: {pin["codename"]}\nArchitectures: amd64\nComponents: main\nSHA256:\n'
                                    f' {H["digest"](compressed)} {len(compressed)} {H["INDEX_PATH"]}\n').encode()
+        # Fixture safety must not depend on another test changing process umask.
+        for path in self.directory.rglob('*'):
+            if path.is_file():
+                path.chmod(0o600)
         def verify(argv, **kwargs):
             self.assertEqual(argv[:4], ['/usr/bin/gpgv', '--keyring', str(self.keyring), '--status-fd'])
             name = Path(argv[-1]).name.removesuffix('.InRelease')
@@ -190,6 +194,7 @@ class Environment(unittest.TestCase):
     def test_fixed_lock_requires_exact_installed_inventory_and_duplicate_keys_fail(self):
         path = self.directory / 'lock.json'
         path.write_bytes(H['canonical'](self.lock()))
+        path.chmod(0o600)
         with patch.dict(G, LOCK=path, installed_inventory=lambda: sorted(self.after, key=lambda row: row['name'])):
             value = H['check_environment']()
             self.assertEqual(value['environment_lock_sha256'], H['digest'](path.read_bytes()))
