@@ -116,6 +116,35 @@ class Environment(unittest.TestCase):
                                   ('debian-security', 'pool/updates/main/../test.deb')]:
             with self.assertRaisesRegex(ValueError, 'DEB_FILENAME'): H['package_filename'](repository, path)
 
+    def test_realistic_apt_upgrade_diagnostics_do_not_change_selected_identity(self):
+        line = 'Inst libc6 [2.41-12] (2.41-12+deb13u1 Debian-Security:13/stable-security [amd64])'
+        expected = [dict(name='libc6', version='2.41-12+deb13u1', architecture='amd64')]
+        for suffix in ['', ' [libc-bin:amd64 ]', ' []', ' [libc-bin:amd64 libgcc-s1:amd64 ]']:
+            with self.subTest(suffix=suffix):
+                self.assertEqual(H['resolver_inventory']((line + suffix + '\n').encode()), expected)
+        self.assertEqual(H['resolver_inventory'](
+            b'Inst build-essential (12.12 Debian:13/stable [all]) []\n'),
+            [dict(name='build-essential', version='12.12', architecture='all')])
+
+    def test_malformed_or_unbounded_apt_diagnostic_annotations_fail_closed(self):
+        line = 'Inst libc6 [2.41-12] (2.41-12+deb13u1 Debian-Security:13/stable-security [amd64])'
+        for suffix in [' [libc-bin:amd64]', ' [ ]', ' [[libc-bin:amd64 ]]', ' [] []',
+                       ' [] ignored', ' [../escape ]', ' [libc-bin:arm64 ]', ' [libc-bin:amd64\t]',
+                       ' [' + 'a ' * 2049 + ']']:
+            with self.subTest(suffix=suffix[:80]), self.assertRaisesRegex(ValueError, 'RESOLVER_INSTALL'):
+                H['resolver_inventory']((line + suffix + '\n').encode())
+        with self.assertRaisesRegex(ValueError, 'RESOLVER_INSTALL'):
+            H['resolver_inventory'](('Inst libc6 (2.41-12 ' + 'x' * 8192 + ' [amd64])\n').encode())
+        with self.assertRaisesRegex(ValueError, 'RESOLVER_REMOVAL'):
+            H['resolver_inventory']((line + ' []\nRemv libc-bin [2.41-12]\n').encode())
+
+    def test_apt_diagnostic_annotation_never_authorizes_an_extra_dependency(self):
+        (self.directory / 'resolver.log').write_bytes(
+            b'Inst build-essential (2.0 Debian:13/stable [amd64]) [unselected-package:amd64 ]\n')
+        value = self.candidate()
+        self.assertEqual([item['name'] for item in value['packages']], ['build-essential'])
+        self.assertNotIn('unselected-package', [item['name'] for item in value['after']])
+
     def test_candidate_is_rejected_by_consumer_even_with_toggled_flag(self):
         value = self.candidate()
         for changed in (value, dict(value, admitted=True), dict(value, admitted=1)):

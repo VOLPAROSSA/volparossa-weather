@@ -236,9 +236,15 @@ def resolver_inventory(resolver):
     for line in resolver.decode('ascii').splitlines():
         require(not line.startswith('Remv '), 'RESOLVER_REMOVAL')
         if line.startswith('Inst '):
+            require(len(line) <= 8192, 'RESOLVER_INSTALL')
             match = re.fullmatch(r'Inst ([a-z0-9][a-z0-9+.-]*)(?::amd64)? (?:\[[^\]]+\] )?'
-                                 r'\(([^ ]+) .* \[(amd64|all)\]\)', line)
+                                 r'\(([^ ]+) .* \[(amd64|all)\]\)(?: \[([^\[\]]{0,4096})\])?', line)
             require(match is not None, 'RESOLVER_INSTALL')
+            # APT 3.0.3 pkgSimulate::ShortBreaks appends zero or more package
+            # names, each followed by a space. It is diagnostic text, not part
+            # of the selected package/version/architecture or closure authority.
+            require(match[4] is None or re.fullmatch(
+                r'(?:[a-z0-9][a-z0-9+.-]{0,127}(?::(?:amd64|all))? )*', match[4]), 'RESOLVER_INSTALL')
             resolved.append(dict(name=match[1], version=match[2], architecture=match[3]))
     if resolved:
         validate_inventory(resolved)
