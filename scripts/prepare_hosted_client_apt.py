@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
-"""Acquire a fixed Ubuntu snapshot package candidate without installing packages.
+"""Acquire fixed Ubuntu package data or explicitly inventory installed inputs.
+
+The historical candidate path never installs packages. The separately selected
+installed inventory provisions reviewed local packages only on a guarded runner.
 
 The runner's original apt/gpgv/keyring are bootstrap observations. They cannot
 become source-build authority simply by being captured. Independent review must
@@ -184,6 +187,10 @@ def package_member_name(member):
     name = member.name.removeprefix('./')
     if member.isdir():
         name = name.removesuffix('/')
+    return package_data_path(name)
+
+
+def package_data_path(name):
     # These are POSIX names in authenticated Debian archives, recorded only
     # as metadata. Keep Unicode and literal backslashes byte-for-byte (e.g.
     # systemd's unit-name escapes). Never decode escapes, normalize Unicode,
@@ -319,3 +326,406 @@ def candidate(profile, output, *, downloader=I.fetch):
         limitations=['runner-bootstrap-tools-observed-not-independent-authority', 'installed-file-config-alternatives-binding-required-before-build'])
     I.write(output / 'apt-candidate.json', I.canonical(value))
     return value
+
+
+# Inventory-only bootstrap exception: these fixed distro tools may provision
+# authenticated packages on the guarded disposable runner. Their observations
+# do not authorize a compiler, browser, SDK or later build.
+PROVISION_TOOLS = ('/usr/bin/sudo', '/usr/bin/env', '/usr/bin/git', '/usr/bin/apt-get', '/usr/bin/dpkg',
+    '/usr/bin/dpkg-deb', '/usr/bin/dpkg-query', '/usr/bin/python3', '/usr/bin/timeout', '/usr/bin/kill', '/bin/sh')
+CONFIG_PATHS = ('etc/ld.so.cache', 'etc/ld.so.conf', 'etc/ld.so.conf.d', 'etc/fonts', 'etc/alternatives')
+MERGED_USR = {'bin': 'usr/bin', 'sbin': 'usr/sbin', 'lib': 'usr/lib', 'lib64': 'usr/lib64'}
+PACKAGE_ID = r'[a-z0-9][a-z0-9+.-]{0,127}'
+PACKAGE_VERSION = r'[A-Za-z0-9][A-Za-z0-9.+:~_-]{0,255}'
+INSTALL_LINE = re.compile(r'(Inst|Conf) (' + PACKAGE_ID + r')(?::(amd64|all))?(?: \[[^\]\r\n]{1,256}\])? '
+    r'\((' + PACKAGE_VERSION + r') ([^()\r\n]{1,256}) \[(amd64|all)\]\)(?: \[[A-Za-z0-9+.: _-]{0,2048}\])?')
+
+
+def bind_package_candidate(value, record):
+    expected = record['apt']
+    I.require(type(value) is dict and value.get('admitted') is False and value.get('installed') is False
+        and value.get('compiled') is False and value.get('full_build_environment_admitted') is False
+        and set(expected) == {'profile', 'snapshot', 'roots', 'repositories', 'indexes', 'packages'}
+        and expected['profile'] in ('web', 'flutter') and expected['snapshot'] == SNAPSHOT
+        and expected['roots'] == list(PROFILES[expected['profile']])
+        and all(value.get(key) == item for key, item in expected.items() if key not in ('packages', 'repositories')), 'PACKAGE_CLOSURE_CHANGED')
+    repositories = {}
+    for suite, repository in value.get('repositories', {}).items():
+        item = dict(repository)
+        item['indexes_sha256'] = I.sha(I.canonical(item.pop('indexes')))
+        repositories[suite] = item
+    I.require(repositories == expected['repositories'], 'PACKAGE_CLOSURE_CHANGED')
+    observed = []
+    for package in value.get('packages', []):
+        item = dict(package)
+        item['files_sha256'] = I.sha(I.canonical(item.pop('files')))
+        observed.append(item)
+    I.require(observed == expected['packages'], 'PACKAGE_CLOSURE_CHANGED')
+    identities = []
+    for item in expected['packages']:
+        identity = item['identity']
+        I.require(type(identity) is list and len(identity) == 3
+            and re.fullmatch(PACKAGE_ID, identity[0]) and re.fullmatch(PACKAGE_VERSION, identity[1])
+            and identity[2] in ('all', 'amd64'), 'PACKAGE_IDENTITY')
+        identities.append(identity[0])
+    I.require(0 < len(identities) <= 1024 and len(set(identities)) == len(identities), 'PACKAGE_IDENTITY_SET')
+
+
+def validate_install_simulation(raw, packages):
+    I.require(type(raw) is bytes and len(raw) <= 16 * 1024**2, 'INSTALL_PLAN_BOUND')
+    expected = {p['identity'][0]: p['identity'][1:] for p in packages}
+    actions = {'Inst': {}, 'Conf': {}}
+    for line in raw.decode('utf-8').splitlines():
+        I.require(not line.startswith(('Remv ', 'Purg ', 'Del ', 'Err:', 'E:')), 'INSTALL_PLAN_REMOVAL_OR_FAILURE')
+        if line.startswith(('Inst ', 'Conf ')):
+            match = INSTALL_LINE.fullmatch(line)
+            I.require(match is not None, 'INSTALL_PLAN_SYNTAX')
+            action, name, qualifier, version, _description, architecture = match.groups()
+            I.require(name in expected and expected[name] == [version, architecture]
+                and qualifier in (None, architecture) and name not in actions[action], 'INSTALL_PLAN_UNREVIEWED_PACKAGE')
+            actions[action][name] = [version, architecture]
+    # --reinstall requires every fixed local package, including those whose
+    # version is already present. Neither baseline satisfaction nor a subset
+    # may silently bypass reinstalling independently reviewed package bytes.
+    I.require(actions['Inst'] == expected and actions['Conf'] == expected, 'INSTALL_PLAN_INCOMPLETE')
+    return actions
+
+
+def provision_options(private):
+    # No repositories/lists/auth/hooks/proxies from the runner. The fixed local
+    # .debs are the only available inputs. --no-download is also enforced on
+    # both simulation and installation; there is no acquisition fallback.
+    return ['-o', 'Dir::Etc::main=/dev/null', '-o', 'Dir::Etc::parts=-',
+        '-o', 'Dir::Etc::sourcelist=/dev/null', '-o', 'Dir::Etc::sourceparts=-',
+        '-o', 'Dir::Etc::preferences=/dev/null', '-o', 'Dir::Etc::preferencesparts=-',
+        '-o', 'Dir::Etc::netrc=/dev/null', '-o', 'Dir::Etc::netrcparts=-',
+        '-o', 'Dir::State::lists=' + str(private / 'offline-lists'),
+        '-o', 'Dir::Cache::archives=' + str(private / 'archives'),
+        '-o', 'Dir::Cache::pkgcache=', '-o', 'Dir::Cache::srcpkgcache=',
+        '-o', 'Acquire::Retries=0', '-o', 'APT::Get::Download=false',
+        '-o', 'DPkg::Lock::Timeout=30']
+
+
+def open_directory_beneath(root_fd, parts):
+    descriptor = os.dup(root_fd)
+    try:
+        for part in parts:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def observe_path(name, *, root=Path('/')):
+    """Read through owned directory descriptors, never unknown aliases."""
+    parts = package_data_path(name).split('/')
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    directory = os.dup(root_fd)
+    try:
+        for index, part in enumerate(parts[:-1]):
+            try:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            except FileNotFoundError:
+                return dict(type='missing')
+            except OSError:
+                info = os.stat(part, dir_fd=directory, follow_symlinks=False)
+                if not stat.S_ISLNK(info.st_mode):
+                    return dict(type='invalid-parent-type')
+                target = os.readlink(part, dir_fd=directory)
+                relative = '/'.join(parts[:index + 1])
+                if relative not in MERGED_USR or target not in (MERGED_USR[relative], '/' + MERGED_USR[relative]):
+                    return dict(type='unvalidated-parent-alias')
+                child = open_directory_beneath(root_fd, MERGED_USR[relative].split('/'))
+            os.close(directory)
+            directory = child
+        try:
+            info = os.stat(parts[-1], dir_fd=directory, follow_symlinks=False)
+        except FileNotFoundError:
+            return dict(type='missing')
+        if stat.S_ISLNK(info.st_mode):
+            return dict(type='symlink', target_sha256=I.sha(os.fsencode(os.readlink(parts[-1], dir_fd=directory))))
+        if stat.S_ISDIR(info.st_mode):
+            return dict(type='directory')
+        if not stat.S_ISREG(info.st_mode):
+            return dict(type='unsupported-type')
+        if info.st_size > I.MAX_MEMBER:
+            return dict(type='oversized-file')
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        with os.fdopen(fd, 'rb') as stream:
+            opened = os.fstat(stream.fileno())
+            I.require(stat.S_ISREG(opened.st_mode) and (opened.st_dev, opened.st_ino) == (info.st_dev, info.st_ino),
+                'INSTALLED_FILE_CHANGED_DURING_READ')
+            digest, total = hashlib.sha256(), 0
+            while chunk := stream.read(65536):
+                total += len(chunk)
+                I.require(total <= I.MAX_MEMBER, 'INSTALLED_FILE_BOUND')
+                digest.update(chunk)
+            after = os.fstat(stream.fileno())
+        I.require(total == info.st_size and (after.st_size, after.st_mtime_ns, after.st_ctime_ns) ==
+            (info.st_size, info.st_mtime_ns, info.st_ctime_ns), 'INSTALLED_FILE_CHANGED_DURING_READ')
+        return dict(type='file', bytes=total, sha256=digest.hexdigest(), mode=stat.S_IMODE(info.st_mode))
+    finally:
+        os.close(directory)
+        os.close(root_fd)
+
+
+def package_file_inventory(packages, *, root=Path('/')):
+    result, cache = {}, {}
+    for package in packages:
+        files, rows = package['files'], {}
+        for name, expected in files.items():
+            if name not in cache:
+                cache[name] = observe_path(name, root=root)
+            actual = cache[name]
+            comparison = expected
+            if expected['type'] == 'symlink':
+                comparison = dict(type='symlink', target_sha256=I.sha(os.fsencode(expected['target'])))
+            elif expected['type'] == 'hardlink':
+                target = expected['target'].removeprefix('./').removeprefix('/')
+                comparison = files.get(target, dict(type='unresolved-archive-hardlink'))
+            rows[name] = dict(observed=actual, matches_package=actual == comparison)
+        result[package['identity'][0]] = rows
+    return result
+
+
+def configuration_inventory(*, root=Path('/')):
+    # Fixed public paths only, never a recursive /etc dump. Directory FDs keep
+    # the walk beneath those paths even if an alias is replaced during capture.
+    result = {}
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    def walk(directory, base):
+        for child in sorted(os.listdir(directory)):
+            I.require(len(result) < 16384, 'CONFIGURATION_ENTRY_BOUND')
+            relative = base + '/' + child
+            result[relative] = observe_path(relative, root=root)
+            if result[relative]['type'] == 'directory':
+                descriptor = os.open(child, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+                try:
+                    walk(descriptor, relative)
+                finally:
+                    os.close(descriptor)
+    try:
+        for base in CONFIG_PATHS:
+            result[base] = observe_path(base, root=root)
+            if result[base]['type'] == 'directory':
+                descriptor = open_directory_beneath(root_fd, base.split('/'))
+                try:
+                    walk(descriptor, base)
+                finally:
+                    os.close(descriptor)
+    finally:
+        os.close(root_fd)
+    return result
+
+
+def provisioning_bootstrap():
+    tools = {}
+    for name in PROVISION_TOOLS:
+        path = Path(name)
+        resolved = path.resolve(strict=True)
+        info = resolved.stat()
+        I.require(str(resolved).startswith(('/usr/bin/', '/usr/sbin/')) and stat.S_ISREG(info.st_mode)
+            and info.st_uid == 0 and not info.st_mode & 0o022 and info.st_mode & 0o111,
+            'UNSAFE_PROVISIONING_TOOL')
+        tools[name] = dict(sha256=I.sha(I.read(resolved)), resolved=str(resolved), mode=stat.S_IMODE(info.st_mode))
+    return dict(schema=1, admitted=False, kind='client-provisioning-bootstrap-observations', tools=tools,
+        basis='trusted-github-hosted-ubuntu-bootstrap-inventory-only', compiler_authority=False)
+
+
+def verified_local_packages(private, packages):
+    paths = []
+    for index, package in enumerate(packages):
+        path = private / (str(index) + '.deb')
+        raw = I.read(path, 192 * 1024**2)
+        I.require(len(raw) == package['input']['bytes'] and I.sha(raw) == package['input']['sha256'],
+            'LOCAL_PACKAGE_CHANGED')
+        paths.append(str(path))
+    return paths
+
+
+def record_installed_environment(profile, output, packages, baseline, before_config, plan, succeeded):
+    after = run(['/usr/bin/dpkg-query', '-W', '-f=${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Status}\n'])
+    I.write(output / 'installed-packages-after.tsv', after)
+    after_files, after_config = package_file_inventory(packages), configuration_inventory()
+    # Save the full observations before rejecting a failed/partial transition.
+    I.write(output / 'installed-environment.json', I.canonical(dict(schema=1,
+        kind='client-installed-environment-candidate', admitted=False, profile=profile,
+        package_inputs_authorized=True, package_input_sha256=I.PACKAGE_INPUTS[profile][1],
+        build_environment_admitted=False, consumer_admitted=False, compiled=False,
+        installer_succeeded=succeeded, plan=plan, packages=after_files, configuration=after_config,
+        configuration_changed=sorted(k for k in before_config.keys() | after_config.keys()
+            if before_config.get(k) != after_config.get(k)),
+        image=dict(os=os.environ['ImageOS'], version=os.environ['ImageVersion']),
+        limitations=['trusted-hosted-bootstrap-not-independent-compiler-authority',
+            'existing-package-triggers-and-interpreters-are-platform-bootstrap-not-reviewed-compiler-inputs',
+            'installed-differences-and-generated-configuration-require-independent-review',
+            'no-client-compiler-browser-sdk-npm-or-pub-execution', 'not-a-hermetic-runner-or-client-admission'])))
+    if succeeded:
+        validate_package_transition(baseline, after, packages)
+
+
+def installed_inventory(profile, output, record):
+    global APT_CONFIG_FILE
+    I.hosted_guard(os.environ, profile)
+    # This is deliberately not an API accepting an arbitrary package record.
+    I.require(record == I.load_package_inputs(profile), 'PACKAGE_INPUTS_CHANGED')
+    bootstrap = provisioning_bootstrap()
+    I.require(run(['/usr/bin/git', '-C', str(ROOT), 'rev-parse', 'HEAD']).decode().strip() == os.environ['GITHUB_SHA']
+        and not run(['/usr/bin/git', '-C', str(ROOT), 'status', '--porcelain', '--untracked-files=all']).strip(),
+        'PROVISIONING_SOURCE_CHANGED')
+    I.write(output / 'provisioning-bootstrap.json', I.canonical(bootstrap))
+    candidate(record['apt']['profile'], output)
+    value = I.document(I.read(output / 'apt-candidate.json'))
+    bind_package_candidate(value, record)
+    packages, private = value['packages'], output / 'apt-private'
+    # Recheck every complete archive immediately before any privileged action.
+    paths = verified_local_packages(private, packages)
+    (private / 'offline-lists').mkdir(mode=0o700)
+    I.write(private / 'offline-lists/lock', b'')
+    # APT_CONFIG is consumed before normal config fragments. Root receives
+    # only this fixed file and an explicitly empty environment.
+    APT_CONFIG_FILE = private / 'offline-apt.conf'
+    I.write(APT_CONFIG_FILE, b'Dir::Etc::main "/dev/null";\nDir::Etc::parts "-";\nAcquire::http::Proxy "DIRECT";\nAcquire::https::Proxy "DIRECT";\n')
+    argv = ['/usr/bin/apt-get', *provision_options(private), '--no-download', '--no-remove',
+        '--allow-downgrades', '--reinstall', '--no-install-recommends']
+    baseline = run(['/usr/bin/dpkg-query', '-W', '-f=${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Status}\n'])
+    I.write(output / 'installed-packages-before.tsv', baseline)
+    before_files = package_file_inventory(packages)
+    before_config = configuration_inventory()
+    I.write(output / 'installed-before.json', I.canonical(dict(schema=1, admitted=False,
+        packages=before_files, configuration=before_config)))
+    # Run the same root-only resolver in simulation and installation. Passing
+    # all authenticated local files prevents satisfying dependencies from a
+    # different repository. No command, option or path comes from a caller.
+    prefix = ['/usr/bin/sudo', '-n', '--', '/usr/bin/env', '-i', *[k + '=' + v for k, v in ENV.items() if k != 'APT_CONFIG'],
+        'APT_CONFIG=' + str(APT_CONFIG_FILE)]
+    print(I.canonical(dict(action='reinstall-reviewed-packages-on-disposable-runner',
+        packages=[p['identity'] for p in packages], downloads=False, removals=False,
+        effects='package-files-maintainer-scripts-and-generated-config-may-change',
+        package_services_may_start=True, build_environment_admitted=False)).decode(), flush=True)
+    simulation = provision_run([*prefix, '/usr/bin/timeout', '--foreground', '--signal=TERM', '--kill-after=5s', '120s',
+        *argv, '--simulate', 'install', *paths], output, 'simulation', 120)
+    I.write(output / 'install-simulation.log', simulation)
+    plan = validate_install_simulation(simulation, packages)
+    # A simulation receipt never authorizes changed archive bytes.
+    I.require(paths == verified_local_packages(private, packages), 'LOCAL_PACKAGE_CHANGED')
+    succeeded = False
+    try:
+        installed = provision_run([*prefix, '/usr/bin/timeout', '--foreground', '--signal=TERM', '--kill-after=5s', '600s',
+            *argv, '--yes', 'install', *paths], output, 'install', 600)
+        succeeded = True
+        I.write(output / 'install.log', installed)
+    finally:
+        receipt = output / 'installer-install-cleanup.json'
+        if receipt.exists() and I.document(I.read(receipt)).get('owned_session_drained') is True:
+            record_installed_environment(profile, output, packages, baseline, before_config, plan, succeeded)
+
+
+def installer_group_running(group):
+    count = 0
+    for path in Path('/proc').iterdir():
+        if not path.name.isdigit():
+            continue
+        count += 1
+        I.require(count <= 32768, 'INSTALLER_PROCESS_INSPECTION_BOUND')
+        try:
+            fields = (path / 'stat').read_text().rsplit(')', 1)[1].split()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        I.require(len(fields) >= 4, 'INSTALLER_PROCESS_INSPECTION_FAILED')
+        if int(fields[3]) == group and fields[0] not in ('Z', 'X'):
+            I.require(int(fields[2]) == group, 'INSTALLER_SESSION_GROUP_CHANGED')
+        if int(fields[2]) == group and fields[0] not in ('Z', 'X'):
+            return True
+    return False
+
+
+def finish_installer_group(child, grace=5):
+    # The Popen leader has NOT been reaped: PID/PGID reuse is impossible until
+    # after this final group kill. No caller can supply a PID or command.
+    for name in ('TERM', 'KILL'):
+        killed = subprocess.run(['/usr/bin/sudo', '-n', '--', '/usr/bin/kill', '-' + name, '--', '-' + str(child.pid)],
+            env=ENV, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=10, check=False)
+        I.require(killed.returncode == 0, 'INSTALLER_PRIVILEGED_CLEANUP_FAILED')
+        deadline = time.monotonic() + grace
+        while installer_group_running(child.pid):
+            I.require(time.monotonic() < deadline or name == 'TERM', 'INSTALLER_GROUP_NOT_DRAINED')
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+    I.require(not installer_group_running(child.pid), 'INSTALLER_GROUP_NOT_DRAINED')
+    child.wait(timeout=5)  # Reap only after no live group members can write.
+
+
+def provision_run(argv, output, label, seconds):
+    I.require(label in ('simulation', 'install') and argv[:3] == ['/usr/bin/sudo', '-n', '--'], 'INSTALLER_ACTION')
+    I.write(output / ('installer-' + label + '-started.json'), I.canonical(dict(schema=1,
+        admitted=False, kind='client-installer-started', action=label)))
+    child, cleanup = None, False
+    with tempfile.TemporaryFile(dir=ROOT / 'build') as stdout, tempfile.TemporaryFile(dir=ROOT / 'build') as stderr:
+        try:
+            pending = []
+            handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+            for sig in handlers:
+                signal.signal(sig, lambda signum, _frame: pending.append(signum))
+            try:
+                child = subprocess.Popen(argv, env=ENV, stdin=subprocess.DEVNULL, stdout=stdout,
+                    stderr=stderr, start_new_session=True, umask=0o077)
+            finally:
+                for sig, handler in handlers.items():
+                    signal.signal(sig, handler)
+            I.require(not pending, 'CLIENT_INPUT_INTERRUPTED')
+            deadline = time.monotonic() + seconds + 10
+            while True:
+                status = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                I.require(os.fstat(stdout.fileno()).st_size <= 16 * 1024**2
+                    and os.fstat(stderr.fileno()).st_size <= 2 * 1024**2, 'INSTALLER_LOG_BOUND')
+                if status is not None:
+                    break
+                I.require(time.monotonic() < deadline, 'INSTALLER_DEADLINE')
+                time.sleep(0.05)
+            I.require(status.si_code == os.CLD_EXITED and status.si_status == 0, 'INSTALLER_FAILED')
+            stdout.seek(0)
+            return stdout.read(16 * 1024**2 + 1)
+        finally:
+            try:
+                if child is not None:
+                    finish_installer_group(child)
+                cleanup = True
+            finally:
+                stdout.seek(0)
+                I.write(output / ('installer-' + label + '-stdout.log'), stdout.read(16 * 1024**2))
+                stderr.seek(0)
+                error_log = stderr.read(2 * 1024**2)
+                if error_log:
+                    I.write(output / ('installer-' + label + '-stderr.log'), error_log)
+                I.write(output / ('installer-' + label + '-cleanup.json'), I.canonical(dict(schema=1,
+                    admitted=False, kind='client-installer-group-cleanup', action=label,
+                    owned_session_drained=cleanup, leader_reaped=cleanup,
+                    package_services_cleaned=False, scope='owned-installer-process-group-only')))
+
+
+def validate_package_transition(before, after, packages):
+    def parse(raw):
+        rows = {}
+        for line in raw.decode('utf-8').splitlines():
+            parts = line.split('\t')
+            I.require(len(parts) == 4 and parts[0] not in rows, 'INSTALLED_PACKAGE_TABLE')
+            rows[parts[0]] = parts[1:]
+        return rows
+    previous, current = parse(before), parse(after)
+    expected = {p['identity'][0]: p['identity'][1:] for p in packages}
+    for name, row in previous.items():
+        if name.split(':')[0] not in expected:
+            I.require(current.get(name) == row, 'UNREVIEWED_INSTALLED_PACKAGE_CHANGE')
+    for name, row in current.items():
+        base = name.split(':')[0]
+        if base in expected:
+            I.require(row == [*expected[base], 'installed'], 'INSTALLED_PACKAGE_IDENTITY_CHANGED')
+        else:
+            I.require(previous.get(name) == row, 'UNREVIEWED_INSTALLED_PACKAGE_CHANGE')
+    I.require(set(expected) <= {name.split(':')[0] for name in current}, 'INSTALLED_PACKAGE_MISSING')
