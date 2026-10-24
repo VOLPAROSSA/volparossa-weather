@@ -188,6 +188,14 @@ def package_delta(before, after):
     return [new[name] for name in sorted(new) if old.get(name) != new[name]]
 
 
+def package_filename(repository, filename):
+    prefix = {'debian': 'pool/main/', 'debian-security': 'pool/updates/main/'}
+    require(repository in prefix and type(filename) is str and filename.startswith(prefix[repository])
+            and filename.endswith('.deb') and len(filename.split('/')) >= 5
+            and all(re.fullmatch('[A-Za-z0-9+.:~_-]+', part) and part not in ('.', '..')
+                    for part in filename.split('/')), 'DEB_FILENAME')
+
+
 def indexed_packages(directory, changes, repositories):
     needed = {(item['name'], item['version'], item['architecture']) for item in changes}
     found = {}
@@ -197,10 +205,7 @@ def indexed_packages(directory, changes, repositories):
             if identity not in needed:
                 continue
             filename = record.get('Filename', '')
-            parts = PurePosixPath(filename).parts
-            require(filename.startswith('pool/main/') and len(parts) >= 4 and
-                    all(re.fullmatch('[A-Za-z0-9+.:~_-]+', part) and part not in ('.', '..') for part in parts)
-                    and filename.endswith('.deb'), 'DEB_FILENAME')
+            package_filename(repository, filename)
             size, checksum = record.get('Size', ''), record.get('SHA256')
             require(size.isdigit() and 0 < int(size) <= 128 * 1024**2 and sha256(checksum), 'DEB_METADATA')
             item = dict(name=identity[0], version=identity[1], architecture=identity[2],
@@ -392,11 +397,8 @@ def validate_record(value, admitted):
         require(type(item) is dict and set(item) == {'name', 'version', 'architecture', 'repository',
                     'filename', 'bytes', 'sha256', 'files'} and all(item[key] == val for key, val in changed.items()), 'PACKAGE_CLOSURE')
         filename = item['filename']
-        require(item['repository'] in repositories and type(filename) is str
-                and filename.startswith('pool/main/') and filename.endswith('.deb')
-                and all(re.fullmatch('[A-Za-z0-9+.:~_-]+', part) and part not in ('.', '..')
-                        for part in filename.split('/'))
-                and type(item['bytes']) is int and 0 < item['bytes'] <= 128 * 1024**2
+        package_filename(item['repository'], filename)
+        require(item['repository'] in repositories and type(item['bytes']) is int and 0 < item['bytes'] <= 128 * 1024**2
                 and sha256(item['sha256']), 'PACKAGE_PIN')
         validate_files(item['files'])
     validate_files(value['base_files'])

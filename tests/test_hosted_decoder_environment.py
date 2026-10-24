@@ -108,6 +108,14 @@ class Environment(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'DEB_SET'):
             H['verified_packages'](self.directory, changes, repositories)
 
+    def test_security_archive_has_its_own_fixed_package_pool_prefix(self):
+        H['package_filename']('debian', 'pool/main/g/gcc/test.deb')
+        H['package_filename']('debian-security', 'pool/updates/main/g/gcc/test.deb')
+        for repository, path in [('debian', 'pool/updates/main/g/gcc/test.deb'),
+                                  ('debian-security', 'pool/main/g/gcc/test.deb'),
+                                  ('debian-security', 'pool/updates/main/../test.deb')]:
+            with self.assertRaisesRegex(ValueError, 'DEB_FILENAME'): H['package_filename'](repository, path)
+
     def test_candidate_is_rejected_by_consumer_even_with_toggled_flag(self):
         value = self.candidate()
         for changed in (value, dict(value, admitted=True), dict(value, admitted=1)):
