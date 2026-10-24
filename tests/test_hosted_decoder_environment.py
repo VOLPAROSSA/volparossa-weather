@@ -98,6 +98,16 @@ class Environment(unittest.TestCase):
         self.assertEqual(value['apt_options'], H['APT_OPTIONS'])
         self.assertFalse(value['scope']['compiled'])
 
+    def test_preinstall_selection_comes_only_from_signed_indexes_and_fixed_resolver(self):
+        changes = H['resolver_inventory']((self.directory / 'resolver.log').read_bytes())
+        repositories = {name: H['verify_release'](self.directory / (name + '.InRelease'), name) for name in self.pins}
+        (self.directory / 'debs/test.deb').unlink()
+        selected = H['indexed_packages'](self.directory, changes, repositories)
+        self.assertEqual(selected[0]['filename'], 'pool/main/t/test/test.deb')
+        self.assertNotIn('files', selected[0])
+        with self.assertRaisesRegex(ValueError, 'DEB_SET'):
+            H['verified_packages'](self.directory, changes, repositories)
+
     def test_candidate_is_rejected_by_consumer_even_with_toggled_flag(self):
         value = self.candidate()
         for changed in (value, dict(value, admitted=True), dict(value, admitted=1)):

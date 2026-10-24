@@ -188,7 +188,7 @@ def package_delta(before, after):
     return [new[name] for name in sorted(new) if old.get(name) != new[name]]
 
 
-def verified_packages(directory, changes, repositories):
+def indexed_packages(directory, changes, repositories):
     needed = {(item['name'], item['version'], item['architecture']) for item in changes}
     found = {}
     for repository, pin in repositories.items():
@@ -208,7 +208,11 @@ def verified_packages(directory, changes, repositories):
             require(identity not in found, 'AMBIGUOUS_PACKAGE')
             found[identity] = item
     require(set(found) == needed, 'PACKAGE_NOT_IN_SIGNED_INDEX')
-    packages = sorted(found.values(), key=lambda item: item['name'])
+    return sorted(found.values(), key=lambda item: item['name'])
+
+
+def verified_packages(directory, changes, repositories):
+    packages = indexed_packages(directory, changes, repositories)
     names = [PurePosixPath(item['filename']).name for item in packages]
     require(len(names) == len(set(names)), 'DUPLICATE_DEB')
     debs = directory / 'debs'
@@ -219,6 +223,21 @@ def verified_packages(directory, changes, repositories):
         require(len(raw) == item['bytes'] and digest(raw) == item['sha256'], 'DEB_DIGEST')
         item['files'] = deb_files(raw)
     return packages
+
+
+def resolver_inventory(resolver):
+    require(0 < len(resolver) <= 1024**2 and b'\x00' not in resolver, 'RESOLVER_LOG')
+    resolved = []
+    for line in resolver.decode('ascii').splitlines():
+        require(not line.startswith('Remv '), 'RESOLVER_REMOVAL')
+        if line.startswith('Inst '):
+            match = re.fullmatch(r'Inst ([a-z0-9][a-z0-9+.-]*)(?::amd64)? (?:\[[^\]]+\] )?'
+                                 r'\(([^ ]+) .* \[(amd64|all)\]\)', line)
+            require(match is not None, 'RESOLVER_INSTALL')
+            resolved.append(dict(name=match[1], version=match[2], architecture=match[3]))
+    if resolved:
+        validate_inventory(resolved)
+    return sorted(resolved, key=lambda item: item['name'])
 
 
 def member_path(name):
@@ -329,16 +348,7 @@ def candidate(directory):
     changes = package_delta(before, after)
     packages = verified_packages(directory, changes, repositories)
     resolver = read_file(directory / 'resolver.log', 1024**2)
-    require(b'\x00' not in resolver, 'RESOLVER_LOG')
-    resolved = []
-    for line in resolver.decode('ascii').splitlines():
-        require(not line.startswith('Remv '), 'RESOLVER_REMOVAL')
-        if line.startswith('Inst '):
-            match = re.fullmatch(r'Inst ([a-z0-9][a-z0-9+.-]*)(?::amd64)? (?:\[[^\]]+\] )?'
-                                 r'\(([^ ]+) .* \[(amd64|all)\]\)', line)
-            require(match is not None, 'RESOLVER_INSTALL')
-            resolved.append(dict(name=match[1], version=match[2], architecture=match[3]))
-    require(sorted(resolved, key=lambda item: item['name']) == changes, 'RESOLVER_CLOSURE')
+    require(resolver_inventory(resolver) == changes, 'RESOLVER_CLOSURE')
     base_files_raw = read_file(directory / 'base-files.json', MAX_RECORD)
     base_files = json.loads(base_files_raw, object_pairs_hook=unique)
     validate_files(base_files)
