@@ -251,6 +251,34 @@ class Environment(unittest.TestCase):
         path.write_bytes(b'{"schema":1,"schema":1}')
         with patch.dict(G, LOCK=path), self.assertRaisesRegex(ValueError, 'DUPLICATE_KEY'): H['check_environment']()
 
+    def test_locked_preinstall_inputs_require_fixed_admitted_lock_and_exact_bytes(self):
+        path = self.directory / 'lock.json'
+        value = self.lock()
+        H['write_candidate_file'](path, H['canonical'](value))
+        with patch.dict(G, LOCK=path):
+            checked = H['verify_locked_inputs'](self.directory)
+            self.assertEqual(checked['environment_lock_sha256'], H['digest'](path.read_bytes()))
+            self.assertEqual(checked['packages'], ['pool/main/t/test/test.deb'])
+            self.assertFalse(checked['compiled'])
+            self.assertFalse(checked['decoder_authorized'])
+            baseline = self.directory / 'base-files.json'
+            raw = baseline.read_bytes()
+            baseline.write_bytes(raw + b' ')
+            with self.assertRaisesRegex(ValueError, 'BASE_FILES_MISMATCH'): H['verify_locked_inputs'](self.directory)
+            baseline.write_bytes(raw)
+            (self.directory / 'debs/test.deb').write_bytes(deb(b'changed bytes'))
+            with self.assertRaisesRegex(ValueError, 'DEB_DIGEST'): H['verify_locked_inputs'](self.directory)
+        path.write_bytes(H['canonical'](self.candidate_without_deb_recheck(value)))
+        with patch.dict(G, LOCK=path), self.assertRaises(ValueError): H['verify_locked_inputs'](self.directory)
+        path.unlink()
+        with patch.dict(G, LOCK=path), self.assertRaises(FileNotFoundError): H['verify_locked_inputs'](self.directory)
+
+    @staticmethod
+    def candidate_without_deb_recheck(lock):
+        value = {key: item for key, item in lock.items() if key != 'review'}
+        value.update(admitted=False, kind='volparossa-weather-source-environment-candidate')
+        return value
+
     def test_tool_binding_uses_reviewed_package_member_bytes_not_capture(self):
         lock = self.lock()
         environment = dict(inventory=lock['after'], packages=lock['packages'], base_files=lock['base_files'])
@@ -402,6 +430,101 @@ class Environment(unittest.TestCase):
                 patch.object(Path, 'is_symlink', return_value=True), patch.object(Path, 'resolve', resolved), \
                 self.assertRaisesRegex(ValueError, 'DEVELOPMENT_DIRECTORY_COVERAGE'):
             H['verify_development_files'](dict(base_files={}, packages=[]))
+
+    def payload_fixture(self):
+        root = self.directory / 'recipe'
+        root.mkdir()
+        for name in ('scripts/prepare_hosted_decoder.py', 'scripts/prepare_hosted_decoder_environment.py',
+                     'third_party/eccodes-sources.json'):
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            H['write_candidate_file'](path, (ROOT / name).read_bytes())
+        output = root / 'build/hosted-decoder-fixture'
+        output.mkdir(parents=True)
+        environment = dict(environment_lock_sha256='1' * 64)
+        manifest = dict.fromkeys(D['SOURCE_MANIFEST_FIELDS'])
+        manifest.update(schema=1, kind='volparossa-weather-source-build-manifest', admitted=False,
+            compiled=True, tests_passed=True, environment_lock_sha256='1' * 64,
+            source_pin_sha256=D['PIN_SHA'], source_helper_sha256=D['LEGACY_SHA'],
+            recipe_sha256=H['digest']((root / 'scripts/prepare_hosted_decoder.py').read_bytes()),
+            environment_helper_sha256=H['digest']((root / 'scripts/prepare_hosted_decoder_environment.py').read_bytes()),
+            source_date_epoch=D['EPOCH'], jobs=D['JOBS'], namespace_build_path='/build', environment=D['ENV'],
+            date_shim_sha256=H['digest'](D['DATE_SHIM']), scope=D['SCOPE'], effective_flags={}, tests={},
+            tool_package_bindings={}, development_files_sha256='2' * 64, artifacts=[], licenses=[])
+        for name in D['SOURCE_ARTIFACTS']:
+            raw = b'\x7fELF synthetic data only' if name.endswith(('grib_ls', 'grib_filter', 'codes_info')) else b'fixture'
+            path = output / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            H['write_candidate_file'](path, raw)
+            manifest['artifacts'].append(dict(path=name, bytes=len(raw), sha256=H['digest'](raw)))
+        pin = json.loads((root / 'third_party/eccodes-sources.json').read_bytes())
+        names = {item['name'] + '-source/' + name for item in pin['sources'] for name in item['notices']}
+        names.add('eccodes-source/third_party/expected/COPYING')
+        for name in sorted(names):
+            path = output / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            raw = b'unchanged synthetic notice bytes: ' + name.encode()
+            H['write_candidate_file'](path, raw)
+            manifest['licenses'].append(dict(path=name, bytes=len(raw), sha256=H['digest'](raw), symlink_target=None))
+        H['write_candidate_file'](output / 'build-manifest.json', H['canonical'](manifest))
+        return root, output, environment, manifest
+
+    def payload_state(self, root, environment):
+        helper = dict(check_environment=lambda: environment, canonical=H['canonical'])
+        return patch.dict(D['stage_source_payload'].__globals__, ROOT=root,
+            PIN=root / 'third_party/eccodes-sources.json', __file__=str(root / 'scripts/prepare_hosted_decoder.py'),
+            source_environment=lambda: (helper, environment))
+
+    def test_source_payload_is_closed_bounded_regular_files_and_unadmitted(self):
+        root, build, environment, manifest = self.payload_fixture()
+        H['write_candidate_file'](build / 'private-package.deb', b'never copied')
+        output = root / 'build/hosted-payload-fixture'
+        with self.payload_state(root, environment):
+            value = D['stage_source_payload'](build, output)
+        expected = {item['path'] for item in manifest['artifacts'] + manifest['licenses']} | {'build-manifest.json'}
+        self.assertEqual(set(value['files']), expected)
+        self.assertEqual({str(path.relative_to(output)) for path in output.rglob('*') if path.is_file()}, expected)
+        self.assertFalse(value['admitted'])
+        self.assertLessEqual(value['bytes'], 160 * 1024**2)
+        self.assertEqual(json.loads((build / 'payload-manifest.json').read_bytes()), value)
+        self.assertNotIn(str(root), (build / 'payload-manifest.json').read_text())
+        self.assertFalse((output / 'payload-manifest.json').exists())
+        for name, item in value['files'].items():
+            path = output / name
+            self.assertFalse(path.is_symlink())
+            self.assertEqual(path.stat().st_mode & 0o777, item['mode'])
+            self.assertEqual(H['digest'](path.read_bytes()), item['sha256'])
+        self.assertEqual(value['files']['eccodes-build/bin/grib_ls']['mode'], 0o500)
+
+    def test_source_payload_rejects_changed_bytes_extra_declared_file_and_wrong_lock(self):
+        root, build, environment, manifest = self.payload_fixture()
+        mutations = [lambda value: value.update(admitted=True),
+                     lambda value: value.update(environment_lock_sha256='0' * 64),
+                     lambda value: value['artifacts'].append(dict(path='extra-file', bytes=1, sha256='0' * 64))]
+        with self.payload_state(root, environment):
+            for index, mutate in enumerate(mutations):
+                value = copy.deepcopy(manifest); mutate(value)
+                (build / 'build-manifest.json').write_bytes(H['canonical'](value))
+                with self.assertRaises(ValueError):
+                    D['stage_source_payload'](build, root / ('build/hosted-payload-bad' + str(index)))
+            (build / 'build-manifest.json').write_bytes(H['canonical'](manifest))
+            (build / 'probe.grib2').write_bytes(b'changed')
+            with self.assertRaisesRegex(ValueError, 'SOURCE_PAYLOAD_BYTES'):
+                D['stage_source_payload'](build, root / 'build/hosted-payload-bytes')
+
+    def test_source_payload_rejects_symlink_escape_and_total_bound_before_copy(self):
+        root, build, environment, _manifest = self.payload_fixture()
+        binary = build / 'eccodes-build/bin/grib_ls'
+        original = binary.read_bytes()
+        binary.unlink(); binary.symlink_to(root / 'scripts/prepare_hosted_decoder.py')
+        with self.payload_state(root, environment):
+            with self.assertRaisesRegex(ValueError, 'SOURCE_PAYLOAD_PATH'):
+                D['stage_source_payload'](build, root / 'build/hosted-payload-escape')
+            binary.unlink(); H['write_candidate_file'](binary, original)
+            with patch.dict(D['source_payload_files'].__globals__, MAX_SOURCE_PAYLOAD=10), \
+                    self.assertRaisesRegex(ValueError, 'SOURCE_PAYLOAD_BOUND'):
+                D['stage_source_payload'](build, root / 'build/hosted-payload-large')
+            self.assertFalse((root / 'build/hosted-payload-large').exists())
 
 
 if __name__ == '__main__':

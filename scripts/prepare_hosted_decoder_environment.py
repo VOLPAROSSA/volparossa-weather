@@ -455,11 +455,36 @@ def installed_inventory():
     return inventory(result.stdout)
 
 
-def check_environment():
+def load_environment_lock():
     raw = read_file(LOCK, MAX_RECORD)
     value = validate_record(json.loads(raw, object_pairs_hook=unique), True)
+    return value, digest(raw)
+
+
+def verify_locked_inputs(directory):
+    # No resolver or caller hash becomes source-build authority. Re-fetching a
+    # snapshot is insufficient: all pre-install bytes must match the reviewed
+    # fixed Core record, including the baseline and package-member inventories.
+    value, lock_sha = load_environment_lock()
+    require(directory.is_absolute() and directory.resolve() == directory and directory.is_dir(), 'EVIDENCE_DIRECTORY')
+    before_raw = read_file(directory / 'before.tsv')
+    require(digest(before_raw) == value['evidence']['before_sha256']
+            and inventory(before_raw) == value['before'], 'BASE_INVENTORY_MISMATCH')
+    base_raw = read_file(directory / 'base-files.json', MAX_RECORD)
+    require(digest(base_raw) == value['evidence']['base_files_sha256']
+            and json.loads(base_raw, object_pairs_hook=unique) == value['base_files'], 'BASE_FILES_MISMATCH')
+    repositories = {name: verify_release(directory / (name + '.InRelease'), name) for name in REPOSITORIES}
+    require(repositories == value['repositories'], 'LOCKED_REPOSITORY_MISMATCH')
+    packages = verified_packages(directory, package_delta(value['before'], value['after']), repositories)
+    require(packages == value['packages'], 'LOCKED_PACKAGES_MISMATCH')
+    return dict(environment_admitted=True, decoder_authorized=False, compiled=False,
+                environment_lock_sha256=lock_sha, packages=[item['filename'] for item in packages])
+
+
+def check_environment():
+    value, lock_sha = load_environment_lock()
     require(installed_inventory() == value['after'], 'INSTALLED_INVENTORY_MISMATCH')
-    return dict(environment_lock_sha256=digest(raw), environment_id=value['environment_id'],
+    return dict(environment_lock_sha256=lock_sha, environment_id=value['environment_id'],
                 image_sha512=IMAGE_SHA512, snapshot=SNAPSHOT, inventory=value['after'],
                 packages=value['packages'], base_files=value['base_files'])
 
@@ -544,7 +569,7 @@ def main():
     actions = parser.add_subparsers(dest='action', required=True)
     actions.add_parser('plan')
     actions.add_parser('check-environment')
-    for name in ('candidate', 'verify-candidate'):
+    for name in ('candidate', 'verify-candidate', 'verify-locked-inputs'):
         actions.add_parser(name).add_argument('--evidence-dir', type=Path, required=True)
     actions.add_parser('capture-base').add_argument('--evidence-dir', type=Path, required=True)
     args = parser.parse_args()
@@ -557,6 +582,8 @@ def main():
             value = check_environment()
         elif args.action == 'capture-base':
             value = capture_base(args.evidence_dir)
+        elif args.action == 'verify-locked-inputs':
+            value = verify_locked_inputs(args.evidence_dir)
         else:
             value = validate_record(candidate(args.evidence_dir), False)
             path = args.evidence_dir / 'candidate.json'
