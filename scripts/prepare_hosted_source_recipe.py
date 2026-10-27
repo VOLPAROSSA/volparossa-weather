@@ -55,6 +55,8 @@ PROFILES = {
         "scripts/hosted-clients-bwrap.apparmor",
         "scripts/hosted-decoder-bwrap.apparmor",
         "scripts/prepare_hosted_clients_ci.py",
+        "scripts/prepare_hosted_drizzli_candidate.py",
+        "scripts/prepare_hosted_drizzli_dependencies.py",
         "scripts/prepare_hosted_client_inputs.py",
         "scripts/prepare_hosted_client_apt.py",
         "scripts/prepare_hosted_client_runtime.py",
