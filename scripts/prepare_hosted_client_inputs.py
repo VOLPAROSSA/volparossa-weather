@@ -674,6 +674,7 @@ PUBLIC_NAMES = frozenset(('dependency-candidate.json', 'dependency-candidate.par
     'installed-environment.json', 'installed-before.json', 'installer-simulation-cleanup.json',
     'installer-install-cleanup.json', 'installer-simulation-stderr.log', 'installer-install-stderr.log', 'installed-packages-before.tsv',
     'installed-packages-after.tsv', 'install-simulation.log', 'install.log', 'provisioning-bootstrap.json', 'installer-companions.json',
+    'installer-cache-before.json', 'installer-cache-after.json',
     'result.json', 'apt-update.log', 'apt-failure.log', 'apt-resolver.log', 'runner-packages.tsv', 'package-lock.json', 'pubspec.lock',
     'noble.InRelease', 'noble-updates.InRelease', 'noble-security.InRelease',
     'noble.signature.log', 'noble-updates.signature.log', 'noble-security.signature.log'))
@@ -716,6 +717,60 @@ def interrupted(_signum, _frame):
     raise InterruptedError('CLIENT_INPUT_INTERRUPTED')
 
 
+def remove_empty_installer_partial(source):
+    # APT's privileged cache lock changes this existing directory to
+    # _apt:root 0700. Its runner-owned parent permits rmdir without opening or
+    # changing the inaccessible child. Only an empty fixed directory qualifies.
+    import pwd
+    allowed = {0, os.getuid()}
+    try:
+        allowed.add(pwd.getpwnam('_apt').pw_uid)
+    except KeyError:
+        pass
+    descriptors = []
+    try:
+        require(source.is_absolute() and source.resolve(strict=True) == source, 'CANDIDATE_ROOT')
+        descriptors.append(os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
+        for name in ('apt-private', 'archives'):
+            info = os.fstat(descriptors[-1])
+            require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700, 'CANDIDATE_CACHE_PARENT')
+            try:
+                descriptors.append(os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=descriptors[-1]))
+            except FileNotFoundError:
+                return  # No installer cache was materialized.
+        cache = descriptors[-1]
+        info = os.fstat(cache)
+        require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700, 'CANDIDATE_CACHE_PARENT')
+        try:
+            info = os.stat('partial', dir_fd=cache, follow_symlinks=False)
+        except FileNotFoundError:
+            return  # Idempotent after an interrupted later rmtree.
+        observation = dict(schema=1, admitted=False, action='remove-empty-installer-cache-partial',
+            uid=info.st_uid, gid=info.st_gid, mode=stat.S_IMODE(info.st_mode), privileged=False)
+        print(canonical(observation).decode(), flush=True)
+        require(stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o700
+            and info.st_uid in allowed and info.st_gid in (0, os.getgid()), 'CANDIDATE_CACHE_PARTIAL')
+        anchors = [(source.lstat(), os.fstat(descriptors[0]))]
+        anchors += [(os.stat(name, dir_fd=parent, follow_symlinks=False), os.fstat(child))
+            for parent, name, child in zip(descriptors, ('apt-private', 'archives'), descriptors[1:])]
+        require(all(stat.S_ISDIR(observed.st_mode) and (observed.st_dev, observed.st_ino) ==
+            (opened.st_dev, opened.st_ino) for observed, opened in anchors), 'CANDIDATE_CACHE_REPLACED')
+        current = os.stat('partial', dir_fd=cache, follow_symlinks=False)
+        require((current.st_dev, current.st_ino, current.st_mode, current.st_uid, current.st_gid) ==
+            (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid), 'CANDIDATE_CACHE_PARTIAL_REPLACED')
+        os.rmdir('partial', dir_fd=cache)  # Atomic empty-directory check; never follows a symlink.
+        try:
+            os.stat('partial', dir_fd=cache, follow_symlinks=False)
+        except FileNotFoundError:
+            print(canonical(dict(observation, removed=True, absent=True)).decode(), flush=True)
+        else:
+            require(False, 'CANDIDATE_CACHE_PARTIAL_REPLACED')
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
 def cleanup_candidate(profile):
     # Retain runner-local recovery data if privileged installer cleanup is
     # unconfirmed. Never publish that private directory as a fallback.
@@ -731,11 +786,16 @@ def cleanup_candidate(profile):
                 receipt = document(read(source / ('installer-' + label + '-cleanup.json')))
                 require(receipt.get('owned_session_drained') is True and receipt.get('leader_reaped') is True,
                     'INSTALLER_CLEANUP_UNCONFIRMED')
+        remove_empty_installer_partial(source)
         shutil.rmtree(source)
     public = source.with_name(source.name + '-public')
     if public.exists() or public.is_symlink():
         require(public.resolve() == public and public.is_dir(), 'CANDIDATE_ROOT')
         shutil.rmtree(public)
+    require(not source.exists() and not source.is_symlink() and not public.exists() and not public.is_symlink(),
+        'CANDIDATE_CLEANUP_INCOMPLETE')
+    print(canonical(dict(schema=1, admitted=False, kind='client-input-data-cleanup',
+        private_absent=True, public_absent=True, privileged_cleanup=False)).decode(), flush=True)
 
 
 def main():

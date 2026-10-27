@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Inert package provisioning tests: never invoke sudo/APT or package code."""
 import copy
+from contextlib import contextmanager
 import io
 import json
 import os
@@ -39,6 +40,114 @@ class ClientEnvironmentTests(unittest.TestCase):
 
     def plan(self):
         return b'Inst demo [1.0] (1.2-3 local-deb [amd64]) [other:amd64 ]\nConf demo (1.2-3 local-deb [amd64]) []\n'
+
+    def cache_fixture(self, name='private'):
+        private = self.root / name
+        for path in (private, private / 'archives', private / 'archives/partial'):
+            path.mkdir(mode=0o700)
+        (private / '0.deb').write_bytes(b'data')
+        (private / '0.deb').chmod(0o600)
+        packages = self.packages()
+        packages[0]['input'] = dict(bytes=4, sha256=I['sha'](b'data'))
+        return private, packages
+
+    def test_offline_cache_name_matches_apt_epoch_and_underscore_quoting(self):
+        self.assertEqual(A['archive_cache_name'](['git', '1:2.43.0-1ubuntu7.4', 'amd64']),
+            'git_1%3a2.43.0-1ubuntu7.4_amd64.deb')
+        self.assertEqual(A['archive_cache_name'](['demo', '2:1.0_test+2~old', 'all']),
+            'demo_2%3a1.0%5ftest+2~old_all.deb')
+        for identity in (['../demo', '1', 'amd64'], ['demo', '../1', 'all'], ['demo', '1', '../all']):
+            with self.assertRaisesRegex(ValueError, 'LOCAL_CACHE_IDENTITY'):
+                A['archive_cache_name'](identity)
+
+    def test_offline_cache_copies_are_exclusive_independent_absolute_and_rehashed(self):
+        private, packages = self.cache_fixture()
+        A['stage_archive_cache'](private, packages)
+        paths = A['verified_cached_packages'](private, packages)
+        expected = private / 'archives/demo_1.2-3_amd64.deb'
+        self.assertEqual(paths, [str(expected)])
+        self.assertTrue(expected.is_absolute())
+        self.assertEqual(expected.read_bytes(), b'data')
+        self.assertNotEqual(expected.stat().st_ino, (private / '0.deb').stat().st_ino)
+        self.assertEqual(expected.stat().st_nlink, 1)
+        with self.assertRaisesRegex(ValueError, 'LOCAL_CACHE_NOT_EMPTY'):
+            A['stage_archive_cache'](private, packages)
+        expected.write_bytes(b'edit')
+        with self.assertRaisesRegex(ValueError, 'LOCAL_CACHE_CHANGED'):
+            A['verified_cached_packages'](private, packages)
+        self.assertEqual((private / '0.deb').read_bytes(), b'data')
+
+    def test_offline_cache_rejects_alias_hardlink_mode_extra_and_original_changes(self):
+        for problem in ('symlink', 'hardlink', 'mode', 'extra', 'original'):
+            private, packages = self.cache_fixture(problem)
+            A['stage_archive_cache'](private, packages)
+            path = private / 'archives/demo_1.2-3_amd64.deb'
+            if problem == 'symlink':
+                path.unlink(); path.symlink_to(private / '0.deb')
+            elif problem == 'hardlink':
+                os.link(path, private / 'second-link')
+            elif problem == 'mode':
+                path.chmod(0o666)
+            elif problem == 'extra':
+                (private / 'archives/unreviewed.deb').write_bytes(b'data')
+            else:
+                (private / '0.deb').write_bytes(b'edit')
+            with self.subTest(problem=problem), self.assertRaises((ValueError, OSError)):
+                if problem == 'original':
+                    A['verified_local_packages'](private, packages)
+                else:
+                    A['verified_cached_packages'](private, packages)
+
+    def test_cache_partial_and_lock_aliases_never_reach_privileged_apt(self):
+        for alias in ('partial', 'lock'):
+            private, packages = self.cache_fixture(alias)
+            if alias == 'lock':
+                A['stage_archive_cache'](private, packages)
+            path = private / 'archives' / alias
+            if alias == 'partial':
+                path.rmdir()
+            path.symlink_to(self.root)
+            with self.subTest(alias=alias), self.assertRaisesRegex(ValueError, 'LOCAL_CACHE_'):
+                if alias == 'partial':
+                    A['stage_archive_cache'](private, packages)
+                else:
+                    A['verified_cached_packages'](private, packages)
+            self.assertTrue(path.is_symlink())
+
+    def test_interrupted_cache_copy_and_replaced_directory_preserve_recovery(self):
+        private, packages = self.cache_fixture('interrupted')
+        original = AG['I'].read
+        original_fdopen = os.fdopen
+        @contextmanager
+        def interrupted_writer(fd, mode):
+            with original_fdopen(fd, mode) as stream:
+                def truncated_write(raw):
+                    stream.write(raw[:2])
+                    raise InterruptedError('cancel')
+                yield SimpleNamespace(write=truncated_write)
+        def open_stream(fd, mode):
+            return interrupted_writer(fd, mode) if mode == 'wb' else original_fdopen(fd, mode)
+        with patch.object(os, 'fdopen', side_effect=open_stream), \
+                self.assertRaises(InterruptedError):
+            A['stage_archive_cache'](private, packages)
+        self.assertEqual((private / '0.deb').read_bytes(), b'data')
+        self.assertEqual((private / 'archives/demo_1.2-3_amd64.deb').read_bytes(), b'da')
+        with self.assertRaisesRegex(ValueError, 'LOCAL_CACHE_FILE'):
+            A['verified_cached_packages'](private, packages)
+        private, packages = self.cache_fixture('replaced')
+        reads = 0
+        def replace_cache(path, *args):
+            nonlocal reads
+            reads += 1
+            raw = original(path, *args)
+            if reads == 2:
+                (private / 'archives').rename(private / 'original-archives')
+                (private / 'archives').mkdir(mode=0o700)
+            return raw
+        with patch.object(AG['I'], 'read', side_effect=replace_cache), self.assertRaisesRegex(ValueError, 'LOCAL_CACHE_REPLACED'):
+            A['stage_archive_cache'](private, packages)
+        self.assertEqual((private / 'original-archives/demo_1.2-3_amd64.deb').read_bytes(), b'data')
+        self.assertEqual(list((private / 'archives').iterdir()), [])
 
     def test_fixed_reviewed_input_record_authorizes_only_package_provisioning(self):
         record = I['load_package_inputs']('drizzli')
@@ -309,7 +418,7 @@ class ClientEnvironmentTests(unittest.TestCase):
 
     def test_unconfirmed_cleanup_is_observed_and_private_data_is_preserved(self):
         (self.root / 'build').mkdir()
-        output = self.root / 'build/hosted-drizzli-input-candidate'; output.mkdir()
+        output = self.root / 'build/hosted-drizzli-input-candidate'; output.mkdir(mode=0o700)
         self.put('build/hosted-drizzli-input-candidate/installer-install-started.json', b'{}')
         self.put('build/hosted-drizzli-input-candidate/installer-install-cleanup.json',
             I['canonical'](dict(admitted=False, owned_session_drained=False, leader_reaped=False)))
@@ -318,6 +427,118 @@ class ClientEnvironmentTests(unittest.TestCase):
         self.assertTrue(output.exists())
         self.put('build/hosted-drizzli-input-candidate/installer-install-cleanup.json',
             I['canonical'](dict(admitted=False, owned_session_drained=True, leader_reaped=True)))
+        with patch.dict(IG, ROOT=self.root):
+            I['cleanup_candidate']('drizzli')
+        self.assertFalse(output.exists())
+
+    def test_empty_partial_cleanup_uses_parent_rmdir_and_confirms_full_absence(self):
+        output = self.root / 'build/hosted-drizzli-input-candidate'
+        output.mkdir(parents=True, mode=0o700)
+        private, _packages = self.cache_fixture('build/hosted-drizzli-input-candidate/apt-private')
+        for label in ('simulation', 'install'):
+            self.put('build/hosted-drizzli-input-candidate/installer-' + label + '-started.json', b'{}')
+            self.put('build/hosted-drizzli-input-candidate/installer-' + label + '-cleanup.json',
+                I['canonical'](dict(admitted=False, owned_session_drained=True, leader_reaped=True)))
+        original = os.open
+        def reject_child_open(path, *args, **kwargs):
+            if path == 'partial':
+                raise AssertionError('unreadable child must not be opened')
+            return original(path, *args, **kwargs)
+        stream = io.StringIO()
+        with patch.dict(IG, ROOT=self.root), patch.object(os, 'open', side_effect=reject_child_open), \
+                patch('sys.stdout', stream):
+            I['cleanup_candidate']('drizzli')
+            I['cleanup_candidate']('drizzli')
+        self.assertFalse(output.exists())
+        receipts = [json.loads(line) for line in stream.getvalue().splitlines() if line.startswith('{')]
+        self.assertTrue(any(r.get('removed') and r.get('absent') for r in receipts))
+        self.assertTrue(receipts[-1]['private_absent'])
+        self.assertTrue(receipts[-1]['public_absent'])
+        self.assertFalse(receipts[-1]['privileged_cleanup'])
+
+    def test_partial_cleanup_rejects_nonempty_alias_mode_and_undrained_installer(self):
+        for problem in ('nonempty', 'symlink', 'mode', 'undrained'):
+            root = self.root / problem; root.mkdir()
+            output = root / 'build/hosted-drizzli-input-candidate'
+            output.mkdir(parents=True, mode=0o700)
+            private, _packages = self.cache_fixture(problem + '/build/hosted-drizzli-input-candidate/apt-private')
+            partial = private / 'archives/partial'
+            if problem == 'nonempty':
+                (partial / 'recovery').write_bytes(b'keep')
+            elif problem == 'symlink':
+                partial.rmdir(); partial.symlink_to(root)
+            elif problem == 'mode':
+                partial.chmod(0o755)
+            else:
+                (output / 'installer-install-started.json').write_bytes(b'{}')
+                (output / 'installer-install-cleanup.json').write_bytes(I['canonical'](
+                    dict(admitted=False, owned_session_drained=False, leader_reaped=False)))
+                (output / 'installer-install-started.json').chmod(0o600)
+                (output / 'installer-install-cleanup.json').chmod(0o600)
+            with self.subTest(problem=problem), patch.dict(IG, ROOT=root), self.assertRaises((ValueError, OSError)):
+                I['cleanup_candidate']('drizzli')
+            self.assertTrue(output.exists())
+            self.assertTrue(partial.exists() or partial.is_symlink())
+
+    def test_partial_cleanup_cancellation_preserves_data_and_retry_is_idempotent(self):
+        output = self.root / 'build/hosted-drizzli-input-candidate'
+        output.mkdir(parents=True, mode=0o700)
+        private, _packages = self.cache_fixture('build/hosted-drizzli-input-candidate/apt-private')
+        with patch.dict(IG, ROOT=self.root), patch.object(os, 'rmdir', side_effect=InterruptedError('cancel')), \
+                self.assertRaises(InterruptedError):
+            I['cleanup_candidate']('drizzli')
+        self.assertTrue((private / 'archives/partial').is_dir())
+        with patch.dict(IG, ROOT=self.root):
+            I['cleanup_candidate']('drizzli')
+        self.assertFalse(output.exists())
+
+    def test_partial_cleanup_rejects_replaced_parent_before_any_removal(self):
+        output = self.root / 'build/hosted-drizzli-input-candidate'
+        output.mkdir(parents=True, mode=0o700)
+        private, _packages = self.cache_fixture('build/hosted-drizzli-input-candidate/apt-private')
+        original = os.stat
+        replaced = False
+        def replace_cache(path, *args, **kwargs):
+            nonlocal replaced
+            result = original(path, *args, **kwargs)
+            if path == 'partial' and not replaced:
+                replaced = True
+                (private / 'archives').rename(private / 'retained-archives')
+                (private / 'archives').mkdir(mode=0o700)
+            return result
+        with patch.dict(IG, ROOT=self.root), patch.object(os, 'stat', side_effect=replace_cache), \
+                patch.object(os, 'rmdir') as remove, self.assertRaisesRegex(ValueError, 'CANDIDATE_CACHE_REPLACED'):
+            I['cleanup_candidate']('drizzli')
+        remove.assert_not_called()
+        self.assertTrue((private / 'retained-archives/partial').is_dir())
+        self.assertTrue(output.is_dir())
+
+    def test_partial_cleanup_unexpected_owner_never_removes_private_data(self):
+        output = self.root / 'build/hosted-drizzli-input-candidate'
+        output.mkdir(parents=True, mode=0o700)
+        private, _packages = self.cache_fixture('build/hosted-drizzli-input-candidate/apt-private')
+        original = os.stat
+        def unexpected_owner(path, *args, **kwargs):
+            result = original(path, *args, **kwargs)
+            if path == 'partial':
+                return SimpleNamespace(st_mode=result.st_mode, st_uid=2**30, st_gid=result.st_gid)
+            return result
+        with patch.dict(IG, ROOT=self.root), patch.object(os, 'stat', side_effect=unexpected_owner), \
+                patch.object(os, 'rmdir') as remove, self.assertRaisesRegex(ValueError, 'CANDIDATE_CACHE_PARTIAL'):
+            I['cleanup_candidate']('drizzli')
+        remove.assert_not_called()
+        self.assertTrue((private / 'archives/partial').is_dir())
+
+    def test_cleanup_retry_after_partial_removal_needs_no_permission_change(self):
+        import shutil
+        output = self.root / 'build/hosted-drizzli-input-candidate'
+        output.mkdir(parents=True, mode=0o700)
+        private, _packages = self.cache_fixture('build/hosted-drizzli-input-candidate/apt-private')
+        with patch.dict(IG, ROOT=self.root), patch.object(shutil, 'rmtree', side_effect=InterruptedError('cancel')), \
+                self.assertRaises(InterruptedError):
+            I['cleanup_candidate']('drizzli')
+        self.assertFalse((private / 'archives/partial').exists())
+        self.assertTrue(output.exists())
         with patch.dict(IG, ROOT=self.root):
             I['cleanup_candidate']('drizzli')
         self.assertFalse(output.exists())

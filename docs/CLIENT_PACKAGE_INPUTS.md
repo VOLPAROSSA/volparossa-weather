@@ -98,3 +98,45 @@ A different runner may still fail closed on another incompatible package,
 missing dependency or installed/configuration check. The actual hosted plan,
 installation, complete input/configuration review and cleanup remain required;
 this document alone does not admit a usable client build environment.
+
+## Offline APT cache and private cleanup
+
+Run `40427827447` resolved the complete fixed union with **zero removals**, but
+installation failed before unpacking: APT reported a relative internal archive
+pathname, although every supplied numbered `.deb` argument was absolute.
+APT 2.8.3's `pkgAcqArchive` first constructs a canonical basename from package,
+version and architecture. Its cache-hit branch sets an absolute completed path.
+With `--no-download`, local-only pending items survive filtering, then the
+fetcher shuts down before their completion callback can normalize the path.
+The numbered acquisition files did not provide the canonical cache hits.
+
+The installer now makes exclusive regular copies under APT's exact canonical
+names in its existing private archive cache, preserving epoch/underscore
+percent encoding. The original acquired archives remain intact and rehashed.
+The cache copies are independently rehashed immediately before simulation and
+installation, with absolute private directory, ownership, mode, hardlink,
+symlink and inode checks. Existing no-download/no-removal flags, package pins,
+closed source/list configuration and exact simulation requirements are unchanged.
+
+The same failed run's cleanup encountered an inaccessible `partial` directory.
+The acquisition helper originally creates `archives/partial` as the runner
+user at mode `0700`. APT 2.8.3's privileged cache `GetLock` calls
+`SetupAPTPartialDirectory`, which changes that existing directory to its
+configured sandbox user (default `_apt`), group root, mode `0700`. This source
+explains the permission error; the failed run did not retain numeric owner/mode
+observations. New before/after cache receipts record those actual observations.
+
+After all started installer groups have confirmed drain receipts, cleanup
+removes only that fixed **empty** directory via its verified runner-owned parent
+descriptor. It never opens the inaccessible child, changes permissions or uses
+privileged deletion. Nonempty directories, aliases, unexpected ownership/modes
+or changed directory identities fail closed and retain recovery data. Cleanup
+logs the observed owner/group/mode, successful directory absence and final
+private/public directory absence. Existing timeout and interruption handling
+remain in force. Local tests exercise these guards without invoking APT or
+installing packages; actual installation and cleanup still require hosted proof.
+
+Primary source: [Ubuntu APT 2.8.3 source archive](https://archive.ubuntu.com/ubuntu/pool/main/a/apt/apt_2.8.3.tar.xz),
+SHA256 `088522b3613b28fdbcfa61f1f7e476bf6dc6b0120a8f74409e9527580c9f9d3b`;
+`apt-pkg/acquire-item.cc`, `apt-pkg/acquire.cc`, `apt-private/private-install.cc`,
+`apt-pkg/contrib/strutl.cc`, `apt-pkg/init.cc` and `apt-pkg/deb/dpkgpm.cc`.

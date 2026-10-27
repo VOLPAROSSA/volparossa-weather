@@ -626,7 +626,127 @@ def verified_local_packages(private, packages):
     return paths
 
 
+def archive_cache_name(identity):
+    name, version, architecture = identity
+    I.require(re.fullmatch(PACKAGE_ID, name) and re.fullmatch(PACKAGE_VERSION, version)
+        and architecture in ('amd64', 'all'), 'LOCAL_CACHE_IDENTITY')
+    # APT 2.8.3 pkgAcqArchive + QuoteString, not the pool URL basename:
+    # epochs are retained as lower-case %3a and underscores become %5f.
+    def quote(value, bad):
+        return ''.join('%%%02x' % ord(c) if c in bad or c == '%' or not 0x20 < ord(c) < 0x7f else c
+            for c in value)
+    return quote(name, '_:') + '_' + quote(version, '_:') + '_' + quote(architecture, '_:.') + '.deb'
+
+
+def open_archive_cache(private):
+    I.require(private.is_absolute() and private.resolve(strict=True) == private, 'LOCAL_CACHE_ROOT')
+    parent = os.open(private, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    cache = None
+    try:
+        cache = os.open('archives', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+        for fd in (parent, cache):
+            info = os.fstat(fd)
+            I.require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700, 'LOCAL_CACHE_DIRECTORY')
+        return parent, cache
+    except BaseException:
+        if cache is not None:
+            os.close(cache)
+        os.close(parent)
+        raise
+
+
+def check_archive_cache_anchor(private, parent, cache):
+    for observed, opened in ((private.lstat(), os.fstat(parent)),
+            (os.stat('archives', dir_fd=parent, follow_symlinks=False), os.fstat(cache))):
+        I.require(stat.S_ISDIR(observed.st_mode) and (observed.st_dev, observed.st_ino) ==
+            (opened.st_dev, opened.st_ino), 'LOCAL_CACHE_REPLACED')
+
+
+def archive_cache_state(cache):
+    import pwd
+    allowed = {0, os.getuid()}
+    try:
+        allowed.add(pwd.getpwnam('_apt').pw_uid)
+    except KeyError:
+        pass
+    info = os.stat('partial', dir_fd=cache, follow_symlinks=False)
+    I.require(stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o700
+        and info.st_uid in allowed and info.st_gid in (0, os.getgid()), 'LOCAL_CACHE_PARTIAL')
+    result = dict(partial=dict(uid=info.st_uid, gid=info.st_gid, mode=stat.S_IMODE(info.st_mode)))
+    if 'lock' in os.listdir(cache):
+        info = os.stat('lock', dir_fd=cache, follow_symlinks=False)
+        I.require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid in (0, os.getuid())
+            and not info.st_mode & 0o022, 'LOCAL_CACHE_LOCK')
+    return result
+
+
+def record_archive_cache_state(private, output, label):
+    parent, cache = open_archive_cache(private)
+    try:
+        state = archive_cache_state(cache)
+        check_archive_cache_anchor(private, parent, cache)
+        I.write(output / ('installer-cache-' + label + '.json'), I.canonical(dict(schema=1, admitted=False,
+            kind='client-installer-cache-observation', **state)))
+    finally:
+        os.close(cache)
+        os.close(parent)
+
+
+def stage_archive_cache(private, packages):
+    # Numbered acquisition files remain untouched. Exclusive copies satisfy
+    # APT's offline cache-hit path without executing its file/copy method.
+    sources = verified_local_packages(private, packages)
+    parent, cache = open_archive_cache(private)
+    try:
+        I.require(set(os.listdir(cache)) == {'partial'}, 'LOCAL_CACHE_NOT_EMPTY')
+        archive_cache_state(cache)
+        I.require(os.stat('partial', dir_fd=cache, follow_symlinks=False).st_uid == os.getuid(), 'LOCAL_CACHE_PARTIAL')
+        for source, package in zip(sources, packages):
+            raw = I.read(Path(source), 192 * 1024**2)
+            I.require(len(raw) == package['input']['bytes'] and I.sha(raw) == package['input']['sha256'],
+                'LOCAL_PACKAGE_CHANGED')
+            fd = os.open(archive_cache_name(package['identity']),
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=cache)
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(raw)
+        check_archive_cache_anchor(private, parent, cache)
+    finally:
+        os.close(cache)
+        os.close(parent)
+
+
+def verified_cached_packages(private, packages):
+    parent, cache = open_archive_cache(private)
+    try:
+        names = [archive_cache_name(package['identity']) for package in packages]
+        I.require(len(set(names)) == len(names) and set(names) <= set(os.listdir(cache))
+            <= set(names) | {'partial', 'lock'}, 'LOCAL_CACHE_FILES')
+        archive_cache_state(cache)
+        paths = []
+        for name, package in zip(names, packages):
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=cache)
+            with os.fdopen(fd, 'rb') as stream:
+                before = os.fstat(stream.fileno())
+                I.require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_uid == os.getuid()
+                    and stat.S_IMODE(before.st_mode) == 0o600 and before.st_size == package['input']['bytes'],
+                    'LOCAL_CACHE_FILE')
+                raw = stream.read(192 * 1024**2 + 1)
+                after = os.fstat(stream.fileno())
+                entry = os.stat(name, dir_fd=cache, follow_symlinks=False)
+            I.require(len(raw) == package['input']['bytes'] and I.sha(raw) == package['input']['sha256']
+                and (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) ==
+                    (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+                and (entry.st_dev, entry.st_ino) == (before.st_dev, before.st_ino), 'LOCAL_CACHE_CHANGED')
+            paths.append(str(private / 'archives' / name))
+        check_archive_cache_anchor(private, parent, cache)
+        return paths
+    finally:
+        os.close(cache)
+        os.close(parent)
+
+
 def record_installed_environment(profile, output, packages, baseline, before_config, plan, succeeded):
+    record_archive_cache_state(output / 'apt-private', output, 'after')
     after = run(['/usr/bin/dpkg-query', '-W', '-f=${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Status}\n'])
     I.write(output / 'installed-packages-after.tsv', after)
     after_files, after_config = package_file_inventory(packages), configuration_inventory()
@@ -666,7 +786,7 @@ def installed_inventory(profile, output, record):
     packages, private = value['packages'] + supplement['packages'], output / 'apt-private'
     I.require(len({p['identity'][0] for p in packages}) == len(packages), 'INSTALLER_PACKAGE_OVERLAP')
     # Recheck every complete archive immediately before any privileged action.
-    paths = verified_local_packages(private, packages)
+    stage_archive_cache(private, packages)
     (private / 'offline-lists').mkdir(mode=0o700)
     I.write(private / 'offline-lists/lock', b'')
     # APT_CONFIG is consumed before normal config fragments. Root receives
@@ -690,12 +810,17 @@ def installed_inventory(profile, output, record):
         packages=[p['identity'] for p in packages], downloads=False, removals=False,
         effects='package-files-maintainer-scripts-and-generated-config-may-change',
         package_services_may_start=True, build_environment_admitted=False)).decode(), flush=True)
+    paths = verified_cached_packages(private, packages)
+    record_archive_cache_state(private, output, 'before')
     simulation = provision_run([*prefix, '/usr/bin/timeout', '--foreground', '--signal=TERM', '--kill-after=5s', '120s',
         *argv, '--simulate', 'install', *paths], output, 'simulation', 120)
     I.write(output / 'install-simulation.log', simulation)
     plan = validate_install_simulation(simulation, packages)
     # A simulation receipt never authorizes changed archive bytes.
-    I.require(paths == verified_local_packages(private, packages), 'LOCAL_PACKAGE_CHANGED')
+    # Preserve the original acquisition-byte guard as well as validating the
+    # canonical cache copies APT will actually pass to dpkg.
+    verified_local_packages(private, packages)
+    I.require(paths == verified_cached_packages(private, packages), 'LOCAL_PACKAGE_CHANGED')
     succeeded = False
     try:
         installed = provision_run([*prefix, '/usr/bin/timeout', '--foreground', '--signal=TERM', '--kill-after=5s', '600s',
