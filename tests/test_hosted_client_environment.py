@@ -61,6 +61,71 @@ class ClientEnvironmentTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'INPUTS_CHANGED'):
                 I['load_package_inputs']('drizzli')
 
+    def test_companions_preserve_original_records_with_fixed_narrow_authority(self):
+        record = A['load_installer_companions']()
+        self.assertEqual(len(record['packages']), 7)
+        self.assertEqual(record['base_inputs'], {p: dict(file=f, sha256=h) for p, (f, h) in I['PACKAGE_INPUTS'].items()})
+        self.assertEqual(record['repositories'], A['SUITES'])
+        for profile in ('drizzli', 'overmorrow'):
+            base = I['load_package_inputs'](profile)
+            self.assertFalse({p['identity'][0] for p in base['apt']['packages']} & A['COMPANION_NAMES'])
+        filename, digest = A['COMPANION_INPUT']
+        self.assertEqual(I['sha']((ROOT / 'third_party' / filename).read_bytes()), digest)
+        with patch.dict(AG, ROOT=self.root):
+            self.put('third_party/' + filename, b'{}')
+            with self.assertRaisesRegex(ValueError, 'COMPANION_INPUTS_CHANGED'):
+                A['load_installer_companions']()
+        self.assertIn('installer-companions.json', I['PUBLIC_NAMES'])
+        recipe = runpy.run_path(str(ROOT / 'scripts/prepare_hosted_source_recipe.py'))
+        for profile in ('drizzli', 'overmorrow'):
+            self.assertIn('third_party/' + filename, recipe['PROFILES'][profile])
+            sizes = [(ROOT / name).stat().st_size for name in recipe['PROFILES'][profile]]
+            self.assertLessEqual(max(sizes), recipe['MAX_FILE'])
+            self.assertLessEqual(sum(sizes), recipe['MAX_TOTAL'])
+
+    def test_companion_origin_rejects_changed_dependency_index_identity_or_archive(self):
+        expected = copy.deepcopy(A['load_installer_companions']()['packages'][0])
+        key = tuple(expected['identity'])
+        rows = [dict(suite=o['suite'], index=o['path'], Filename=expected['input']['filename'],
+            Size=str(expected['input']['bytes']), SHA256=expected['input']['sha256'], control=expected['control'])
+            for o in expected['indexed_origins']]
+        A['bind_companion_origin'](expected, {key: rows})
+        for field in ('suite', 'index', 'Filename', 'Size', 'SHA256', 'control'):
+            changed = copy.deepcopy(rows)
+            changed[0][field] = {} if field == 'control' else '0'
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'COMPANION_INDEX_CHANGED'):
+                A['bind_companion_origin'](expected, {key: changed})
+        with self.assertRaisesRegex(ValueError, 'COMPANION_INDEX_CHANGED'):
+            A['bind_companion_origin'](expected, {})
+        changed = copy.deepcopy(expected); changed['input']['url'] += '?override'
+        with self.assertRaisesRegex(ValueError, 'COMPANION_URL_CHANGED'):
+            A['bind_companion_origin'](changed, {key: rows})
+
+    def test_companion_receipt_rebinds_complete_maps_and_authority_before_union(self):
+        record = dict(packages=[dict(identity=['demo', '1.2-3', 'amd64'],
+            input={'sha256': 'a' * 64}, files_sha256=I['sha'](I['canonical'](self.packages()[0]['files'])))])
+        receipt = dict(schema=1, admitted=False, package_inputs_authorized=True,
+            build_environment_admitted=False, consumer_admitted=False,
+            input_sha256=A['COMPANION_INPUT'][1], packages=[dict(self.packages()[0], input={'sha256': 'a' * 64})])
+        A['bind_installer_companions'](receipt, record)
+        for field in ('admitted', 'package_inputs_authorized', 'build_environment_admitted', 'consumer_admitted',
+                'input_sha256', 'packages', 'schema'):
+            bad = copy.deepcopy(receipt)
+            bad[field] = True if field == 'schema' else ([] if field == 'packages' else not bad[field])
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'COMPANION_RECEIPT_CHANGED'):
+                A['bind_installer_companions'](bad, record)
+        for field in ('bytes', 'sha256', 'mode'):
+            bad = copy.deepcopy(receipt); bad['packages'][0]['files']['usr/bin/demo'][field] = 0
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'COMPANION_RECEIPT_CHANGED'):
+                A['bind_installer_companions'](bad, record)
+        union = I['load_package_inputs']('drizzli')['apt']['packages'] + A['load_installer_companions']()['packages']
+        raw = b''.join((f"{action} {p['identity'][0]} ({p['identity'][1]} local-deb [{p['identity'][2]}])\n").encode()
+            for action in ('Inst', 'Conf') for p in union)
+        self.assertEqual(len(A['validate_install_simulation'](raw, union)['Inst']), 234)
+        for changed in (raw.replace(b'Conf udev ', b'Conf extra ', 1), raw + b'Remv udev [old]\n'):
+            with self.assertRaisesRegex(ValueError, 'INSTALL_PLAN_'):
+                A['validate_install_simulation'](changed, union)
+
     def test_changed_authority_candidate_types_and_runtime_are_not_accepted(self):
         record = I['load_package_inputs']('drizzli')
         filename = I['PACKAGE_INPUTS']['drizzli'][0]

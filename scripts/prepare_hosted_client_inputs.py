@@ -673,7 +673,7 @@ PUBLIC_NAMES = frozenset(('dependency-candidate.json', 'dependency-candidate.par
     'installer-simulation-stdout.log', 'installer-install-stdout.log',
     'installed-environment.json', 'installed-before.json', 'installer-simulation-cleanup.json',
     'installer-install-cleanup.json', 'installer-simulation-stderr.log', 'installer-install-stderr.log', 'installed-packages-before.tsv',
-    'installed-packages-after.tsv', 'install-simulation.log', 'install.log', 'provisioning-bootstrap.json',
+    'installed-packages-after.tsv', 'install-simulation.log', 'install.log', 'provisioning-bootstrap.json', 'installer-companions.json',
     'result.json', 'apt-update.log', 'apt-failure.log', 'apt-resolver.log', 'runner-packages.tsv', 'package-lock.json', 'pubspec.lock',
     'noble.InRelease', 'noble-updates.InRelease', 'noble-security.InRelease',
     'noble.signature.log', 'noble-updates.signature.log', 'noble-security.signature.log'))

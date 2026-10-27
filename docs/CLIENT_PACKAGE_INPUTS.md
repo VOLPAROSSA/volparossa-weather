@@ -59,3 +59,42 @@ build execution. Actual npm installation state, inactive module no-load and
 no-emission, complete module/notices coverage, SDK tree binding, two cold
 builds and real UI/Core consumer trials remain separate gates. Local inert
 source/data tests prove none of those runtime properties.
+
+## Fixed installer companions after the first rejected plan
+
+Run `40063804727` correctly stopped before installation: the pinned empty-root
+closure and the preinstalled Ubuntu runner were at different update levels.
+The runner's systemd family was `255.4-1ubuntu8.17`; the fixed closure requires
+`255.4-1ubuntu8.18`. Existing `udev`, `libnss-systemd`, `systemd-resolved` and
+`systemd-coredump` have exact dependencies on that family. The runner also had
+GLib `2.80.0-6ubuntu3.9` and zlib `1:1.3.dfsg-3.1ubuntu2.2`, while the fixed
+closure requires GLib `2.80.0-6ubuntu3.10` and zlib `1:1.3.dfsg-3.1ubuntu2.3`.
+The existing GLib binaries/GI and zlib development package require their exact
+matching library versions. The offline resolver had no matching companion
+archives, so it proposed removing those packages and their reverse dependencies:
+52 packages, including Ubuntu metapackages, Python development tools and udev
+consumers. Git's separate PPA-to-Ubuntu downgrade was already explicitly
+permitted; it does not resolve these exact-version conflicts.
+
+`third_party/client-installer-companions-v1.json` supplies only those seven
+matching preservation packages from the same authenticated fixed snapshot.
+The original 227/235-package records and npm/pub pins are unchanged. The new
+record binds both original input digests, signed repository/index identities,
+package control dependencies, exact archive bytes and complete member-map
+digests. All seven were present in the rejected runner baseline. They preserve
+its existing package relationships; they are not new Weather feature roots.
+
+The installed inventory always reinstalls the fixed union (234/242 packages),
+including every companion. Its exact `Inst`/`Conf` simulation, no-removal,
+no-download, archive rehash, installed-transition and unrelated-package guards
+cover the entire union. `installer-companions.json` records the verified maps;
+the installed receipt binds both original and companion input digests. The
+supplement remains installer-only authority. No observed installed difference
+becomes compiler authority. Source exports include the fixed companion record
+with the existing per-file and total bounds.
+
+This addresses the concrete retained baseline, not every future hosted image.
+A different runner may still fail closed on another incompatible package,
+missing dependency or installed/configuration check. The actual hosted plan,
+installation, complete input/configuration review and cleanup remain required;
+this document alone does not admit a usable client build environment.

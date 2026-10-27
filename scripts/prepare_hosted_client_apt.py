@@ -52,6 +52,29 @@ ENV = dict(PATH='/usr/bin:/bin', LANG='C.UTF-8', LC_ALL='C.UTF-8', TZ='UTC', HOM
     DEBIAN_FRONTEND='noninteractive', APT_CONFIG='/dev/null')
 
 
+# A bounded installer-only supplement preserves exact-version companions of
+# the original reviewed closure. It grants no build/runtime authority.
+COMPANION_INPUT = ('client-installer-companions-v1.json', '7ce58960ad2d711a315deeab3009f4ed0e29682a909169608932fdb0433f56fe')
+COMPANION_NAMES = frozenset(('udev', 'libnss-systemd', 'systemd-resolved', 'systemd-coredump',
+    'libglib2.0-bin', 'gir1.2-glib-2.0', 'zlib1g-dev'))
+
+
+def load_installer_companions():
+    filename, digest = COMPANION_INPUT
+    raw = I.read(ROOT / 'third_party' / filename)
+    I.require(I.sha(raw) == digest, 'COMPANION_INPUTS_CHANGED')
+    value = I.document(raw)
+    I.require(type(value) is dict and type(value.get('schema')) is int and value['schema'] == 1
+        and value.get('kind') == 'volparossa-weather-client-installer-companions'
+        and value.get('admitted') is False and value.get('package_inputs_authorized') is True
+        and value.get('build_environment_admitted') is False and value.get('consumer_admitted') is False
+        and value.get('snapshot') == SNAPSHOT and value.get('repositories') == SUITES
+        and value.get('base_inputs') == {p: dict(file=f, sha256=h) for p, (f, h) in I.PACKAGE_INPUTS.items()}
+        and len(value.get('packages', [])) == len(COMPANION_NAMES)
+        and {p['identity'][0] for p in value['packages']} == COMPANION_NAMES, 'COMPANION_INPUTS_SCHEMA')
+    return value
+
+
 DIAGNOSTIC_OUTPUT = None
 APT_CONFIG_FILE = None
 
@@ -201,9 +224,35 @@ def package_data_path(name):
     return name
 
 
-def candidate(profile, output, *, downloader=I.fetch):
+def archive_member_inventory(tar):
+    import io
+    import tarfile
+    files, count = {}, 0
+    with tarfile.open(fileobj=io.BytesIO(tar), mode='r|') as archive:
+        for member in archive:
+            count += 1
+            I.require(count <= 100000, 'APT_MEMBERS_BOUND')
+            name = package_member_name(member)
+            if name is None:
+                continue
+            I.require(name not in files, 'APT_MEMBER_DUPLICATE')
+            if member.isdir():
+                files[name] = dict(type='directory')
+            elif member.issym() or member.islnk():
+                I.require(len(member.linkname) <= 1024, 'APT_LINK_BOUND')
+                files[name] = dict(type='symlink' if member.issym() else 'hardlink', target=member.linkname)
+            else:
+                I.require(member.isreg() and 0 <= member.size <= I.MAX_MEMBER, 'APT_MEMBER_TYPE')
+                content = archive.extractfile(member).read(I.MAX_MEMBER + 1)
+                I.require(len(content) == member.size, 'APT_MEMBER_SIZE')
+                files[name] = dict(type='file', bytes=len(content), sha256=I.sha(content), mode=member.mode & 0o777)
+    return files
+
+
+def candidate(profile, output, *, downloader=I.fetch, companions=None):
     global DIAGNOSTIC_OUTPUT, APT_CONFIG_FILE
     DIAGNOSTIC_OUTPUT = output
+    I.require(companions is None or companions == load_installer_companions(), 'COMPANION_INPUTS_CHANGED')
     I.require(profile in ('web', 'flutter'), 'CANDIDATE_APT_PROFILE')  # Android acquisition has its own later gate.
     private = output / 'apt-private'
     private.mkdir(mode=0o700)
@@ -269,7 +318,11 @@ def candidate(profile, output, *, downloader=I.fetch):
                 if row.get('Architecture') not in ('all', 'amd64'):
                     continue
                 identity = row['Package'], row['Version'], row['Architecture']
-                package_records.setdefault(identity, []).append(dict(suite=suite, **{k: row[k] for k in ('Filename', 'Size', 'SHA256')}))
+                extra = dict(index=relative, control={k: row[k] for k in
+                    ('Depends', 'Pre-Depends', 'Breaks', 'Conflicts', 'Provides', 'Replaces') if k in row}) \
+                    if row['Package'] in COMPANION_NAMES else {}
+                package_records.setdefault(identity, []).append(dict(suite=suite,
+                    **{k: row[k] for k in ('Filename', 'Size', 'SHA256')}, **extra))
     raw = run(['/usr/bin/apt-get', *options, '--print-uris', '--yes', '--download-only', '--no-install-recommends', '--no-remove', 'install', *PROFILES[profile]])
     I.require(b'Remv ' not in raw, 'APT_REMOVAL')
     I.write(output / 'apt-resolver.log', raw)
@@ -293,27 +346,7 @@ def candidate(profile, output, *, downloader=I.fetch):
         deb = private / (str(len(bindings)) + '.deb')
         I.write(deb, data)
         tar = run(['/usr/bin/dpkg-deb', '--fsys-tarfile', str(deb)], maximum=512 * 1024**2)
-        import io
-        import tarfile
-        files, count = {}, 0
-        with tarfile.open(fileobj=io.BytesIO(tar), mode='r|') as archive:
-            for member in archive:
-                count += 1
-                I.require(count <= 100000, 'APT_MEMBERS_BOUND')
-                name = package_member_name(member)
-                if name is None:
-                    continue
-                I.require(name not in files, 'APT_MEMBER_DUPLICATE')
-                if member.isdir():
-                    files[name] = dict(type='directory')
-                elif member.issym() or member.islnk():
-                    I.require(len(member.linkname) <= 1024, 'APT_LINK_BOUND')
-                    files[name] = dict(type='symlink' if member.issym() else 'hardlink', target=member.linkname)
-                else:
-                    I.require(member.isreg() and 0 <= member.size <= I.MAX_MEMBER, 'APT_MEMBER_TYPE')
-                    content = archive.extractfile(member).read(I.MAX_MEMBER + 1)
-                    I.require(len(content) == member.size, 'APT_MEMBER_SIZE')
-                    files[name] = dict(type='file', bytes=len(content), sha256=I.sha(content), mode=member.mode & 0o777)
+        files = archive_member_inventory(tar)
         bindings.append(dict(identity=list(found[0][0]), input=item, indexed_origins=[row['suite'] for _, row in found], files=files))
     baseline = run(['/usr/bin/dpkg-query', '-W', '-f=${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Status}\n'])
     I.write(output / 'runner-packages.tsv', baseline)
@@ -325,6 +358,27 @@ def candidate(profile, output, *, downloader=I.fetch):
         installed=False, compiled=False, full_build_environment_admitted=False,
         limitations=['runner-bootstrap-tools-observed-not-independent-authority', 'installed-file-config-alternatives-binding-required-before-build'])
     I.write(output / 'apt-candidate.json', I.canonical(value))
+    if companions is not None:
+        # Fixed preservation inputs are separate from the historical empty-root
+        # closure. Authenticate their index/control identities and complete maps
+        # before any privilege. Never ask APT to fetch or choose companions.
+        I.require(all(index in indexes for index in companions['indexes']), 'COMPANION_REPOSITORY_CHANGED')
+        supplement = []
+        for offset, expected in enumerate(companions['packages'], len(bindings)):
+            bind_companion_origin(expected, package_records)
+            item = expected['input']
+            data = downloader(item['url'], 192 * 1024**2, sha256=item['sha256'])
+            I.require(len(data) == item['bytes'] and I.sha(data) == item['sha256'], 'COMPANION_ARCHIVE_CHANGED')
+            total += len(data)
+            I.require(total <= 768 * 1024**2 and time.monotonic() - started < 600, 'APT_TOTAL_BOUND')
+            deb = private / (str(offset) + '.deb')
+            I.write(deb, data)
+            files = archive_member_inventory(run(['/usr/bin/dpkg-deb', '--fsys-tarfile', str(deb)], maximum=512 * 1024**2))
+            I.require(I.sha(I.canonical(files)) == expected['files_sha256'], 'COMPANION_MEMBERS_CHANGED')
+            supplement.append(dict(**{k: v for k, v in expected.items() if k != 'files_sha256'}, files=files))
+        I.write(output / 'installer-companions.json', I.canonical(dict(schema=1, admitted=False,
+            package_inputs_authorized=True, build_environment_admitted=False, consumer_admitted=False,
+            input_sha256=COMPANION_INPUT[1], packages=supplement)))
     return value
 
 
@@ -339,6 +393,32 @@ PACKAGE_ID = r'[a-z0-9][a-z0-9+.-]{0,127}'
 PACKAGE_VERSION = r'[A-Za-z0-9][A-Za-z0-9.+:~_-]{0,255}'
 INSTALL_LINE = re.compile(r'(Inst|Conf) (' + PACKAGE_ID + r')(?::(amd64|all))?(?: \[[^\]\r\n]{1,256}\])? '
     r'\((' + PACKAGE_VERSION + r') ([^()\r\n]{1,256}) \[(amd64|all)\]\)(?: \[[A-Za-z0-9+.: _-]{0,2048}\])?')
+
+
+def bind_companion_origin(expected, package_records):
+    identity, item = expected['identity'], expected['input']
+    rows = package_records.get(tuple(identity), [])
+    origins = [dict(suite=row['suite'], path=row['index']) for row in rows]
+    I.require(rows and origins == expected['indexed_origins']
+        and all(row['Filename'] == item['filename'] and int(row['Size']) == item['bytes']
+            and row['SHA256'] == item['sha256'] and row['control'] == expected['control'] for row in rows),
+        'COMPANION_INDEX_CHANGED')
+    I.require(item['url'] == BASE + item['filename'], 'COMPANION_URL_CHANGED')
+
+
+def bind_installer_companions(value, record):
+    I.require(type(value) is dict and set(value) == {'schema', 'admitted', 'package_inputs_authorized',
+        'build_environment_admitted', 'consumer_admitted', 'input_sha256', 'packages'}
+        and type(value.get('schema')) is int and value['schema'] == 1
+        and value.get('admitted') is False and value.get('package_inputs_authorized') is True
+        and value.get('build_environment_admitted') is False and value.get('consumer_admitted') is False
+        and value.get('input_sha256') == COMPANION_INPUT[1], 'COMPANION_RECEIPT_CHANGED')
+    observed = []
+    for package in value['packages']:
+        item = dict(package)
+        item['files_sha256'] = I.sha(I.canonical(item.pop('files')))
+        observed.append(item)
+    I.require(observed == record['packages'], 'COMPANION_RECEIPT_CHANGED')
 
 
 def bind_package_candidate(value, record):
@@ -553,7 +633,7 @@ def record_installed_environment(profile, output, packages, baseline, before_con
     # Save the full observations before rejecting a failed/partial transition.
     I.write(output / 'installed-environment.json', I.canonical(dict(schema=1,
         kind='client-installed-environment-candidate', admitted=False, profile=profile,
-        package_inputs_authorized=True, package_input_sha256=I.PACKAGE_INPUTS[profile][1],
+        package_inputs_authorized=True, package_input_sha256=I.PACKAGE_INPUTS[profile][1], installer_companion_sha256=COMPANION_INPUT[1],
         build_environment_admitted=False, consumer_admitted=False, compiled=False,
         installer_succeeded=succeeded, plan=plan, packages=after_files, configuration=after_config,
         configuration_changed=sorted(k for k in before_config.keys() | after_config.keys()
@@ -577,10 +657,14 @@ def installed_inventory(profile, output, record):
         and not run(['/usr/bin/git', '-C', str(ROOT), 'status', '--porcelain', '--untracked-files=all']).strip(),
         'PROVISIONING_SOURCE_CHANGED')
     I.write(output / 'provisioning-bootstrap.json', I.canonical(bootstrap))
-    candidate(record['apt']['profile'], output)
+    companions = load_installer_companions()
+    candidate(record['apt']['profile'], output, companions=companions)
     value = I.document(I.read(output / 'apt-candidate.json'))
     bind_package_candidate(value, record)
-    packages, private = value['packages'], output / 'apt-private'
+    supplement = I.document(I.read(output / 'installer-companions.json'))
+    bind_installer_companions(supplement, companions)
+    packages, private = value['packages'] + supplement['packages'], output / 'apt-private'
+    I.require(len({p['identity'][0] for p in packages}) == len(packages), 'INSTALLER_PACKAGE_OVERLAP')
     # Recheck every complete archive immediately before any privileged action.
     paths = verified_local_packages(private, packages)
     (private / 'offline-lists').mkdir(mode=0o700)
