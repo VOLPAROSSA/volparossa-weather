@@ -140,3 +140,72 @@ Primary source: [Ubuntu APT 2.8.3 source archive](https://archive.ubuntu.com/ubu
 SHA256 `088522b3613b28fdbcfa61f1f7e476bf6dc6b0120a8f74409e9527580c9f9d3b`;
 `apt-pkg/acquire-item.cc`, `apt-pkg/acquire.cc`, `apt-private/private-install.cc`,
 `apt-pkg/contrib/strutl.cc`, `apt-pkg/init.cc` and `apt-pkg/deb/dpkgpm.cc`.
+
+## P13c: concrete remaining build-input binding stop
+
+The retained successful installation baseline is Weather
+`f5ab9e4437df17be1aa6cadee61f5988b6898191`, run `40430225596`, artifact SHA256
+`a6021ca59641577d961fbcc22c383808c4d22586f92c8af887690305fb244862`.
+Its 234 exact package installations and cleanup remain verified. P13c reuses
+that evidence without another hosted run, package installation or application
+build. All three original package-input/supplement records and npm/pub pins
+remain byte-identical.
+
+The approved `libc-bin` member `/etc/ld.so.conf` has 34 bytes and SHA256
+`d4b198c463418b493208485def26a6f4c57279467b9dfa491b70433cedb602e8`.
+Its exact bytes contain `include /etc/ld.so.conf.d/*.conf` followed by two newline
+bytes. The retained configuration matches **four** files: the approved
+`libc.conf` and `x86_64-linux-gnu.conf`, plus two files without an owner in the
+fixed package-member maps:
+
+| Included generator input | Bytes | Observed SHA256 |
+| --- | ---: | --- |
+| `/etc/ld.so.conf.d/fakeroot-x86_64-linux-gnu.conf` | 38 | `af7edc777dd224bade078ba540538444db69856533c02e18a7f9fbbdd23bd181` |
+| `/etc/ld.so.conf.d/zz_i386-biarch-compat.conf` | 56 | `4e3c617050427d51497a0e5969b0159421580cf5e7c9649e39f45b5e2fcb47b6` |
+
+These are unbound inputs to the host `ldconfig` generator. The existing compile
+namespace consumes the generated `/etc/ld.so.cache`; it does not expose those
+configuration files themselves. The retained cache evidence contains only its
+size/type/mode/hash, without its semantic entry map or actual library-selection
+trace. This establishes an incomplete generator-input binding, **not proof that
+a client selected a foreign library**. Promoting the observed cache hash to an
+expected value would leave that gap open. Upstream glibc 2.39's
+[`ldconfig.c`](https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/ldconfig.c;hb=refs/tags/glibc-2.39),
+[`dl-cache.c`](https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/dl-cache.c;hb=refs/tags/glibc-2.39)
+and [`dl-load.c`](https://sourceware.org/git/?p=glibc.git;a=blob;f=elf/dl-load.c;hb=refs/tags/glibc-2.39)
+support this distinction; they are semantic references, not an attestation of
+the exact downstream Ubuntu build.
+
+The 22 retained file differences have separate roles. Seven are directory
+aliases, subject to the existing fixed usrmerge rules where relevant. Twelve
+have identical file bytes but different permissions on privileged utilities
+outside the declared client tool entrypoints. Eleven match after the archive
+inventory's `0777` mask; the D-Bus launcher is specifically `04754` versus archive
+`0755`, so a mask-only exception would be incorrect. None receives blanket
+execution approval. The three retained conffiles, `/etc/security/limits.conf`,
+`/etc/sysctl.conf` and `/etc/systemd/system.conf`, are absent from the build
+namespace's `/etc` mounts. All 51 observed font-configuration paths have fixed
+package owners; the actual selected font corpus remains unproven.
+
+Existing full-tree guards cover the materialized Node/npm/Firefox trees and
+the Flutter SDK, including its narrow mutable-metadata rules. The sandbox still
+exposes the complete read-only host `/usr`; those guards do not close the used
+host executable/library/header/font/configuration inputs. The new fixed build
+lock remains absent, and `load_build_lock` is an unwired fail-closed helper for
+that future path. Historical build modes retain their existing behavior.
+
+The fixed-data replay under Weather's local
+`.git/ci-evidence/p13c-20261027/implementation/` verifies the retained artifact,
+projection, source/input digests and approved top-level include before reporting
+`UNBOUND_LDCONFIG_INPUTS` (expected exit 2). It is an inert diagnostic, not a new
+production binding guard or admission. No additional hosted run is justified
+by this replay alone.
+
+P13 remains incomplete and P14/P15 compilation remains blocked. The next
+contract must close visibility or file-use enforcement within the existing
+bwrap harness and bind the relevant loader resolutions to independently
+authorized executable/library/configuration inputs, including a semantic cache
+rule and the selected fonts. That boundary must be reviewed before new build
+execution; another installation inventory or an observed-hash pin cannot
+establish it. No new rootfs/platform, consumer admission or output acceptance
+is introduced by this checkpoint.
