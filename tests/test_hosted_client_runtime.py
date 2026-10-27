@@ -240,6 +240,180 @@ class RuntimeBoundary(unittest.TestCase):
             I['cleanup_candidate']('overmorrow')
         self.assertTrue(source.exists())
 
+    def loader(self):
+        boundary = M['Boundary'].__new__(M['Boundary'])
+        boundary.sdk = None
+        boundary.h = SimpleNamespace(RUNTIME=self.root / 'runtime', FIREFOX=self.root / 'browser/build/firefox')
+        library = dict(type='file', sha256='a' * 64, elf=dict(soname='libfixture.so.1'))
+        loader = dict(type='file', sha256='b' * 64, elf=dict(soname='ld-linux-x86-64.so.2'))
+        boundary.view = SimpleNamespace(entries={
+            'usr': dict(type='directory'), 'usr/lib': dict(type='directory'),
+            'usr/lib/x86_64-linux-gnu': dict(type='directory'), 'usr/lib64': dict(type='directory'),
+            'lib': dict(type='symlink', target='usr/lib'), 'lib64': dict(type='symlink', target='usr/lib64'),
+            'usr/lib/x86_64-linux-gnu/libfixture.so.1': library,
+            'usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2': loader,
+            'usr/lib64/ld-linux-x86-64.so.2': dict(type='symlink', target='../lib/x86_64-linux-gnu/ld-linux-x86-64.so.2'),
+        })
+        return boundary
+
+    def test_glibc_loader_complete_success_record_forms(self):
+        boundary = self.loader()
+        library = '/usr/lib/x86_64-linux-gnu/libfixture.so.1'
+        loader = '/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2'
+        # rtld.c has one direct-name and one name=>mapped-name formatter.
+        # A direct absolute file, a SONAME and an absolute interpreter alias
+        # use those two formatters; vDSO is the sole non-file exception.
+        for line in (f'\tlibfixture.so.1 => {library} (0x00007f7c8bdc9000)\n',
+                f'\tlibfixture.so.1 => /lib/x86_64-linux-gnu/libfixture.so.1 (0x00007f7c8bdc9000)\n',
+                f'\t{library} (0x00007f7c8bdc9000)\n',
+                f'\t{library} => {library} (0x00007f7c8bdc9000)\n'):
+            self.assertEqual(boundary.loader_semantics(line.encode()), [dict(path=library, sha256='a' * 64)])
+        raw = (f'\tlinux-vdso.so.1 (0x00007f7c8bebd000)\n'
+            f'\tlibfixture.so.1 => {library} (0x00007f7c8bdc9000)\n'
+            f'\t/lib64/ld-linux-x86-64.so.2 => {loader} (0x00007f7c8bebf000)\n').encode()
+        self.assertEqual(boundary.loader_semantics(raw), [dict(path=library, sha256='a' * 64),
+            dict(path=loader, sha256='b' * 64)])
+
+    def test_fixed_probe_families_share_the_proven_glibc_name_formatter(self):
+        boundary = self.loader()
+        # Representative authorized fixture names for all seven existing
+        # probes. These are synthetic data, not new runtime observations/pins.
+        for probe, soname in (('python', 'libexpat.so.1'), ('node', 'libstdc++.so.6'),
+                ('firefox', 'libgcc_s.so.1'), ('xul', 'libX11-xcb.so.1'),
+                ('git', 'libpcre2-8.so.0'), ('shell', 'libtinfo.so.6'), ('dart', 'libdl.so.2')):
+            name = 'usr/lib/x86_64-linux-gnu/' + soname
+            boundary.view.entries[name] = dict(type='file', sha256='c' * 64, elf=dict(soname=soname))
+            with self.subTest(probe=probe):
+                self.assertEqual(boundary.loader_semantics(f'\t{soname} => /{name} (0x00007f7c8bdc9000)\n'.encode()),
+                    [dict(path='/' + name, sha256='c' * 64)])
+
+    def test_loader_missing_soname_requires_exact_pinned_member_basename(self):
+        boundary = self.loader()
+        name = 'usr/lib/x86_64-linux-gnu/libfixture.so.1'
+        boundary.view.entries[name]['elf']['soname'] = None
+        good = f'\tlibfixture.so.1 => /{name} (0x00007f7c8bdc9000)\n'.encode()
+        self.assertEqual(boundary.loader_semantics(good), [dict(path='/' + name, sha256='a' * 64)])
+        with self.assertRaisesRegex(ValueError, 'SONAME'):
+            boundary.loader_semantics(good.replace(b'libfixture.so.1 =>', b'foreign.so.1 =>'))
+        # An existing empty SONAME tag is distinct from an absent tag.
+        boundary.view.entries[name]['elf']['soname'] = ''
+        with self.assertRaisesRegex(ValueError, 'SONAME'):
+            boundary.loader_semantics(good)
+
+    def test_loader_absolute_alias_requires_same_canonical_file_and_digest(self):
+        boundary = self.loader()
+        entries = boundary.view.entries
+        loader = '/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2'
+        row = f'\t/lib64/ld-linux-x86-64.so.2 => {loader} (0x00007f7c8bebf000)\n'.encode()
+        boundary.loader_semantics(row)
+        target = entries['usr/lib64/ld-linux-x86-64.so.2']
+        for malicious in ('/usr/local/lib/foreign.so', 'ld-linux-x86-64.so.2'):
+            target['target'] = malicious
+            with self.assertRaises(ValueError):
+                boundary.loader_semantics(row)
+        target['target'] = '../lib/x86_64-linux-gnu/libfixture.so.1'
+        with self.assertRaisesRegex(ValueError, 'ALIAS_IDENTITY'):
+            boundary.loader_semantics(row)
+        # Identical bytes do not authorize a different canonical path.
+        entries['usr/lib/x86_64-linux-gnu/copy.so'] = copy.deepcopy(entries[loader[1:]])
+        target['target'] = '../lib/x86_64-linux-gnu/copy.so'
+        with self.assertRaisesRegex(ValueError, 'ALIAS_IDENTITY'):
+            boundary.loader_semantics(row)
+        with patch.object(boundary, 'library', side_effect=[dict(path=loader, sha256='a' * 64),
+                dict(path=loader, sha256='b' * 64)]), self.assertRaisesRegex(ValueError, 'ALIAS_IDENTITY'):
+            boundary.loader_semantics(row)
+
+    def test_loader_rejects_unknown_malformed_traversal_and_ambiguous_records(self):
+        boundary = self.loader()
+        good = b'\tlibfixture.so.1 => /usr/lib/x86_64-linux-gnu/libfixture.so.1 (0x00007f7c8bdc9000)\n'
+        for bad in (b'', b'\tstatically linked\n', b'\tlibmissing.so => not found\n',
+                b'\tlinux-gate.so.1 (0x00007f7c8bdc9000)\n', b'warning: unknown output\n',
+                good.replace(b'0x00007f7c8bdc9000', b'0x123'), good.replace(b'7f7c', b'7F7C'),
+                good.replace(b'\t', b' '), good.replace(b' => ', b'=>'), good.rstrip(b'\n'),
+                good.replace(b'\n', b'\r\n'), good.replace(b'\n', b'\v') + good,
+                good.replace(b'/usr/lib/', b'/usr//lib/'), good.replace(b'/usr/lib/', b'/usr/./lib/'),
+                good.replace(b'/usr/lib/', b'/usr/extra/../lib/'), good.replace(b'/usr/lib/', b'usr/lib/'),
+                good.replace(b'/usr/lib/', b'/usr/lib/../../host/'), good.replace(b'/usr/lib/', b'/host/lib/'),
+                good.replace(b'libfixture.so.1 =>', b'foreign.so.1 =>'), good + good,
+                b'\tlinux-vdso.so.1 (0x00007f7c8bebd000)\n' * 2 + good,
+                good + b'\t/usr/lib/x86_64-linux-gnu/libfixture.so.1 (0x00007f7c8bdc9000)\n',
+                good.replace(b'libfixture.so.1 =>', b'../libfixture.so.1 =>'),
+                good.replace(b'/usr/lib/', b'/' + b'a' * 1025 + b'/')):
+            with self.subTest(record=bad[:120]), self.assertRaises((ValueError, UnicodeError)):
+                boundary.loader_semantics(bad)
+        with self.assertRaisesRegex(ValueError, 'EMPTY'):
+            boundary.loader_semantics(b'\tlinux-vdso.so.1 (0x00007f7c8bebd000)\n')
+        with self.assertRaisesRegex(ValueError, 'BOUND'):
+            boundary.loader_semantics(b'x' * (2 * 1024**2 + 1))
+        with self.assertRaisesRegex(ValueError, 'LINES'):
+            boundary.loader_semantics(good * 4097)
+
+    def test_loader_runtime_sdk_and_browser_leaves_keep_expected_identity(self):
+        boundary = self.loader()
+        runtime = boundary.h.RUNTIME; runtime.mkdir(mode=0o700)
+        sdk = self.root / 'sdk'; sdk.mkdir(mode=0o700); boundary.sdk = sdk
+        boundary.firefox_copy = self.root / 'firefox-copy'; boundary.firefox_copy.mkdir(mode=0o700)
+        files = {}
+        for relative, soname in (('node/lib/libnodefixture.so', 'libnodefixture.so'),
+                ('firefox/libmozfixture.so', 'libmozfixture.so')):
+            raw = elf_fixture(soname)
+            destination = runtime / relative
+            destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            destination.write_bytes(raw); destination.chmod(0o600)
+            files[relative] = dict(sha256=M['sha'](raw))
+        firefox = boundary.firefox_copy / 'libmozfixture.so'
+        firefox.write_bytes((runtime / 'firefox/libmozfixture.so').read_bytes()); firefox.chmod(0o600)
+        provenance = runtime / 'provenance.json'; provenance.write_text(json.dumps(dict(files=files))); provenance.chmod(0o600)
+        sdk_lib = sdk / 'libdartfixture.so'; sdk_lib.write_bytes(elf_fixture('libdartfixture.so')); sdk_lib.chmod(0o600)
+        sdk_map = sdk / 'sdk-inventory.json'
+        sdk_map.write_text(json.dumps({'libdartfixture.so': dict(sha256=M['sha'](sdk_lib.read_bytes()))})); sdk_map.chmod(0o600)
+        for path, soname, canonical in ((runtime / 'node/lib/libnodefixture.so', 'libnodefixture.so', 'node/lib/libnodefixture.so'),
+                (boundary.h.FIREFOX / 'libmozfixture.so', 'libmozfixture.so', 'firefox-copy/libmozfixture.so'),
+                (sdk_lib, 'libdartfixture.so', 'sdk/libdartfixture.so')):
+            row = f'\t{soname} => {path} (0x00007f7c8bdc9000)\n'.encode()
+            self.assertEqual(boundary.loader_semantics(row), [dict(path=canonical, sha256=M['sha'](elf_fixture(soname)))])
+            with self.assertRaisesRegex(ValueError, 'SONAME'):
+                boundary.loader_semantics(row.replace(soname.encode() + b' =>', b'foreign.so =>'))
+        # Equal hashes must still reject non-ELF payloads: these explicit
+        # inert fixture manifests bind the non-ELF bytes before parsing.
+        # Separately test each original archive-hash mismatch branch.
+        for virtual, physical, key, manifest, category in (
+                (runtime / 'node/lib/libnodefixture.so', runtime / 'node/lib/libnodefixture.so',
+                    'node/lib/libnodefixture.so', provenance, 'RUNTIME_LIBRARY_CHANGED'),
+                (boundary.h.FIREFOX / 'libmozfixture.so', firefox,
+                    'firefox/libmozfixture.so', provenance, 'BROWSER_LIBRARY'),
+                (sdk_lib, sdk_lib, 'libdartfixture.so', sdk_map, 'SDK_LIBRARY')):
+            raw = physical.read_bytes()
+            original_manifest = manifest.read_bytes()
+            physical.write_bytes(b'bound fixture, not an ELF file')
+            with self.assertRaisesRegex(ValueError, category):
+                boundary.loader_semantics(f'\t{virtual} (0x00007f7c8bdc9000)\n'.encode())
+            value = json.loads(original_manifest)
+            entries = value['files'] if manifest == provenance else value
+            entries[key]['sha256'] = M['sha'](physical.read_bytes())
+            manifest.write_text(json.dumps(value))
+            with self.assertRaisesRegex(ValueError, 'UNAUTHORIZED_LIBRARY_SELECTION'):
+                boundary.loader_semantics(f'\t{virtual} (0x00007f7c8bdc9000)\n'.encode())
+            physical.write_bytes(raw); manifest.write_bytes(original_manifest)
+        empty_soname = elf_fixture('')
+        sdk_lib.write_bytes(empty_soname)
+        sdk_map.write_text(json.dumps({'libdartfixture.so': dict(sha256=M['sha'](empty_soname))}))
+        with self.assertRaisesRegex(ValueError, 'SONAME'):
+            boundary.loader_semantics(f'\tlibdartfixture.so => {sdk_lib} (0x00007f7c8bdc9000)\n'.encode())
+        sdk_lib.write_bytes(elf_fixture('libdartfixture.so'))
+        sdk_map.write_text(json.dumps({'libdartfixture.so': dict(sha256=M['sha'](sdk_lib.read_bytes()))}))
+        # No SONAME tag: the authenticated canonical filename still supplies
+        # its only allowed basename. Remove the tag from a fixed fixture ELF.
+        no_soname = bytearray(sdk_lib.read_bytes()); struct.pack_into('<qQ', no_soname, 224, 0, 0)
+        sdk_lib.write_bytes(no_soname)
+        sdk_map.write_text(json.dumps({'libdartfixture.so': dict(sha256=M['sha'](bytes(no_soname)))}))
+        boundary.loader_semantics(f'\tlibdartfixture.so => {sdk_lib} (0x00007f7c8bdc9000)\n'.encode())
+        with self.assertRaisesRegex(ValueError, 'SONAME'):
+            boundary.loader_semantics(f'\tforeign.so => {sdk_lib} (0x00007f7c8bdc9000)\n'.encode())
+        firefox.write_bytes(b'changed')
+        with self.assertRaisesRegex(ValueError, 'BROWSER_LIBRARY'):
+            boundary.loader_semantics(f'\tlibmozfixture.so => {boundary.h.FIREFOX}/libmozfixture.so (0x00007f7c8bdc9000)\n'.encode())
+
     def test_new_manual_mode_has_only_one_bounded_both_profile_round(self):
         workflow = (ROOT / '.github/workflows/hosted-overmorrow.yml').read_text()
         block = workflow.split('\n  runtime-boundary:', 1)[1]

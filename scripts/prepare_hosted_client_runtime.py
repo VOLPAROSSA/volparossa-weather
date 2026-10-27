@@ -597,41 +597,72 @@ class Boundary:
         self.view.cache_sha = sha(raw)
         return bindings
 
-    def library(self, path):
+    def library(self, path, *, soname=None):
+        # Incoming trace paths are lexical namespace paths. Never normalize an
+        # untrusted ../, empty component or host-dependent filesystem alias.
+        require(isinstance(path, str) and len(path) <= 1024
+            and re.fullmatch(r'/(?:[A-Za-z0-9_+@.-]+/)*[A-Za-z0-9_+@.-]+', path)
+            and all(part not in ('.', '..') for part in path.split('/')[1:]), 'BOUNDARY_LOADER_PATH')
+        def identity(name, digest, metadata):
+            require(metadata is not None, 'BOUNDARY_UNAUTHORIZED_LIBRARY_SELECTION')
+            # glibc prints l_libname, which need not come from DT_SONAME.
+            # Without that tag only the fixed canonical member basename is
+            # accepted, never an observed/new alias as expected authority.
+            expected_name = PurePosixPath(name).name if metadata['soname'] is None else metadata['soname']
+            require(soname is None or expected_name == soname, 'BOUNDARY_LOADER_SONAME')
+            return dict(path=name, sha256=digest)
         if path.startswith(('/usr/', '/lib/', '/lib64/')):
             name, item = resolve(path, self.view.entries)
             require(item['type'] == 'file' and 'elf' in item, 'BOUNDARY_UNAUTHORIZED_LIBRARY_SELECTION')
-            return dict(path='/' + name, sha256=item['sha256'])
+            return identity('/' + name, item['sha256'], item['elf'])
         runtime = self.h.RUNTIME
         if Path(path).is_relative_to(self.h.FIREFOX):
             name = 'firefox/' + str(Path(path).relative_to(self.h.FIREFOX))
             files = json.loads(regular(runtime / 'provenance.json', 2 * 1024**2))['files']
-            require(name in files and sha(regular(self.firefox_copy / name.removeprefix('firefox/'))) == files[name]['sha256'],
-                'BOUNDARY_UNAUTHORIZED_BROWSER_LIBRARY')
-            return dict(path='firefox-copy/' + name.removeprefix('firefox/'), sha256=files[name]['sha256'])
+            require(name in files, 'BOUNDARY_UNAUTHORIZED_BROWSER_LIBRARY')
+            raw = regular(self.firefox_copy / name.removeprefix('firefox/'))
+            require(sha(raw) == files[name]['sha256'], 'BOUNDARY_UNAUTHORIZED_BROWSER_LIBRARY')
+            return identity('firefox-copy/' + name.removeprefix('firefox/'), files[name]['sha256'], elf(raw))
         if self.sdk is not None and Path(path).is_relative_to(self.sdk):
             name = str(Path(path).relative_to(self.sdk))
             files = json.loads(regular(self.sdk / 'sdk-inventory.json', 8 * 1024**2))
-            require(name in files and sha(regular(self.sdk / name)) == files[name]['sha256'],
-                'BOUNDARY_UNAUTHORIZED_SDK_LIBRARY')
-            return dict(path='sdk/' + name, sha256=files[name]['sha256'])
+            require(name in files, 'BOUNDARY_UNAUTHORIZED_SDK_LIBRARY')
+            raw = regular(self.sdk / name)
+            require(sha(raw) == files[name]['sha256'], 'BOUNDARY_UNAUTHORIZED_SDK_LIBRARY')
+            return identity('sdk/' + name, files[name]['sha256'], elf(raw))
         require(Path(path).is_relative_to(runtime), 'BOUNDARY_UNAUTHORIZED_LIBRARY_SELECTION')
         name = str(Path(path).relative_to(runtime))
         files = json.loads(regular(runtime / 'provenance.json', 2 * 1024**2))['files']
         require(name in files, 'BOUNDARY_UNAUTHORIZED_RUNTIME_LIBRARY')
-        require(sha(regular(runtime / name)) == files[name]['sha256'], 'BOUNDARY_RUNTIME_LIBRARY_CHANGED')
-        return dict(path=name, sha256=files[name]['sha256'])
+        raw = regular(runtime / name)
+        require(sha(raw) == files[name]['sha256'], 'BOUNDARY_RUNTIME_LIBRARY_CHANGED')
+        return identity(name, files[name]['sha256'], elf(raw))
 
     def loader_semantics(self, raw):
         require(len(raw) <= 2 * 1024**2, 'BOUNDARY_LOADER_LIST_BOUND')
-        selected_files = []
-        for line in raw.decode('utf-8').splitlines():
+        # glibc 2.39 elf/rtld.c: each successful x86-64 --list record has
+        # one tab, an optional name/absolute alias and a 16-digit map address.
+        # The sole virtual entry is kernel-provided vDSO, never file authority.
+        lines = raw.decode('ascii').split('\n')[:-1]
+        require(0 < len(lines) <= 4096 and raw.endswith(b'\n') and b'\r' not in raw,
+            'BOUNDARY_LOADER_LIST_LINES')
+        selected_files, seen, labels, vdso = [], set(), set(), False
+        for line in lines:
             require('not found' not in line, 'BOUNDARY_LIBRARY_NOT_FOUND')
-            if re.fullmatch(r'\s*linux-vdso\.so\.1 \(0x[0-9a-f]+\)', line):
+            if re.fullmatch(r'\tlinux-vdso\.so\.1 \(0x[0-9a-f]{16}\)', line):
+                require(not vdso, 'BOUNDARY_LOADER_DUPLICATE')
+                vdso = True
                 continue
-            match = re.fullmatch(r'\s*(?:[A-Za-z0-9.+_-]+ => )?(/[^\s]+) \(0x[0-9a-f]+\)', line)
+            match = re.fullmatch(r'\t(?:(/[A-Za-z0-9_+@./-]{1,1023}|[A-Za-z0-9_][A-Za-z0-9.+_-]{0,255}) => )?'
+                r'(/[A-Za-z0-9_+@./-]{1,1023}) \(0x[0-9a-f]{16}\)', line)
             require(match is not None, 'BOUNDARY_LOADER_LIST_SYNTAX')
-            selected_files.append(self.library(match[1]))
+            label, path = match.groups()
+            item = self.library(path, soname=label if label and not label.startswith('/') else None)
+            if label and label.startswith('/'):
+                require(self.library(label) == item, 'BOUNDARY_LOADER_ALIAS_IDENTITY')
+            require(item['path'] not in seen and (label or path) not in labels, 'BOUNDARY_LOADER_DUPLICATE')
+            seen.add(item['path']); labels.add(label or path)
+            selected_files.append(item)
         require(selected_files, 'BOUNDARY_LOADER_LIST_EMPTY')
         return selected_files
 
