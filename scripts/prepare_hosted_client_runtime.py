@@ -81,6 +81,162 @@ def put(path, raw, executable=False):
         stream.write(raw)
 
 
+DNS_SOURCE = Path('/etc/resolv.conf')
+
+
+class AcquisitionResolver:
+    """UNTRUSTED bootstrap data, never executable/configuration authority.
+
+    The fixed platform source may be service-owned or a service symlink. Only
+    bounded stable regular-file bytes are read; only nameserver IPs survive.
+    Public observations contain no input text, addresses, paths or digests.
+    """
+    def __init__(self, path):
+        self.path = path
+        self.anchor = self.digest = self.parent_anchor = None
+        self.observation = dict(schema=1, kind='untrusted-acquisition-dns', stage='not-started',
+            source_stat=None, source_stable=False, parsed=False, snapshot_ready=False,
+            nameservers=0, stripped_directives=dict(search=0, domain=0, options=0, sortlist=0),
+            failure=None, errno=None)
+
+    def _stage(self, name):
+        self.observation['stage'] = name
+
+    def _guard(self, action):
+        try:
+            return action()
+        except OSError as error:
+            self.observation['errno'] = error.errno if type(error.errno) is int and 0 <= error.errno <= 4096 else None
+            self.observation['failure'] = 'BOUNDARY_DNS_IO'
+            raise ValueError('BOUNDARY_DNS_IO') from None
+        except (UnicodeError, RuntimeError):
+            self.observation['failure'] = 'BOUNDARY_DNS_ENCODING_OR_ALIAS'
+            raise ValueError('BOUNDARY_DNS_ENCODING_OR_ALIAS') from None
+        except ValueError as error:
+            code = str(error)
+            code = code if re.fullmatch(r'BOUNDARY_DNS_[A-Z_]+', code) else 'BOUNDARY_DNS_INVALID'
+            self.observation['failure'] = code
+            raise ValueError(code) from None
+
+    def capture(self):
+        return self._guard(self._capture)
+
+    def _capture(self):
+        require(self.anchor is None, 'BOUNDARY_DNS_ALREADY_CAPTURED')
+        self._stage('source-resolve')
+        source = DNS_SOURCE.resolve(strict=True)
+        require(source.is_absolute(), 'BOUNDARY_DNS_SOURCE_PATH')
+        self._stage('source-open')
+        parent = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            for part in source.parts[1:-1]:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+                os.close(parent); parent = child
+            parent_info = os.fstat(parent)
+            fd = os.open(source.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+            try:
+                before = os.fstat(fd)
+                self._stage('source-stat')
+                kinds = ((stat.S_ISREG, 'regular'), (stat.S_ISDIR, 'directory'), (stat.S_ISFIFO, 'fifo'),
+                    (stat.S_ISSOCK, 'socket'), (stat.S_ISCHR, 'character'), (stat.S_ISBLK, 'block'), (stat.S_ISLNK, 'symlink'))
+                predicates = dict(regular=stat.S_ISREG(before.st_mode), uid=before.st_uid in (0, os.getuid()),
+                    nlink=before.st_nlink == 1, mode=not bool(before.st_mode & 0o022), size=0 <= before.st_size <= 65536)
+                self.observation['source_stat'] = dict(type=next((name for test, name in kinds if test(before.st_mode)), 'unknown'),
+                    uid=before.st_uid, nlink=before.st_nlink, mode=stat.S_IMODE(before.st_mode), bytes=before.st_size,
+                    legacy_regular_predicates=predicates, legacy_regular_fstat_passed=all(predicates.values()))
+                require(predicates['regular'], 'BOUNDARY_DNS_SOURCE_TYPE')
+                require(predicates['size'], 'BOUNDARY_DNS_SOURCE_SIZE')
+                self._stage('source-read')
+                with os.fdopen(fd, 'rb', closefd=False) as stream:
+                    raw = stream.read(65537)
+                after = os.fstat(fd)
+                os.lseek(fd, 0, os.SEEK_SET)
+                with os.fdopen(fd, 'rb', closefd=False) as stream:
+                    confirmed = stream.read(65537)
+                final = os.fstat(fd)
+            finally:
+                os.close(fd)
+            self._stage('source-stability')
+            current = os.stat(source.name, dir_fd=parent, follow_symlinks=False)
+            current_parent = source.parent.lstat()
+            signature = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            require(len(raw) == before.st_size and len(raw) <= 65536 and raw == confirmed
+                and signature(before) == signature(after) == signature(final)
+                and signature(current) == signature(before) and DNS_SOURCE.resolve(strict=True) == source
+                and source.parent.resolve(strict=True) == source.parent
+                and (current_parent.st_dev, current_parent.st_ino) == (parent_info.st_dev, parent_info.st_ino),
+                'BOUNDARY_DNS_SOURCE_CHANGED')
+        finally:
+            os.close(parent)
+        self.observation['source_stable'] = True
+        self._stage('source-parse')
+        servers = self._parse(raw)
+        self.observation['parsed'] = True
+        self.observation['nameservers'] = len(servers)
+        self._stage('snapshot-create')
+        info = self.path.parent.lstat()
+        require(self.path.is_absolute() and self.path.parent.resolve() == self.path.parent
+            and stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
+            and stat.S_IMODE(info.st_mode) == 0o700, 'BOUNDARY_DNS_SNAPSHOT_PARENT')
+        self.parent_anchor = (info.st_dev, info.st_ino)
+        snapshot = ''.join('nameserver ' + server + '\n' for server in servers).encode('ascii')
+        put(self.path, snapshot)
+        info = self.path.lstat()
+        self.anchor, self.digest = (info.st_dev, info.st_ino), sha(snapshot)
+        self.recheck()
+        self.observation['snapshot_ready'] = True
+        self._stage('ready')
+
+    def _parse(self, raw):
+        text = raw.decode('ascii')
+        require(all(character in '\t\r\n' or 32 <= ord(character) <= 126 for character in text), 'BOUNDARY_DNS_ASCII')
+        servers = []
+        lines = text.splitlines()
+        require(len(lines) <= 1024, 'BOUNDARY_DNS_LINES')
+        for line in lines:
+            require(len(line) <= 4096, 'BOUNDARY_DNS_LINE')
+            values = re.split(r'[#;]', line, maxsplit=1)[0].split()
+            require(len(values) <= 128 and all(len(value) <= 1024 for value in values), 'BOUNDARY_DNS_TOKENS')
+            if not values:
+                continue
+            name, arguments = values[0], values[1:]
+            if name == 'nameserver':
+                require(len(arguments) == 1 and '%' not in arguments[0], 'BOUNDARY_DNS_NAMESERVER')
+                try:
+                    address = ipaddress.ip_address(arguments[0])
+                except ValueError:
+                    raise ValueError('BOUNDARY_DNS_IP') from None
+                servers.append(str(address))
+                require(len(servers) <= 4, 'BOUNDARY_DNS_NAMESERVER_COUNT')
+            elif name in self.observation['stripped_directives']:
+                # Values have no effect: do not build a second parser for
+                # discarded platform settings or forward them to the child.
+                self.observation['stripped_directives'][name] += 1
+            else:
+                raise ValueError('BOUNDARY_DNS_DIRECTIVE')
+        require(0 < len(servers) <= 4, 'BOUNDARY_DNS_NAMESERVER_COUNT')
+        return servers
+
+    def recheck(self):
+        return self._guard(self._recheck)
+
+    def _recheck(self):
+        self._stage('snapshot-recheck')
+        require(self.anchor is not None, 'BOUNDARY_DNS_NOT_CAPTURED')
+        info, parent = self.path.lstat(), self.path.parent.lstat()
+        require((info.st_dev, info.st_ino) == self.anchor and (parent.st_dev, parent.st_ino) == self.parent_anchor
+            and self.path.resolve() == self.path and stat.S_IMODE(info.st_mode) == 0o600
+            and stat.S_ISDIR(parent.st_mode) and parent.st_uid == os.getuid()
+            and stat.S_IMODE(parent.st_mode) == 0o700,
+            'BOUNDARY_DNS_SNAPSHOT_REPLACED')
+        require(sha(regular(self.path, 65536)) == self.digest, 'BOUNDARY_DNS_SNAPSHOT_CHANGED')
+        self._stage('ready')
+
+    def mounts(self):
+        self.recheck()
+        return ['--ro-bind', str(self.path), '/etc/resolv.conf']
+
+
 def package_path(name):
     require(isinstance(name, str) and not name.startswith('/') and all(p not in ('', '.', '..')
         for p in name.split('/')), 'BOUNDARY_PACKAGE_PATH')
@@ -355,9 +511,11 @@ class View:
 
 
 class Boundary:
-    def __init__(self, view, helper, browser, sdk=None):
+    def __init__(self, view, helper, browser, sdk=None, *, resolver=None):
         self.view, self.h, self.browser, self.sdk = view, helper, browser, sdk
         self.base = view.root.parent
+        require(resolver is None or isinstance(resolver, AcquisitionResolver), 'BOUNDARY_DNS_ADAPTER_REQUIRED')
+        self.resolver = resolver
         self.witness = self.base.parent.parent / 'runtime-boundary-unapproved-library.so'
         self.source = self.base / 'source'
         self.browser_source = self.base / 'browser-source'
@@ -508,6 +666,9 @@ class Boundary:
                 require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.getuid()
                     and stat.S_IMODE(info.st_mode) == 0o600 and info.st_size <= 65536, 'BOUNDARY_SDK_METADATA_CHANGED')
         immutable = [self.view.root, self.source, self.browser_source, self.h.RUNTIME, self.cache, self.firefox_copy]
+        if getattr(self, 'resolver', None) is not None:
+            self.resolver.recheck()
+            immutable.append(self.resolver.path)
         if self.sdk is not None:
             immutable += [self.sdk, self.deploy]
         writable = [self.h.PRIVATE, self.h.STAGE, self.h.PROOF, *self.sdk_metadata.values()]
@@ -551,20 +712,8 @@ class Boundary:
         return argv
 
     def acquisition_mounts(self):
-        # DNS is acquisition-only platform configuration, never compiler input
-        # or authority for the separately authenticated archive bytes.
-        path = self.base / 'resolv.conf'
-        if not path.exists():
-            source = Path('/etc/resolv.conf').resolve(strict=True)
-            servers = []
-            for line in regular(source, 65536).decode('ascii').splitlines():
-                values = line.split('#', 1)[0].split()
-                if values and values[0] == 'nameserver':
-                    require(len(values) == 2, 'BOUNDARY_DNS_CONFIGURATION')
-                    servers.append(str(ipaddress.ip_address(values[1])))
-            require(0 < len(servers) <= 4, 'BOUNDARY_DNS_CONFIGURATION')
-            put(path, ''.join('nameserver ' + name + '\n' for name in servers).encode())
-        return ['--ro-bind', str(path), '/etc/resolv.conf']
+        require(isinstance(self.resolver, AcquisitionResolver), 'BOUNDARY_DNS_ADAPTER_REQUIRED')
+        return self.resolver.mounts()
 
     def sdk_metadata_mounts(self):
         require(self.sdk is not None, 'BOUNDARY_SDK_NOT_SELECTED')
@@ -766,10 +915,13 @@ def verify(output):
     h.OUTPUT.mkdir(mode=0o700)
     helper, platform = h.policy_helper(), runpy.run_path(str(ROOT / 'scripts/prepare_hosted_decoder.py'))
     attempted = installed = False
-    results, failure, phase = {}, None, 'runtime-materialization'
+    results, failure, phase = {}, None, 'acquisition-dns-snapshot'
+    resolver = AcquisitionResolver(private / 'resolv.conf')
     inputs.write(output / 'runtime-boundary-started.json', canonical(dict(schema=1, admitted=False,
         kind='client-runtime-boundary-start', source=os.environ['GITHUB_SHA'])))
     try:
+        resolver.capture()
+        phase = 'runtime-materialization'
         runtime_preparer.prepare(runtime, pin, pin_sha, fetch=True, with_npm=True)
         phase = 'sdk-materialization'
         sdk_preparer.prepare(sdk, sdk_preparer.load_pin())
@@ -805,7 +957,7 @@ def verify(output):
             for path in (h.STAGE, h.PROOF, h.BOUNDARY_DEPLOY, h.BOUNDARY_TABLE_PROOF):
                 path.mkdir(mode=0o700)
             view = View(base / 'view', subset(candidate['packages'], profile, inputs), profile)
-            boundary = Boundary(view, h, h.BROWSER, sdk if profile == 'overmorrow' else None)
+            boundary = Boundary(view, h, h.BROWSER, sdk if profile == 'overmorrow' else None, resolver=resolver)
             boundary.stage_firefox()
             h.BOUNDARY = boundary
             h.write(h.OUTPUT / 'passwd', f'runner:x:{os.getuid()}:{os.getgid()}:CI:/home/runner:/bin/false\n'.encode()) \
@@ -828,6 +980,7 @@ def verify(output):
             loaded = {name: boundary.loader_semantics(run('loader-' + name, [LOADER,
                 *(['--library-path', str(h.FIREFOX)] if name in ('firefox', 'xul') else []), '--list', executable]))
                 for name, executable in probes.items()}
+            phase = profile + '-preflight-compile'
             if profile == 'overmorrow':
                 overmorrow.PRIVATE, overmorrow.STAGE = h.PRIVATE, h.STAGE
                 overmorrow.PROOF, overmorrow.TABLE_PROOF, overmorrow.DEPLOY = h.PROOF, h.BOUNDARY_TABLE_PROOF, h.BOUNDARY_DEPLOY
@@ -837,10 +990,12 @@ def verify(output):
                 proof = overmorrow.preflight('compile')
             else:
                 proof = h.preflight('compile')
+            phase = profile + '-preflight-acquire'
             acquisition = overmorrow.preflight('acquire') if profile == 'overmorrow' else h.preflight('acquire')
             for output_root in (h.PROOF, h.BOUNDARY_TABLE_PROOF):
                 for path in (output_root / 'appdata', output_root / 'appdata/firefox', output_root / 'appdata/firefox-esr'):
                     path.mkdir(mode=0o700)
+            phase = profile + '-preflight-browser'
             browser = overmorrow.preflight('browser', proof=h.PROOF) if profile == 'overmorrow' else h.preflight('browser')
             require(run('browser-source-identity', ['/usr/bin/git', '-C', str(h.BROWSER), 'rev-parse', 'HEAD']).decode().strip()
                 == h.BROWSER_COMMIT, 'BOUNDARY_BROWSER_IDENTITY')
@@ -899,7 +1054,8 @@ def verify(output):
                 diagnostics.append(dict(step, stdout=raw[:65536].decode('utf-8', errors='replace'),
                     stdout_truncated=len(raw) > 65536))
             inputs.write(output / 'runtime-boundary-diagnostics.json', canonical(dict(schema=1, admitted=False,
-                kind='client-runtime-boundary-diagnostics', phase=phase, failure=failure, probes=diagnostics)))
+                kind='client-runtime-boundary-diagnostics', phase=phase, failure=failure, probes=diagnostics,
+                acquisition_dns=resolver.observation)))
         finally:
             helper.DRAIN_CONFIRMED = helper.DRAIN_CONFIRMED and h.DRAIN_CONFIRMED
             cleaning = helper.cleanup(platform, attempted, installed) if installed or attempted else dict(complete=True)
