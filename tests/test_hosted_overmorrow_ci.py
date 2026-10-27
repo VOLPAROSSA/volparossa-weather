@@ -2,6 +2,7 @@
 """Inert contract checks; never execute Flutter, Node, bwrap or Firefox."""
 import copy
 import hashlib
+import json
 import os
 from pathlib import Path
 import runpy
@@ -45,6 +46,14 @@ def report(table=False):
 
 
 class HostedOvermorrow(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        event = Path(temporary.name) / 'event.json'
+        event.write_text(json.dumps(dict(inputs=dict(input_mode='historical-v1'))))
+        event.chmod(0o600)
+        self.enterContext(patch.dict(os.environ, GITHUB_EVENT_PATH=str(event), GITHUB_EVENT_NAME='workflow_dispatch'))
+
     def test_hosted_flutter_count_includes_system_inset_regression(self):
         test_root = ROOT / 'integrations/overmorrow/overlay/test'
         declarations = sum(len(re.findall(r'\btest(?:Widgets)?\s*\(', source.read_text()))

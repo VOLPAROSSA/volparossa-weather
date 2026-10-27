@@ -209,3 +209,68 @@ rule and the selected fonts. That boundary must be reviewed before new build
 execution; another installation inventory or an observed-hash pin cannot
 establish it. No new rootfs/platform, consumer admission or output acceptance
 is introduced by this checkpoint.
+
+
+## P13 runtime boundary: controlled visibility in the existing harness
+
+The follow-up implements option A in the existing bwrap/AppArmor harness.
+A private filtered view copies only independently authorized package members,
+rehashing each installed input against the original fixed member maps. Python
+standard-library modules, executables, libraries, headers, fonts and the selected
+configuration remain covered by those maps. Fixed usrmerge/tool aliases resolve
+inside that view; privileged utilities and unrelated service configuration are
+excluded. The two unbound loader fragments above are absent. Option B would
+require preventive mediation of opens, imports and executable mappings, including
+future dynamic loads; ordinary process logs would not enforce that boundary.
+Using the existing namespace mounts gives a smaller maintained enforcement path.
+
+The controlled branch exposes neither host `/usr` nor the host loader cache.
+The verified `ldconfig.real` generates a private cache using the authorized main
+configuration and its two authorized include fragments. The complete bounded
+cache listing must match its count, expected ABI flags, authorized canonical ELF
+paths and each ELF SONAME. Only after this semantic check is its byte identity
+sealed; the writable generator copy is removed. Loader `--list` selections are
+also bound to package, runtime or SDK identities. The cache seal is an integrity
+check on validated derived output, never a new observed-hash admission.
+
+The complete checkout bind is replaced by the exact tracked source recipe.
+Only the verified Node/npm/Firefox trees, fixed Browser helper blobs and optional
+full Flutter SDK are added. Browser defaults, autoconfig, bootstrap and staging
+metadata are checked against the pinned helper/default derivation. Its private
+physical Firefox copy retains the existing logical Browser/build path required
+by both smoke drivers. The SDK source, snapshots and binaries remain read-only;
+only previously declared scalar metadata and explicit generated tool state have
+writable overlays. Original metadata timestamps and the cached compile key are
+preserved. An SDK rebuild requiring replacement code fails closed.
+
+An empty read-only namespace anchor protects checkout ancestors even when
+Flutter has a writable private HOME. Immutable backing trees and the validated
+cache cannot overlap any declared writable output, state or metadata backing
+path. AppArmor, capability denial, process groups, resource bounds, network
+modes, private HOME and the existing drain-before-policy-removal lifecycle remain
+in use. Candidate deletion additionally requires confirmed runtime drain and
+policy-cleanup receipts. These controls do not claim to pin the managed CI
+provisioning tools or the entire moving runner filesystem.
+
+Source/nonhistorical CI modes require a live boundary at sandbox, preflight and
+execute entrypoints. Only the explicit historical dispatch or the two retained
+historical push routes may use the unchanged historical namespace. Future P14
+and P15 controllers must prepare this same boundary context; missing context
+cannot silently fall back to host inputs. This does not authorize dependencies,
+plugins, generated modules or application outputs for those later packages.
+
+The new explicit manual `runtime-boundary-verification` mode performs one bounded
+round: install the existing Overmorrow package closure once, prove each profile
+against its own unchanged input record, then exercise both profiles sequentially.
+It checks the same acquire/compile/browser preflight APIs, negative library and
+loader-configuration visibility, actual Python/Node/npm/staged-Firefox execution,
+font selection against the verified font file, loader selections and Flutter
+version. It does not compile applications or perform product acceptance. Only
+closed bounded UTF-8 JSON diagnostics are projected; package/runtime/SDK/font
+payloads stay private and are removed by guarded cleanup.
+
+At this source checkpoint the targeted local tests are inert. Independent review
+and the single hosted runtime round must still establish the actual enforcement,
+selections and cleanup. No new input or output admission is emitted, P13 is not
+yet reported complete, and P14/P15 builds remain blocked pending that result.
+The P13b installation evidence and all original package/npm/pub pins are retained.

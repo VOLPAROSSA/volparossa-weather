@@ -571,7 +571,7 @@ class ClientEnvironmentTests(unittest.TestCase):
     def test_new_mode_is_manual_separate_from_historical_build_with_closed_projection(self):
         for profile, name in [('drizzli', 'hosted-clients.yml'), ('overmorrow', 'hosted-overmorrow.yml')]:
             text = (ROOT / '.github/workflows' / name).read_text()
-            block = text.split('\n  installed-environment:', 1)[1]
+            block = text.split('\n  installed-environment:', 1)[1].split('\n  runtime-boundary:', 1)[0]
             self.assertIn("github.event_name == 'workflow_dispatch'", block)
             self.assertIn("github.event.inputs.input_mode == 'installed-environment-inventory'", block)
             self.assertIn('--profile ' + profile + ' --mode installed-environment-inventory', block)

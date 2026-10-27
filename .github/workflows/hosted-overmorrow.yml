@@ -8,7 +8,7 @@ on:
         description: Historical build, input data or installed environment inventory
         type: choice
         default: historical-v1
-        options: [historical-v1, source-input-inventory, installed-environment-inventory]
+        options: [historical-v1, source-input-inventory, installed-environment-inventory, runtime-boundary-verification]
   push:
     branches: [feature/hosted-overmorrow]
     paths:
@@ -232,6 +232,59 @@ jobs:
           if-no-files-found: warn
           path: build/hosted-overmorrow-input-candidate-public
       - name: Remove private package data only after installer cleanup
+        if: always()
+        run: |
+          set -euo pipefail
+          test "$GITHUB_WORKSPACE" = "$(pwd -P)"
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          python3 -B scripts/prepare_hosted_client_inputs.py --profile overmorrow --mode cleanup-input-data
+
+  runtime-boundary:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.input_mode == 'runtime-boundary-verification'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check fixed source and inert runtime boundary contracts
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --short --untracked-files=all)"
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(id -u)" != 0
+          umask 077
+          mkdir -m 700 -p build
+          python3 -B -m unittest discover -s tests -p 'test_hosted_client_environment.py'
+          python3 -B -m unittest discover -s tests -p 'test_hosted_client_runtime.py'
+      - name: Retrieve the existing pinned Browser helper source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: VOLPAROSSA/volparossa-browser
+          ref: 08bac388a0abfd06426bebe8f6fabd0157d2e709
+          path: build/hosted-browser-source
+          persist-credentials: false
+      - name: Verify both closed runtime views without application builds
+        run: |
+          set -euo pipefail
+          umask 077
+          timeout --signal=TERM --kill-after=60s 2400s python3 -B scripts/prepare_hosted_client_inputs.py --profile overmorrow --mode runtime-boundary-verification
+      - name: Project only closed metadata
+        if: always()
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 -B scripts/prepare_hosted_client_inputs.py --profile overmorrow --mode stage-input-metadata
+      - name: Retain runtime boundary metadata only
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: hosted-weather-runtime-boundary-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: build/hosted-overmorrow-input-candidate-public
+      - name: Remove private inputs after confirmed process and policy cleanup
         if: always()
         run: |
           set -euo pipefail

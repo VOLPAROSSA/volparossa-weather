@@ -41,6 +41,7 @@ LIMIT = 2 * 1024**2
 GIB = 1024**3
 LOGS = []
 DRAIN_CONFIRMED = True
+BOUNDARY = None  # Explicit reviewed manual mode; historical execution is unchanged.
 BASE_ENV = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
             "PYTHONDONTWRITEBYTECODE": "1", "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_TERMINAL_PROMPT": "0"}
@@ -106,6 +107,24 @@ def private_directory(path):
     path.mkdir(mode=0o700)
     require(path.resolve() == path and stat.S_IMODE(path.stat().st_mode) == 0o700
             and path.stat().st_uid == os.getuid(), "PRIVATE_DIRECTORY_REQUIRED")
+
+
+def require_runtime_boundary():
+    # Only actual legacy events may use the preserved historical namespace.
+    # A source-mode controller cannot silently fall back to the host /usr.
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        event = os.environ.get("GITHUB_EVENT_PATH")
+        require(event is not None, "BOUNDARY_EVENT_CONTEXT_REQUIRED")
+        value = json.loads(read(Path(event), 256 * 1024), object_pairs_hook=unique)
+        require(type(value) is dict and type(value.get("inputs", {})) is dict, "BOUNDARY_EVENT_SCHEMA")
+        mode = value.get("inputs", {}).get("input_mode", "")
+        require(type(mode) is str and len(mode) <= 80, "BOUNDARY_EVENT_SCHEMA")
+        event_name = os.environ.get("GITHUB_EVENT_NAME")
+        legacy_dispatch = event_name == "workflow_dispatch" and mode == "historical-v1"
+        legacy_push = event_name == "push" and mode == "" and (os.environ.get("GITHUB_WORKFLOW"),
+            os.environ.get("GITHUB_REF")) in (("Build hosted Weather clients", "refs/heads/feature/hosted-weather-clients"),
+                ("Build hosted Overmorrow client", "refs/heads/feature/hosted-overmorrow"))
+        require(legacy_dispatch or legacy_push or BOUNDARY is not None, "RUNTIME_BOUNDARY_REQUIRED")
 
 
 def available_memory():
@@ -425,7 +444,7 @@ def verify_runtime_closure(files):
 
 def environment(network=False):
     # No inherited proxy, auth, npm, Node, HOME, Git credential or telemetry settings.
-    return dict(BASE_ENV, PATH=str(NODE.parent) + ":/usr/bin:/bin", HOME="/home/runner",
+    value = dict(BASE_ENV, PATH=str(NODE.parent) + ":/usr/bin:/bin", HOME="/home/runner",
         npm_config_userconfig="/state/user.npmrc", npm_config_globalconfig="/state/global.npmrc",
         npm_config_cache="/state/npm-cache", npm_config_registry="https://registry.npmjs.org/",
         npm_config_ignore_scripts="true", npm_config_audit="false", npm_config_fund="false",
@@ -433,37 +452,48 @@ def environment(network=False):
         npm_config_fetch_timeout="30000", NODE_OPTIONS="--max-old-space-size=768",
         PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD="1", VITE_VOLPAROSSA_WEATHER="1",
         CI="true", NO_COLOR="1", DO_NOT_TRACK="1")
+    if BOUNDARY is not None:
+        value['XDG_CACHE_HOME'] = '/state/cache'
+    return value
 
 
 def sandbox(command, *, mode, writable=None):
+    require_runtime_boundary()
     require(mode in ("acquire", "compile", "browser"), "SANDBOX_MODE")
     argv = ["/usr/bin/prlimit", "--core=0", "--cpu=300", "--nofile=1024", "--",
         "/usr/bin/bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid",
-        "--unshare-ipc", "--unshare-uts", "--tmpfs", "/", "--ro-bind", "/usr", "/usr",
+        "--unshare-ipc", "--unshare-uts", "--tmpfs", "/"]
+    argv += BOUNDARY.system_mounts() if BOUNDARY is not None else ["--ro-bind", "/usr", "/usr",
         "--symlink", "usr/bin", "/bin", "--symlink", "usr/lib", "/lib", "--symlink", "usr/lib64", "/lib64",
-        "--dir", "/etc", "--ro-bind", "/etc/ld.so.cache", "/etc/ld.so.cache",
+        "--dir", "/etc", "--ro-bind", "/etc/ld.so.cache", "/etc/ld.so.cache"]
+    argv += [
         "--ro-bind", str(OUTPUT / "passwd"), "/etc/passwd",
         "--ro-bind", str(OUTPUT / "group"), "/etc/group",
         "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
         # A separate private mount is needed for --remount-ro below. Create it
         # BEFORE the reviewed source bind: hosted checkout paths live beneath
         # /home/runner/work, and a later home mount would hide that source.
-        "--dir", "/home", "--tmpfs", "/home/runner",
-        "--ro-bind", str(ROOT), str(ROOT), "--tmpfs", str(OUTPUT)]
+        "--dir", "/home", "--tmpfs", "/home/runner"]
+    argv += BOUNDARY.source_mounts(mode) if BOUNDARY is not None else ["--ro-bind", str(ROOT), str(ROOT)]
+    argv += ["--tmpfs", str(OUTPUT)]
     if mode == "acquire":
-        argv += ["--ro-bind", str(Path("/etc/resolv.conf").resolve()), "/etc/resolv.conf",
-                 "--ro-bind", "/etc/ssl/certs", "/etc/ssl/certs"]
+        argv += BOUNDARY.acquisition_mounts() if BOUNDARY is not None else [
+            "--ro-bind", str(Path("/etc/resolv.conf").resolve()), "/etc/resolv.conf",
+            "--ro-bind", "/etc/ssl/certs", "/etc/ssl/certs"]
     else:
         argv += ["--unshare-net"]
     if mode == "browser":
         require(writable == PROOF, "BROWSER_OUTPUT_REQUIRED")
-        argv += ["--ro-bind", "/etc/fonts", "/etc/fonts", "--bind", str(PROOF), str(PROOF),
+        argv += ([] if BOUNDARY is not None else ["--ro-bind", "/etc/fonts", "/etc/fonts"])
+        argv += ["--bind", str(PROOF), str(PROOF),
                  "--dir", "/home/runner/.mozilla", "--bind", str(PROOF / "appdata"), "/home/runner/.mozilla"]
     else:
         require(writable in (None, STAGE), "BUILD_OUTPUT_REQUIRED")
         argv += ["--bind", str(PRIVATE), "/state"]
         if writable is not None:
             argv += ["--bind", str(writable), str(writable)]
+    if BOUNDARY is not None:
+        argv += ["--remount-ro", "/home/runner/work"]
     argv += ["--remount-ro", "/home/runner", "--remount-ro", "/",
              "--chdir", str(STAGE if writable == STAGE else ROOT), "--", *command]
     return argv
@@ -502,6 +532,9 @@ print(json.dumps(dict(schema=1,kind='hosted-client-sandbox-preflight',mode=mode,
 
 
 def preflight(mode):
+    require_runtime_boundary()
+    if BOUNDARY is not None:
+        return BOUNDARY.preflight(mode)
     work = PROOF if mode == "browser" else STAGE
     raw = run("preflight-" + mode, sandbox(["/usr/bin/python3", "-I", "-c", PROBE,
         str(os.getuid()), os.readlink("/proc/self/ns/net"), str(ROOT), str(work), mode],
@@ -581,23 +614,24 @@ def installed_cli(name):
     return path
 
 
-def verify_firefox_copy(files):
+def verify_firefox_copy(files, *, root=None):
+    root = root if root is not None else (BOUNDARY.firefox_copy if BOUNDARY is not None else FIREFOX)
     expected = {"volparossa-staging.json", "volparossa.cfg", "defaults/pref/volparossa-autoconfig.js"}
     for relative, entry in files.items():
         if relative.startswith("firefox/"):
             name = relative.removeprefix("firefox/")
             expected.add(name)
-            path = FIREFOX / name
+            path = root / name
             require(digest(path) == {key: entry[key] for key in ("bytes", "sha256")}, "FIREFOX_COPY_CHANGED")
     actual = set()
-    for path in FIREFOX.rglob("*"):
+    for path in root.rglob("*"):
         require(not path.is_symlink(), "FIREFOX_COPY_LINK")
         if not path.is_dir():
-            actual.add(str(path.relative_to(FIREFOX)))
+            actual.add(str(path.relative_to(root)))
             require(len(actual) <= 4096, "FIREFOX_COPY_BOUND")
     require(actual == expected, "FIREFOX_COPY_EXTRA_OR_MISSING")
-    require(not (FIREFOX / "browser/defaults/syspref").exists()
-            and not (FIREFOX / "distribution").exists(), "HOST_PREFERENCES_IMPORTED")
+    require(not (root / "browser/defaults/syspref").exists()
+            and not (root / "distribution").exists(), "HOST_PREFERENCES_IMPORTED")
 
 
 def browser_command(netns):
@@ -608,6 +642,7 @@ def browser_command(netns):
 
 
 def execute(helper, platform):
+    require_runtime_boundary()
     installed = attempted = success = False
     phase = "baseline"
     start = time.monotonic()
@@ -625,11 +660,13 @@ def execute(helper, platform):
         save("baseline.json", baseline)
         runtime = runtime_inventory()
         save("runtime-binding.json", runtime)
-        private_directory(PRIVATE)
+        if BOUNDARY is None:
+            private_directory(PRIVATE)
         write(OUTPUT / "passwd", f"runner:x:{os.getuid()}:{os.getgid()}:CI:/home/runner:/bin/false\n".encode())
         write(OUTPUT / "group", f"runner:x:{os.getgid()}:\n".encode())
-        write(PRIVATE / "user.npmrc", b"")
-        write(PRIVATE / "global.npmrc", b"")
+        if BOUNDARY is None:
+            write(PRIVATE / "user.npmrc", b"")
+            write(PRIVATE / "global.npmrc", b"")
         phase = "policy-install"
         print("Disposable hosted CI only: install scoped bwrap setup/denied-capability child profiles; remove after namespace drain; do not change userns sysctls.", flush=True)
         installed = True
@@ -637,6 +674,15 @@ def execute(helper, platform):
         helper.staged_owned(platform)
         attempted = True
         helper.process(["/usr/bin/sudo", "-n", helper.PARSER, "--add", "--skip-cache", str(helper.STAGED)], 10)
+        if BOUNDARY is not None:
+            if BOUNDARY.view.cache_sha is None:
+                BOUNDARY.prepare_cache()
+            else:
+                BOUNDARY.check()
+            private_directory(PRIVATE)
+            private_directory(PRIVATE / "cache")
+            write(PRIVATE / "user.npmrc", b"")
+            write(PRIVATE / "global.npmrc", b"")
         phase = "public-acquisition"
         # Reviewed standard-library staging only, with sanitized credential-free
         # environment. No downloaded source is executed in these two steps.
@@ -668,10 +714,13 @@ def execute(helper, platform):
             require(not path.is_symlink() and path.stat().st_uid == os.getuid(), "BUILT_ASSET_TYPE")
             os.chmod(path, stat.S_IMODE(path.stat().st_mode) & ~0o022)
         phase = "firefox-staging"
-        run("firefox-stage", ["/usr/bin/python3", "-B", str(BROWSER / "scripts/stage_firefox.py"),
-            "--firefox", str(RUNTIME / "firefox/firefox-esr"), "--output", str(FIREFOX),
-            "--expected-version", FIREFOX_VERSION, "--expected-source-stamp", FIREFOX_SOURCE_STAMP,
-            "--without-extensions"], 90)
+        if BOUNDARY is None:
+            run("firefox-stage", ["/usr/bin/python3", "-B", str(BROWSER / "scripts/stage_firefox.py"),
+                "--firefox", str(RUNTIME / "firefox/firefox-esr"), "--output", str(FIREFOX),
+                "--expected-version", FIREFOX_VERSION, "--expected-source-stamp", FIREFOX_SOURCE_STAMP,
+                "--without-extensions"], 90)
+        elif not BOUNDARY.firefox_ready:
+            BOUNDARY.stage_firefox()
         files = document(RUNTIME / "provenance.json")["files"]
         verify_firefox_copy(files)
         private_directory(PROOF)

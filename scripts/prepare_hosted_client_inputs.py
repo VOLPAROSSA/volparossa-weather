@@ -675,6 +675,7 @@ PUBLIC_NAMES = frozenset(('dependency-candidate.json', 'dependency-candidate.par
     'installer-install-cleanup.json', 'installer-simulation-stderr.log', 'installer-install-stderr.log', 'installed-packages-before.tsv',
     'installed-packages-after.tsv', 'install-simulation.log', 'install.log', 'provisioning-bootstrap.json', 'installer-companions.json',
     'installer-cache-before.json', 'installer-cache-after.json',
+    'runtime-boundary-started.json', 'runtime-boundary.json', 'runtime-boundary-cleanup.json', 'runtime-boundary-diagnostics.json',
     'result.json', 'apt-update.log', 'apt-failure.log', 'apt-resolver.log', 'runner-packages.tsv', 'package-lock.json', 'pubspec.lock',
     'noble.InRelease', 'noble-updates.InRelease', 'noble-security.InRelease',
     'noble.signature.log', 'noble-updates.signature.log', 'noble-security.signature.log'))
@@ -786,6 +787,12 @@ def cleanup_candidate(profile):
                 receipt = document(read(source / ('installer-' + label + '-cleanup.json')))
                 require(receipt.get('owned_session_drained') is True and receipt.get('leader_reaped') is True,
                     'INSTALLER_CLEANUP_UNCONFIRMED')
+        runtime_marker = source / 'runtime-boundary-started.json'
+        if runtime_marker.exists() or runtime_marker.is_symlink():
+            document(read(runtime_marker))
+            receipt = document(read(source / 'runtime-boundary-cleanup.json'))
+            require(receipt.get('process_drain_confirmed') is True and receipt.get('policy_removed') is True,
+                'RUNTIME_BOUNDARY_CLEANUP_UNCONFIRMED')
         remove_empty_installer_partial(source)
         shutil.rmtree(source)
     public = source.with_name(source.name + '-public')
@@ -801,7 +808,8 @@ def cleanup_candidate(profile):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--profile', choices=SOURCES, required=True)
-    parser.add_argument('--mode', choices=('source-input-inventory', 'installed-environment-inventory', 'stage-input-metadata', 'cleanup-input-data'), required=True)
+    parser.add_argument('--mode', choices=('source-input-inventory', 'installed-environment-inventory',
+        'runtime-boundary-verification', 'stage-input-metadata', 'cleanup-input-data'), required=True)
     args = parser.parse_args()
     hosted_guard(os.environ, args.profile)
     os.umask(0o077)
@@ -811,7 +819,9 @@ def main():
     if args.mode == 'stage-input-metadata':
         project_metadata(args.profile)
         return
-    package_inputs = load_package_inputs(args.profile) if args.mode == 'installed-environment-inventory' else None
+    require(args.mode != 'runtime-boundary-verification' or args.profile == 'overmorrow', 'BOUNDARY_FULL_PROFILE_REQUIRED')
+    package_inputs = load_package_inputs(args.profile) if args.mode in (
+        'installed-environment-inventory', 'runtime-boundary-verification') else None
     output = ROOT / 'build' / ('hosted-' + args.profile + '-input-candidate')
     info = output.parent.lstat()
     require(output.parent.resolve() == output.parent and stat.S_ISDIR(info.st_mode)
@@ -821,7 +831,8 @@ def main():
         weather_commit=os.environ['GITHUB_SHA'], run_id=os.environ.get('GITHUB_RUN_ID'),
         run_attempt=os.environ.get('GITHUB_RUN_ATTEMPT'), profile=args.profile,
         recipes={name: sha(read(ROOT / 'scripts' / name)) for name in
-            ('prepare_hosted_client_inputs.py', 'prepare_hosted_client_apt.py')})))
+            ('prepare_hosted_client_inputs.py', 'prepare_hosted_client_apt.py',
+             'prepare_hosted_client_runtime.py', 'prepare_hosted_source_recipe.py')})))
     phase, failure = 'ubuntu-package-closure', None
     handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
     for sig in handlers:
@@ -833,6 +844,12 @@ def main():
         if package_inputs is not None:
             phase = 'installed-environment-inventory'
             apt.installed_inventory(args.profile, output, package_inputs)
+            if args.mode == 'runtime-boundary-verification':
+                phase = 'runtime-boundary-verification'
+                spec = importlib.util.spec_from_file_location('_runtime_boundary', ROOT / 'scripts/prepare_hosted_client_runtime.py')
+                boundary = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(boundary)
+                boundary.verify(output)
         else:
             apt.candidate('web' if args.profile == 'drizzli' else 'flutter', output)
             phase = 'source-and-dependencies'
