@@ -66,17 +66,17 @@ class CandidateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'P15_UNKNOWN_GENERATED_SOURCE'):
             W['recheck_source'](self.base, expected, {})
 
-    def test_only_exact_app_version_plugin_alias_is_accepted(self):
+    def test_plugin_alias_requires_a_separate_authenticated_binding(self):
         self.file('pubspec.lock')
         root = self.base / 'linux/flutter/ephemeral/.plugin_symlinks'
         root.mkdir(mode=0o700, parents=True)
         link = root / 'plugin'
         link.symlink_to('/state/pub-cache/hosted/pub.dev/plugin-1.0.0')
         app = dict(plugin=dict(source='hosted', version='1.0.0'))
-        W['source_files'](self.base, app_packages=app)
-        for target in ('/state/pub-cache/hosted/pub.dev/plugin-2.0.0', '/private', '../plugin-1.0.0'):
+        for target in ('/state/pub-cache/hosted/pub.dev/plugin-1.0.0/',
+                       '/state/pub-cache/hosted/pub.dev/plugin-2.0.0', '/private', '../plugin-1.0.0'):
             link.unlink(); link.symlink_to(target)
-            with self.assertRaisesRegex(ValueError, 'P15_PLUGIN_SYMLINK_TARGET'):
+            with self.assertRaisesRegex(ValueError, 'P15_PLUGIN_BINDING_REQUIRED'):
                 W['source_files'](self.base, app_packages=app)
 
     def test_source_hardlinks_and_undeclared_aliases_fail_closed(self):

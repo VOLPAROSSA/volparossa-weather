@@ -1,10 +1,94 @@
 # P15 Overmorrow candidate, 2026-10-28
 
-**P15d result:** the SDK-Git correction passed the single hosted attempt.
-Offline Flutter-tool and application resolution both returned exit 0. The run
-then stopped at `P15_PLUGIN_SYMLINK_TARGET` during source sealing, before hook
-authorization, tests or compilation. All six cleanup flags passed. No additional
-run or guard relaxation followed; a successful candidate remains unverified.
+**P15e preflight:** the exact pinned producer spells desktop plugin targets as
+absolute package roots with one trailing slash. A P15-only identity binding
+authenticates the original packages and exact aliases, then checks the same
+file identities inside the unchanged compile Boundary. All 177 relevant inert
+tests pass; independent implementation review approves exactly one newly
+authorized hosted attempt. No application build is claimed yet.
+
+## P15e: exact plugin targets and namespace identities
+
+The original [P15d run 40726035128](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/40726035128)
+and its independent review are reused unchanged. They establish successful
+offline tool/app pub and a strict raw plugin-target rejection before source
+sealing. Neither the first rejected alias owner, its actual raw bytes nor the
+scanner order was retained. Those historical details cannot be recovered from
+that artifact and are not inferred from producer generation order.
+
+The necessary producer source was read only as data and matched to the original
+17,240-file SDK inventory and the already pinned `path 1.9.1` and
+`package_config 2.2.0` archive/membermap identities. No SDK/Dart code or sandbox
+ran locally. `package_config` resolves absolute directory URIs and preserves
+one trailing slash; POSIX `path.fromUri()` decodes the URI path without removing
+it. Flutter preserves that path in plugin metadata and passes it directly to
+`Link.createSync()`. The producer target is therefore exactly
+`/state/pub-cache/hosted/pub.dev/<name>-<app-version>/`. The old guard expected
+the spelling without the final slash. Only the reviewed producer spelling is
+now admitted; relative paths, the no-slash spelling, extra slashes, traversal,
+encoded aliases, wrong versions and other roots are rejected.
+
+The new [plugin record](../third_party/overmorrow-plugin-inputs-v1.json), SHA256
+`e30efbcab48d215b1a545727d075a63692b8bbca5b23d6c09d629b07838b2d9e`,
+reuses 13 original complete package membermaps, exact app versions/archive
+hashes/pubspecs and 16 source-derived alias definitions. There are eight Linux
+and eight Windows entries, including eight Dart-only entries: Flutter creates
+links for all desktop metadata rows, not only native-build rows. Actual alias
+presence is conditional on the original project platform roots (Windows also
+requires `CMakeLists.txt`), using the original default feature settings.
+
+The original `.flutter-plugins-dependencies` desktop rows must exactly match
+their source-derived names, paths, dependency lists, native flags and dev flags.
+Full post-pub dependency/configuration/plugin verification runs before alias
+admission. Original source and generated-file checks remain active.
+
+The [P15 plugin helper](../scripts/prepare_hosted_overmorrow_plugins.py) captures
+cache/package/file identities before pub. It walks directories with
+`O_DIRECTORY|O_NOFOLLOW`, reads files through bounded no-follow descriptors,
+authenticates complete membership/bytes/hashes/modes, and rejects inode or
+directory replacement even with identical bytes. Each alias inode is held via
+Linux `O_PATH|O_NOFOLLOW` and read with `readlinkat`; its raw target is never
+opened. Only the separately authorized cache/package path is opened through
+non-following components. Persistent host ancestor identities, sealed alias
+identities and pre/post checks prevent path substitution. There is no generic
+`resolve()` approval or whole plugin-directory exception.
+
+A private hash- and identity-bound plan carries that original baseline through
+the existing `/state` mount. The same pure-stdlib helper runs inline through the
+unchanged compile Boundary, comparing the actual stage/cache/private bind roots
+and every selected package/file identity to the host baseline. Different
+namespace prefix-directory identities are not confused with bind-root identity.
+The plan is checked before and after each proof. The public proof contains only
+controlled alias/package/version identities, original source/membermap hashes
+and fixed booleans; rejection metadata contains a controlled alias identity,
+target form, length and hash, never a raw target, host path or environment.
+No shared source export, sandbox mount, capability or runtime helper changes.
+
+Validation: 177 relevant inert tests pass, including 33 plugin tests and the
+existing 31 candidate tests. Coverage includes actual producer spelling,
+absolute/relative variants, versions, escapes/chains, unknown/missing/extra
+aliases, changed bytes, identical-byte inode replacement, ancestor/private-plan
+replacement, FD cleanup, incrementally bounded scans, single sealing and the
+actual probe main/response protocol with an inert namespace-path mapping.
+The separate real-data proof authenticates all 13 original archives, 5,381,052
+expanded bytes, all 16 aliases and repeat identity checks; all temporary
+materialized package data is removed. This is source/data proof, not a real
+namespace, hook or application build claim.
+The exact SDK lifecycle source also confirms that the fixed `test --no-pub`
+and `build web --no-pub` paths skip desktop platform regeneration; they do not
+require resealing recreated aliases. Runtime identity checks remain active.
+This bounded source proof has SHA256
+`35184197ab04181071a91ca2332961d89b02014ab7aafa2414b0f774873c2238`.
+
+Independent source/data review SHA256:
+`0dfaa89f85d071ad6b6edb5a5a3d5d7ecdd8400ba18258bc4f8137c4a19a2ca5`.
+The independent final implementation review, SHA256
+`10c8bc36e56547b521efac33a9fcec51c62360c18eba6639ccc072cf46851791`,
+repeats 64 affected tests, verifies all six changed executable/data/test inputs
+and gives GO for exactly one bounded manual attempt with no open findings.
+Private evidence is retained in `build/p15e-investigation/`,
+`build/p15e-inert-tests/` and `build/p15e-review/`. Earlier failures remain
+separate. No P13/P14/Core change, dependency upgrade or release follows.
 
 ## P15d: immutable SDK index and Git 2.43.0
 

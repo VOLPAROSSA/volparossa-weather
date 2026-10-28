@@ -31,8 +31,10 @@ MAX_STAGE_ENTRIES = 20000
 OWNED_SOURCE = ('scripts/prepare_hosted_overmorrow_candidate.py',
                 'scripts/prepare_hosted_overmorrow_dependencies.py',
                 'scripts/prepare_hosted_overmorrow_hooks.py',
+                'scripts/prepare_hosted_overmorrow_plugins.py',
                 'third_party/overmorrow-tool-inputs-v1.json',
                 'third_party/overmorrow-hook-inputs-v1.json',
+                'third_party/overmorrow-plugin-inputs-v1.json',
                 '.github/workflows/hosted-overmorrow.yml')
 GENERATED_PLATFORM_FILES = frozenset((
     '.flutter-plugins-dependencies', '.flutter-plugins', 'android/local.properties',
@@ -143,13 +145,14 @@ def guards():
     _, changed = helper.process(['/usr/bin/git', '-C', str(ROOT), 'diff', '--name-only', BASE, 'HEAD'], 10)
     allowed = set(OWNED_SOURCE) | {'tests/test_hosted_overmorrow_candidate.py',
         'tests/test_hosted_overmorrow_dependencies.py', 'tests/test_hosted_overmorrow_hooks.py',
+        'tests/test_hosted_overmorrow_plugins.py',
         'docs/P15_OVERMORROW_CANDIDATE.md'}
     require(set(changed.decode().splitlines()) <= allowed, 'P15_SHARED_SOURCE_CHANGED')
     helper.process(['/usr/bin/git', '-C', str(ROOT), 'diff', '--quiet', 'HEAD', '--'], 10)
     return helper, platform
 
 
-def source_files(stage, *, app_packages=None):
+def source_files(stage, *, app_packages=None, plugin_aliases=None):
     """Seal application inputs, excluding Git metadata, before any SDK runs."""
     files, total, count = {}, 0, 0
     pending = [stage]
@@ -169,9 +172,8 @@ def source_files(stage, *, app_packages=None):
                     match = re.fullmatch(r'(?:linux|windows)/flutter/ephemeral/\.plugin_symlinks/([a-z0-9_]+)', name)
                     require(match is not None and app_packages is not None
                             and match[1] in app_packages and app_packages[match[1]]['source'] == 'hosted', 'P15_SOURCE_ALIAS')
-                    item = app_packages[match[1]]
-                    require(os.readlink(path) == '/state/pub-cache/hosted/pub.dev/' + match[1] + '-' + item['version'],
-                            'P15_PLUGIN_SYMLINK_TARGET')
+                    require(plugin_aliases is not None, 'P15_PLUGIN_BINDING_REQUIRED')
+                    plugin_aliases.check_leaf(name, info)
                     continue
                 require(stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode), 'P15_SOURCE_ALIAS')
                 require(info.st_uid == os.getuid() and not info.st_mode & 0o022, 'P15_SOURCE_FILE')
@@ -187,8 +189,8 @@ def source_files(stage, *, app_packages=None):
     return files
 
 
-def recheck_source(stage, expected, app_packages):
-    actual = source_files(stage, app_packages=app_packages)
+def recheck_source(stage, expected, app_packages, plugin_aliases=None):
+    actual = source_files(stage, app_packages=app_packages, plugin_aliases=plugin_aliases)
     generated = {}
     localizations = {'lib/l10n/app_localizations.dart'}
     for name in expected:
@@ -210,10 +212,11 @@ def recheck_source(stage, expected, app_packages):
                 generated_localization_files=len(generated), generated_localization_sha256=I.sha(I.canonical(generated)))
 
 
-def seal_app_sources(stage, app_packages):
+def seal_app_sources(stage, app_packages, plugin_aliases=None):
     # Generated compilation state is not source authority. All source and
     # platform-generator outputs are sealed after the sole app-pub operation.
-    return {name: digest for name, digest in source_files(stage, app_packages=app_packages).items()
+    return {name: digest for name, digest in source_files(stage, app_packages=app_packages,
+            plugin_aliases=plugin_aliases).items()
             if not name.startswith(('.dart_tool/', 'build/'))
             and name != 'test/volparossa/fixtures/products.json'}
 
@@ -368,6 +371,9 @@ def execute():
         cache.mkdir(mode=0o700)
         details['dependencies_prepared'] = deps.prepare(cache, sdk)
         details['dependencies_initial'] = deps.verify(cache, sdk)
+        plugins = module('prepare_hosted_overmorrow_plugins')
+        plugin_aliases = plugins.Binding(STAGE, cache,
+            I.read(ROOT / 'third_party/overmorrow-plugin-inputs-v1.json', 1024**2))
         phase = 'offline-preflight'
         details['compile_preflight'] = O.preflight('compile')
         runtime_before = H.runtime_inventory()
@@ -375,19 +381,33 @@ def execute():
         app_packages = I.pub_lock(I.read(ROOT / 'third_party/client-locks/overmorrow-pubspec.lock'))
         tool_ready = False
         sealed_app = None
+        def verify_plugins():
+            plugin_aliases.check_probe_input(H.PRIVATE)
+            expected = plugin_aliases.verify()
+            proofs = details.setdefault('plugin_namespace_proofs', [])
+            require(len(proofs) < 8, 'P15_PLUGIN_PROOF_COUNT')
+            raw = H.run('p15-plugins-' + str(len(proofs)),
+                O.sandbox(plugin_aliases.probe_command(), mode='compile'), 60,
+                env=O.environment(), memory=O.FLUTTER_MEMORY)
+            plugin_aliases.check_probe_input(H.PRIVATE)
+            proofs.append(plugin_aliases.accept_probe(raw, expected))
         def verify_inputs(with_config=False):
             boundary.check()
             require(H.runtime_inventory() == runtime_before, 'P15_RUNTIME_CHANGED')
             checked = SDKGitChecks(helper, details.setdefault('sdk_git_checks', []))
             O.verify_phase_inputs(checked, I.document(I.read(ROOT / 'integrations/overmorrow/upstream.json')))
             require(checked.index == 3, 'P15_SDK_GIT_CALL_COUNT')
-            details['source'] = recheck_source(STAGE, expected_source, app_packages)
+            details['dependencies_final'] = deps.verify(cache, sdk, STAGE if with_config else None,
+                tool_state=O.SDK_TOOL_STATE if tool_ready else None)
+            if sealed_app is not None:
+                verify_plugins()
+            details['source'] = recheck_source(STAGE, expected_source, app_packages,
+                plugin_aliases if sealed_app is not None else None)
             require(stage_git == {name: I.sha(I.read(STAGE / '.git' / name))
                 for name in stage_git}, 'P15_STAGE_GIT_CHANGED')
             if sealed_app is not None:
-                require(seal_app_sources(STAGE, app_packages) == sealed_app, 'P15_GENERATED_APP_SOURCE_CHANGED')
-            details['dependencies_final'] = deps.verify(cache, sdk, STAGE if with_config else None,
-                tool_state=O.SDK_TOOL_STATE if tool_ready else None)
+                require(seal_app_sources(STAGE, app_packages, plugin_aliases) == sealed_app,
+                        'P15_GENERATED_APP_SOURCE_CHANGED')
         phase = 'p15-tool-pub-offline'
         verify_inputs()
         H.run(phase, O.sandbox(tool_command(), mode='compile'), 180,
@@ -410,7 +430,14 @@ def execute():
                     details['hook_execution_unverified'] = hook_run.failure_observation()
                 raise
             if action == 'dependencies-offline':
-                sealed_app = seal_app_sources(STAGE, app_packages)
+                # Authenticate all generated package/plugin metadata before any
+                # alias admission. Both host and original compile namespace
+                # must prove the same original package/file identities.
+                details['dependencies_final'] = deps.verify(cache, sdk, STAGE, tool_state=O.SDK_TOOL_STATE)
+                details['plugins_sealed'] = plugin_aliases.seal()
+                plugin_aliases.write_probe_input(H.PRIVATE)
+                verify_plugins()
+                sealed_app = seal_app_sources(STAGE, app_packages, plugin_aliases)
                 fixture = STAGE / 'test/volparossa/fixtures/products.json'
                 fixture.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 H.run('p15-test-fixtures', O.sandbox([str(H.NODE),
@@ -453,6 +480,8 @@ def execute():
             code=code if re.fullmatch(r'[A-Z0-9_]{1,100}', code) else 'P15_OPERATION_FAILED')
         if isinstance(error, SDKGitFailure):
             failure['sdk_git'] = error.sdk_git_failure
+        if 'plugins' in locals() and isinstance(error, plugins.PluginFailure):
+            details['plugin_rejection'] = error.plugin_failure
         observation = getattr(error, 'observation', None)
         if observation is not None:
             require(type(observation) is dict and set(observation) == {'code', 'package', 'version', 'hook'}
