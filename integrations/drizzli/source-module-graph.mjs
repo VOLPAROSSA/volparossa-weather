@@ -4,9 +4,21 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 
+/**
+ * Optional absent fields preserve the existing graph's JSON omission.
+ * @typedef {import('rolldown').RenderedModule & {
+ *   originalLength?: undefined,
+ *   removedExports?: undefined
+ * }} GraphRenderedModule
+ */
+
+/** @returns {import('vite').Plugin<unknown>} */
 export default function sourceModuleGraph() {
+  /** @type {string} */
   let root;
+  /** @type {string[]} */
   let plugins;
+  /** @param {string} id */
   const normalize = (id) => {
     if (id.startsWith('\0')) return { id, kind: 'virtual', producer: null };
     const path = relative(root, id.split('?')[0]);
@@ -28,7 +40,9 @@ export default function sourceModuleGraph() {
           imports: [...item.imports].sort(), dynamicImports: [...item.dynamicImports].sort(),
           facadeModuleId: item.facadeModuleId === null ? null : normalize(item.facadeModuleId),
           moduleIds: item.moduleIds.map(normalize),
-          modules: Object.entries(item.modules).sort().map(([id, info]) => ({
+          modules: Object.entries(item.modules).sort().map(
+            /** @param {[string, GraphRenderedModule]} entry */
+            ([id, info]) => ({
             ...normalize(id), renderedLength: info.renderedLength, originalLength: info.originalLength,
             renderedExports: info.renderedExports, removedExports: info.removedExports,
           })),
