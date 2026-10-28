@@ -83,7 +83,7 @@ This bounded source proof has SHA256
 Independent source/data review SHA256:
 `0dfaa89f85d071ad6b6edb5a5a3d5d7ecdd8400ba18258bc4f8137c4a19a2ca5`.
 The independent final implementation review, SHA256
-`10c8bc36e56547b521efac33a9fcec51c62360c18eba6639ccc072cf46851791`,
+`8d03a1a322da9b4da1a646c716f953a414a73bc34bcb982dc45611fc6f1093bb`,
 repeats 64 affected tests, verifies all six changed executable/data/test inputs
 and gives GO for exactly one bounded manual attempt with no open findings.
 Private evidence is retained in `build/p15e-investigation/`,
