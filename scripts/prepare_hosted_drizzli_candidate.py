@@ -227,8 +227,8 @@ def check_optional_cache(stage, anchor):
         and stat.S_IMODE(info.st_mode) == 0o500 and not any(path.iterdir()), 'P14_OPTIONAL_CACHE_CHANGED')
 
 
-def source_notices(inputs, h):
-    """Preserve original text in candidate output, never assert graph coverage."""
+def source_notices(inputs, h, archives):
+    """Preserve original texts; graph/output checks separately establish coverage."""
     notices, bundle = inputs.notice_inputs()
     target = h.STAGE / 'build' / 'VOLPAROSSA-NOTICES'
     target.mkdir(mode=0o700)
@@ -244,10 +244,14 @@ def source_notices(inputs, h):
         inputs.write(target / name, raw)
         hashes[name] = dict(bytes=len(raw), sha256=sha(raw))
     require(sha(bundle) == hashes['npm-originals.txt']['sha256'], 'P14_NOTICE_BUNDLE_CHANGED')
+    for path, item in module('prepare_hosted_drizzli_provenance').notices(inputs, archives).items():
+        inputs.write(h.STAGE / 'build' / path, item['raw'])
+        hashes[Path(path).name] = dict(bytes=item['bytes'], sha256=item['sha256'])
     return hashes
 
 
-def graph_report(inputs, stage, package_records):
+def graph_report(inputs, stage, package_records, *, archives=None, output_map=None,
+        source_seal=None, notice_records=None):
     directory = stage / '.volparossa-source-graphs'
     require(directory.resolve() == directory and directory.is_dir(), 'P14_GRAPHS_MISSING')
     paths = sorted(directory.iterdir())
@@ -261,14 +265,25 @@ def graph_report(inputs, stage, package_records):
         graphs.append(inputs.document(raw))
         hashes[path.name] = dict(bytes=len(raw), sha256=sha(raw))
     try:
-        needed = inputs.graph_notice_closure(graphs, package_records)
+        if archives is None:
+            # Legacy observations never gain virtual-module authority. This
+            # path remains useful for retained schema1 diagnostic validation.
+            needed = inputs.graph_notice_closure(graphs, package_records)
+            coverage = None
+        else:
+            provenance = module('prepare_hosted_drizzli_provenance')
+            closure = provenance.graph_closure(inputs, graphs, archives)
+            needed = closure['notices']
+            coverage = provenance.output_closure(inputs, stage, output_map, source_seal,
+                notice_records, graphs, closure)
     except ValueError as error:
         code = str(error)
         require(re.fullmatch(r'[A-Z][A-Z0-9_]{0,79}', code) is not None, 'P14_GRAPH_FAILURE_CODE')
         return receipt('p14-output-module-graph', graphs=hashes, closure_complete=False,
             failure=code, virtual_module_authority=False), graphs
     return receipt('p14-output-module-graph', graphs=hashes, closure_complete=True,
-        notices=sorted(needed), virtual_module_authority=False), graphs
+        notices=sorted(needed), output_notice_coverage=coverage,
+        virtual_module_authority=False), graphs
 
 
 def build():
@@ -364,12 +379,26 @@ def build():
         h.preflight('compile')
         phase = 'dependencies-acquisition'
         record = dependencies.acquire(h.PRIVATE)
+        module('prepare_hosted_drizzli_provenance').notices(inputs, record['packages'])
         phase = 'dependencies-offline-installation'
         dependency_result = dependencies.install(h, record)
         check_optional_cache(STAGE, optional_cache)
         check_source_inputs(inputs, STAGE, source_seal)
         inputs.write(OUTPUT / 'p14-dependencies.json', encoded(receipt('p14-installed-dependencies',
             installation=dependency_result)))
+        # The exact pure first-party guards used by the observer are exercised
+        # with this authenticated Node, before any application source compiler.
+        # No Vite, native binding, dependency or upstream code is imported here.
+        phase = 'virtual-module-negative-tests'
+        dependencies.check_execution_tree(h, record)
+        boundary.check()
+        h.run('p14-virtual-module-negative-tests', h.sandbox([str(h.NODE),
+            str(STAGE / 'test-virtual-module-guards.mjs')], mode='compile', writable=STAGE),
+            30, env=h.environment(), memory=h.compilation_memory('typecheck'))
+        dependencies.check_execution_tree(h, record)
+        check_source_inputs(inputs, STAGE, source_seal)
+        check_optional_cache(STAGE, optional_cache)
+        boundary.check()
         phase = 'offline-compilation'
         generated_metadata = False
         for name, cli, arguments, seconds in h.compile_commands():
@@ -404,13 +433,15 @@ def build():
             require(not path.is_symlink() and info.st_uid == os.getuid()
                 and (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)), 'P14_OUTPUT_TYPE')
             os.chmod(path, stat.S_IMODE(info.st_mode) & ~0o022)
-        notice_records = source_notices(inputs, h)
+        notice_records = source_notices(inputs, h, record['packages'])
         output_map = inputs.output_inventory(STAGE / 'build')
         inputs.write(OUTPUT / 'p14-output.json', encoded(receipt('p14-candidate-output',
             build_produced=produced, files=output_map, original_notice_files=notice_records,
             independent_reproduction=False, assets_exported=False)))
         graph, _graphs = graph_report(inputs, STAGE,
-            {name: entry['input'] for name, entry in pins['dependencies']['packages'].items()})
+            {name: entry['input'] for name, entry in pins['dependencies']['packages'].items()},
+            archives=record['packages'], output_map=output_map, source_seal=source_seal,
+            notice_records=notice_records)
         graph['observed_graphs'] = _graphs
         graph_raw = encoded(graph)
         require(len(graph_raw) <= 32 * 1024**2, 'P14_GRAPH_TOTAL_BOUND')
@@ -492,6 +523,8 @@ def project():
     # Original notice input bundle and upstream licenses only; no application assets.
     notices, _bundle = inputs.notice_inputs()
     copy(ROOT / notices['npm']['bundle'], 'npm-originals.txt', 16 * 1024**2)
+    for item in module('prepare_hosted_drizzli_provenance').notices(inputs).values():
+        copy(ROOT / item['source'], Path(item['output']).name, 128 * 1024)
     for source_name, public_name in (('LICENSE', 'LICENSE.DRIZZLI'), ('LICENSE.VOLPAROSSA', 'LICENSE.VOLPAROSSA')):
         source = STAGE / source_name
         if source.exists():

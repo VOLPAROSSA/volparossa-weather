@@ -67,8 +67,9 @@ precede provisioning. No automatically retried candidate round is provided.
    phase. Optional cache write failures are caught in the pinned source. No
    wildcard generated state in `project.inlang` is authorized.
 7. Hash generated output, retain original licenses/notices and collect module
-   graphs. Existing graph/notice closure rejects unreviewed virtual modules;
-   output observations never authorize new producers or become expected pins.
+   graphs. P14e binds four exact source-derived virtual producers as described
+   below; unknown or changed modules fail closed. Output observations never
+   authorize new producers or become expected pins.
 8. Confirm process drain and remove the scoped policy. Project only bounded
    UTF-8 metadata, exact child logs and original notices. Upload no application
    assets, tarballs, SDKs, runtime files or dependency caches. Finally remove
@@ -156,3 +157,77 @@ review. Existing installation/localization/integrity/cleanup evidence is reused;
 the build still performs its necessary guards on its fresh disposable runner.
 Any independent next blocker stops that one attempt. Output/module notices,
 cold-build comparison and product admission remain separate gates.
+
+## P14e: exact virtual producers and actual-output notices
+
+[Run 40726067628](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/40726067628)
+on `0722d3d375a02e85306ad3086041a7c9e9cbe790` established a successful full typecheck
+and production command, then refused the four unbound virtual IDs. Its original
+93-file inventory and two schema1 graphs are retained unchanged. They contain no
+virtual source bytes or output-code hashes and cannot retrospectively close this gate.
+
+| Virtual ID (escaped NUL) | Exact producer and inputs | Original notice |
+| --- | --- | --- |
+| `\0virtual:__sveltekit/env` | Kit 2.70.1 `vite-plugin-sveltekit-virtual-modules.load`, `create_sveltekit_env(null, env.all, null)`; 359 fixed bytes | Kit MIT, existing npm bundle |
+| `\0virtual:__sveltekit/server` | Same Kit loader, fixed dedented server template; 195 bytes | Kit MIT, existing npm bundle |
+| `\0vite/preload-helper.js` | Vite 8.3.1 environment callback creates the exact native Rolldown import-analysis instance; client relative base, polyfill true; 2198 bytes | Original complete Vite LICENSE.md |
+| `\0rolldown/runtime.js` | Rolldown 1.2.11 reserved runtime task in approved GNU native binding; node/ESM 3823 bytes, browser/ESM 4405 bytes | Rolldown LICENSE and THIRD-PARTY-LICENSE |
+
+The unchanged Drizz.li package-input record binds exact package versions, SRIs,
+archive hashes and complete member maps. The observer additionally binds exact
+installed producer members and the native `.node` member
+`34e3f5cc135d0fec7f0d9837e30413f1a151037b1568911f074048bf941d68e5`.
+Expected source hashes in the observer and parent validator are independently
+derived from those approved archive literals and fixed configuration, not from
+observed compiler output. Rolldown tag v1.2.11 source corroborates native dispatch
+and hook order; it is not another build input or proof of native reproducibility.
+
+The existing observer wraps original JavaScript load/transform/environment hooks
+without replacing their code output, arguments, context or filter/order metadata.
+Only the authenticated Kit load invocation may return the two Kit sources.
+Every other successful JS claim of the four IDs fails, even for identical bytes.
+Native preload binds the exact object returned by the authenticated Vite callback,
+its genuine class, fixed options and closed native-loader predicates. Rolldown
+pre-registers the reserved runtime task before normal module resolution. Unknown
+native plugins, development mode, unreviewed module types or environment changes
+fail. A post transform checks exact source bytes; subsequent nonnull JS transform
+results fail, including object code. Final hook/state seals preserve that ordering.
+
+Schema2 receipts distinguish Kit loader output, native dispatch/runtime generation,
+post-text-transform source and rendered module bytes. Every virtual reference in
+`facadeModuleId`, `moduleIds` and `modules` needs its unique matching receipt;
+unknown IDs, duplicate producers, changed code/member/version or missing evidence
+fail. Chunk and asset hashes are separate from module source hashes.
+
+The P14-only parent validator keeps file-member, longest-package-owner, target,
+inactive, version and SRI controls. It conservatively resolves all observed file
+owners, including zero rendered JS bytes. CSS additionally binds the exact
+`src/routes/layout.css` and its two imports, tailwindcss 4.3.3 and tw-animate-css
+1.4.0; their approved CSS has no further imports or URL inputs. Both have original
+notices in the existing bundle. The missing urlpattern-polyfill 10.1.0 MIT notice
+is added unchanged alongside the three producer notice texts in the P14-only
+`output-notices-v1.json` supplement. Old source/package/notice pins are unchanged.
+
+Actual distribution coverage requires client graph JS/CSS hashes to match the
+final adapter output. Eight reviewed static paths must equal sealed source bytes.
+Only `en/weather/week/index.html` (Kit SSR prerender), `index.html` (Kit SSR fallback)
+and exact source-derived `_app/version.json` are accepted in addition to those
+assets and nine original notice files. HTML provenance rests on the approved
+SSR graph, sealed app template/source and pinned Kit/adapter chain, not an HTML-tag
+test or a filename alone. Adapter-static 3.0.10's original MIT notice is identical
+to the retained Kit notice. Server intermediate graphs are not distributed files.
+Unknown copied assets, fonts, HTML paths or missing notices stop closure.
+
+Local validation is inert Python data/source/regression testing. Before application
+localization, synchronization, typecheck or Vite, the one authorized hosted round
+must also run the exact pure first-party guard fixtures with the approved Node
+inside the existing networkless Boundary. They import no Vite/native/upstream code
+and exercise real wrong-loader/identical-code, changed-code, duplicate and late
+object-transform guards. A failed fixture stops before any application compiler.
+Independent review precedes dispatch; actual JS fixture execution is necessarily
+pending until that single hosted round. No local host dependency is substituted.
+
+Only metadata, hashes, original notices and bounded logs leave the runner. Output
+and process cleanup, no automatic retry and all admission boundaries remain as
+above. Complete candidate module/notice coverage, two independent cold matching
+builds, consumer delivery and release/product acceptance are separate claims.

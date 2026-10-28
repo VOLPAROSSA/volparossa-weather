@@ -410,10 +410,16 @@ def prepare_source_stage(profile, stage):
             b'plugins: [', b'plugins: [sourceModuleGraph(),', 1)
         observer = read(ROOT / 'integrations/drizzli/source-module-graph.mjs')
         write(stage / 'volparossa-source-module-graph.mjs', observer)
+        guard_sources = {}
+        for name in ('virtual-module-guards.mjs', 'test-virtual-module-guards.mjs'):
+            data = read(ROOT / 'integrations/drizzli' / name)
+            write(stage / name, data)
+            guard_sources[name] = dict(bytes=len(data), sha256=sha(data))
         fd = os.open(config, os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW)
         with os.fdopen(fd, 'wb') as stream:
             stream.write(patched)
-        receipt.update(config_sha256=sha(patched), observer_sha256=sha(observer))
+        receipt.update(config_sha256=sha(patched), observer_sha256=sha(observer),
+            virtual_guard_sources=guard_sources)
     else:
         value, _ = notice_inputs()
         target = stage / 'volparossa-source-notices'
