@@ -16,6 +16,16 @@ I = SimpleNamespace(**runpy.run_path(str(ROOT / 'scripts/prepare_hosted_client_i
 G = C['build'].__globals__
 
 
+def ordered_walk(reverse):
+    actual_walk = os.walk
+    def walk(*args, **kwargs):
+        for directory, dirs, names in actual_walk(*args, **kwargs):
+            dirs.sort(reverse=reverse)
+            names.sort(reverse=reverse)
+            yield directory, dirs, names
+    return walk
+
+
 class CandidateBoundary(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -208,8 +218,11 @@ class ProjectMetadata(unittest.TestCase):
     def test_extra_file_in_project_directory_is_rejected(self):
         self.generate()
         (self.project / 'new-code.js').write_bytes(b'code')
-        with self.assertRaisesRegex(ValueError, 'P14_UNREVIEWED_GENERATED_PATH'):
-            self.verify()
+        for reverse in (False, True):
+            with self.subTest(reverse=reverse), patch.object(os, 'walk', side_effect=ordered_walk(reverse)):
+                with self.assertRaisesRegex(ValueError, 'P14_UNREVIEWED_GENERATED_PATH') as caught:
+                    self.verify()
+                self.assertEqual(caught.exception.relative_path, 'project.inlang/new-code.js')
 
     def test_metadata_cannot_exist_when_original_source_is_sealed(self):
         self.generate()
@@ -279,19 +292,45 @@ class ProjectMetadata(unittest.TestCase):
                 C['project_metadata_file'](self.stage, 'project.inlang/.meta.json')
 
     def test_parent_replacement_between_original_check_and_metadata_open_is_rejected(self):
-        self.generate()
         actual_read = I.read
-        def replace(path, bound):
-            raw = actual_read(path, bound)
-            self.project.rename(self.stage / 'retired')
-            self.project.mkdir(mode=0o700)
-            (self.project / 'settings.json').write_bytes(b'{}\n')
-            (self.project / 'settings.json').chmod(0o600)
-            self.generate()
-            return raw
-        with patch.object(I, 'read', side_effect=replace):
-            with self.assertRaisesRegex(ValueError, 'P14_PROJECT_METADATA_REPLACED'):
-                self.verify()
+        for reverse in (False, True):
+            with self.subTest(reverse=reverse), tempfile.TemporaryDirectory() as directory:
+                fixture = Path(directory)
+                stage = fixture / 'stage'
+                stage.mkdir(mode=0o700)
+                project = stage / 'project.inlang'
+                # Keep the retired original outside the scanned stage. Its
+                # files must not trigger the independent generated-file guard.
+                retired = fixture / 'retired'
+                def settings():
+                    project.mkdir(mode=0o700)
+                    (project / 'settings.json').write_bytes(b'{}\n')
+                    (project / 'settings.json').chmod(0o600)
+                def generate():
+                    for name, raw in self.payloads.items():
+                        path = stage / name
+                        path.write_bytes(raw)
+                        path.chmod(0o600)
+                settings()
+                seal = C['source_input_seal'](I, stage)
+                generate()
+                def replace(path, bound):
+                    raw = actual_read(path, bound)
+                    project.rename(retired)
+                    settings()
+                    generate()
+                    return raw
+                with patch.object(I, 'read', side_effect=replace), \
+                        patch.object(os, 'walk', side_effect=ordered_walk(reverse)), \
+                        patch.dict(G, project_metadata_file=Mock(wraps=C['project_metadata_file'])):
+                    with self.assertRaisesRegex(ValueError, 'P14_PROJECT_METADATA_REPLACED'):
+                        C['check_source_inputs'](I, stage, seal, generated_metadata=True)
+                    reader = G['project_metadata_file']
+                    reader.assert_called_once()
+                    self.assertEqual(reader.call_args.args[1],
+                        'project.inlang/README.md' if reverse else 'project.inlang/.gitignore')
+                self.assertTrue(retired.is_dir())
+                self.assertFalse(retired.is_relative_to(stage))
 
     def test_file_replacement_during_read_is_rejected(self):
         self.generate()
