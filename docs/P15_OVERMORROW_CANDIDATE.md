@@ -1,8 +1,11 @@
 # P15 Overmorrow candidate, 2026-10-28
 
-**P15b update:** the missing tool input closure is now bound to the original SDK
-archive. Independent implementation review approves exactly one bounded candidate
-execution. The candidate execution is pending. The first-stop record below is preserved as historical evidence.
+**P15b result:** original Flutter-tool inputs are now bound and independently
+reviewed. The one hosted candidate attempt stopped safely on an unreviewed
+application package hook before Dart/pub or application compilation. No further
+run was started. Source version sets and P13/P14/Core remain unchanged.
+
+## Initial P15 stop (preserved evidence)
 
 **Status: blocked before the first hosted candidate build.** No P15 application
 was compiled, no hosted run was dispatched, and no application/output/consumer
@@ -267,3 +270,66 @@ P15b pre-dispatch validation: 108 relevant inert tests passed (31 dependency,
 and 12 deployment tests). The independent reviewer repeated the 45 new tests
 and approved the exact final source hashes for one manual candidate run.
 No runtime/application success or output admission follows from these tests.
+
+
+## P15b hosted result: safe stop before Dart/pub
+
+[Run 40708766504](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/40708766504),
+manual attempt 1, used exact source
+`21d0543c833f32d5ac09f12f916d3636f9807b68`.
+The hosted inert contracts passed. The controller stopped in
+`controlled-pub-data` with `P15_UNREVIEWED_PACKAGE_HOOK`. Only the two native
+loader-cache generation/list commands executed (exit 0, returned and drained).
+No Dart tool resolver, app pub, Flutter tests, web compilation or browser trial
+was reached. The four other workflow jobs were skipped. This consumes the one
+authorized hosted attempt; no automatic or additional run was performed.
+
+Artifact `12826345872` contains exactly two bounded UTF-8 JSON files. Its original
+ZIP SHA256 matches the GitHub API digest:
+`2dc82744a15a3dd35e38380d65a149bf65b63aad47c259e47da482d068808b31`.
+Independent result review verified the ZIP, exact run/source/recipe hashes,
+original failure and all six cleanup flags: process drain, policy removal,
+private-input absence, source-stage absence, output absence and unchanged hosted
+network namespace. Neither result has a cleanup error. This verifies a safe
+failed attempt, not build acceptance or successful toolstate generation.
+
+The original ZIP, API/run/job records, job log and extracted metadata are retained
+privately under this worktree's ignored `build/p15b-hosted/` tree. The inert SDK
+archive and 165 preloadarchives were removed after digest rechecks; original text
+locks, inventories and independent data-review receipts remain. No SDK/package
+code was executed on the development host and no host network configuration was
+changed. No compiled binary or historical artifact was published.
+
+### Narrow remaining hook issue
+
+Separate inert inspection of the original `objective_c 9.5.0` archive establishes
+an additional automatic app hook at `hook/build.dart`. Its archive is 421,127
+bytes, SHA256
+`b7fb95a6d9a4f009edd63dc5ac69f07420b23a16161c6dd8660290b59c602e8e`.
+All 283 members were independently inventoried; the complete canonical membermap
+SHA256 matches the existing app record:
+`7baaadb633c7285b5d140089e34a21a6f06e61c61607d9140c73c61175c75f24`.
+The 7,018-byte hook has SHA256
+`aa8cd26a22f3d5f7cb1e769f6de647bae2b485db4576a43743c20f9a34301f7e`.
+The original package license, pubspec and hook bytes were preserved privately;
+no hook code was executed. The archive and independent receipt are kept under
+`build/p15b-blocker/`.
+
+The callback checks `buildCodeAssets` and iOS/macOS before native source scanning
+and `clang`/`xcrun` calls. Imports and `hooks.build(args, callback)` precede those
+callback guards. This is not proof that the hook is never compiled, loaded or
+executed for web or Linux Flutter tests. The hosted artifact contains no package
+name, so it does not establish that `objective_c` was the first rejected archive.
+No broader application-archive scan or hook execution was started after this stop.
+
+The next bounded acceptance step is independent review of this exact app hook's
+imports, protocol and actual activation for the intended web/test targets, while
+retaining the pinned versions, source guards and sandbox. Do not bypass the hook
+guard, substitute versions or start a wider Flutter/native rebuild. Any further
+hosted attempt requires new authorization.
+
+The P15b source/input implementation is on draft
+[PR #35](https://github.com/VOLPAROSSA/volparossa-weather/pull/35), based on the
+unchanged P13 branch/PR #33. Its changes do not overlap P14 #34. Actual offline
+toolstate, a successful first application build, independent cold-output
+reproducibility and production/consumer admission remain unverified.
