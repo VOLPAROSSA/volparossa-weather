@@ -1,9 +1,9 @@
 # P15 Overmorrow candidate, 2026-10-28
 
-**P15b result:** original Flutter-tool inputs are now bound and independently
-reviewed. The one hosted candidate attempt stopped safely on an unreviewed
-application package hook before Dart/pub or application compilation. No further
-run was started. Source version sets and P13/P14/Core remain unchanged.
+**P15c status:** the exact package hook closure is now identified and narrowly
+authorized for the original web and Linux-test profiles. Independent review
+approves one bounded manual attempt. Actual P15c execution is pending; the failed
+P15b evidence below remains preserved. P13, P14 and Core stay unchanged.
 
 ## Initial P15 stop (preserved evidence)
 
@@ -333,3 +333,96 @@ The P15b source/input implementation is on draft
 unchanged P13 branch/PR #33. Its changes do not overlap P14 #34. Actual offline
 toolstate, a successful first application build, independent cold-output
 reproducibility and production/consumer admission remain unverified.
+
+
+## P15c: exact package hooks and first rejection
+
+The full original 224-archive union contains exactly one automatic hook:
+`objective_c 9.5.0 / hook/build.dart`. All 123 app-only archives were independently
+rehashed and their full original membermaps reconstructed. The 101 tool and 29
+shared archive bindings reuse the already independently verified SDK evidence.
+All original notices remain preserved. No source/dependency version changed.
+
+Replaying the exact source `21d0543` ordering (SDK-preload identities first, then
+app-only identities sorted by key) places this sole predicate match at index 164
+from zero, the 64th app-only archive. Therefore it is the first rejection under
+that implementation and those exact original inputs. This is a deterministic
+source/data reconstruction; the historical hosted artifact itself did not carry
+a package name. Both the former broad predicate and exact automatic-entrypoint
+inventory contain no other match.
+
+The [P15-only hook record](../third_party/overmorrow-hook-inputs-v1.json), SHA256
+`5e3837532d2c6f5638f0125aa24e3daa87f87f3b951a3cb79eafc0968a6d3121`,
+binds all 224 original archive/membermap identities, the one original hook's
+7,018 bytes and SHA256, its pubspec, BSD-3-Clause notice, original SDK/app/tool
+pins and two fixed profiles. Unknown archives, hook paths, versions, hashes,
+link hooks and target/feature/environment overrides remain rejected.
+
+### Actual web and test relevance
+
+Exact Flutter `f6ff1529fd6d8af5f706051d9251ac9231c83407` and
+`hooks_runner 0.23.0` plan transitive hooks independently of Dart import usage.
+Both the release web build and the existing Linux-x64 Flutter tests may compile,
+load and execute this hook. Silently pruning the Darwin package or assuming its
+callback guards eliminate hook execution would be incorrect.
+
+The relevant tool `hooks 0.20.1` and application `hooks 2.0.2` generated base
+protocol schemas are byte-identical (SHA256
+`b8afff0aaf9e455d2203cf68c219780206002f28eb81f0a880c5eaac3a176cf1`).
+The original application package configuration selects the hook's original
+`hooks 2.0.2`, `code_assets 1.2.1` and `logging 1.3.0` imports. Original package
+membermaps and SDK source remain reverified around execution.
+
+The exact permitted profiles are:
+
+- `web-js-empty-code-assets`: no code-asset extension, `build_asset_types=[]`,
+  linking enabled at protocol level but no link hook or emitted assets.
+- `linux-x64-tests-no-native-output`: code-assets extension for Linux/x64,
+  dynamic preference, no C compiler configuration and linking disabled. The
+  callback rejects Linux before native source scanning or compiler access.
+
+The hook and protocol are explicitly authorized to run inside the unchanged
+Boundary. The source proof includes imports, top-level logger setup and
+`hooks.build()` before callback guards. They read the controlled input and create
+private checksum directories and a successful JSON result even for a no-op.
+`clang`, `clang++`, `xcrun`, Apple SDKs, native compilation and native output are
+not authorized or added. The original Flutter-test compiler discovery permits
+missing `clang++`; it returns no compiler configuration for this profile.
+
+### Enforcement and evidence
+
+[The hook controller](../scripts/prepare_hosted_overmorrow_hooks.py) binds exact
+original commands and their purged environment before execution, requires fresh
+state and unchanged root pubspec without hook user-defines/workspace/overrides,
+and permits only the two profiles. The existing SDK/lock/cache/package-config
+checks and source sealing remain preventive input authority; generated files do
+not authorize new code, targets or cache inputs.
+
+After tests and web compilation, bounded nofollow checks require exactly the
+known Objective-C runner tasks (32-hex config checksum) and empty shared output
+children (10-hex config checksum). Only the nine original runner files and an
+empty task `out/` directory are allowed. Typed inputs must contain the exact
+package/config/path fields, no user-defines or extra assets. Outputs must be the
+exact successful empty-assets result. Linux's native-assets manifest must be
+empty. Aliases, special/hardlinked files, native outputs, unknown task files,
+path escapes, wrong targets and resource overruns fail closed.
+
+Runner stdout contains its own command/environment/cwd line; it is bounded and
+private, together with locks, timestamps, paths, PIDs, dependency stamps and
+stderr. Public projection contains only fixed identities, profiles, counters and
+success/rejection codes. Typed hook rejection observations now retain the known
+package/version/entrypoint; a failed Flutter command is not itself claimed to
+have reached the hook.
+
+P15c pre-dispatch evidence: 64 new/affected inert tests passed and were repeated
+independently (19 hook, 31 dependency, 14 candidate). Existing workflow/source
+recipe checks also passed. Both author and reviewer passed all 123 original
+app-only archives through the actual new archive/membermap/policy code, with
+exactly one authorized hook. No package or SDK code ran locally. Independent
+review of the exact executable bytes approved one manual bounded attempt, with
+no retry or product/reproducibility/release admission.
+
+Private evidence is retained under `build/p15c-hook-inventory/` and
+`build/p15c-hook-review/`, including the complete immutable source-archive set,
+original membermaps/notices, exact pinned protocol/runner/Flutter sources and
+independent review. Earlier failed reports remain separate and unchanged.

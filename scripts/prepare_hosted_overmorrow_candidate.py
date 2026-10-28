@@ -30,7 +30,9 @@ MODE = 'source-candidate-build'
 MAX_STAGE_ENTRIES = 20000
 OWNED_SOURCE = ('scripts/prepare_hosted_overmorrow_candidate.py',
                 'scripts/prepare_hosted_overmorrow_dependencies.py',
+                'scripts/prepare_hosted_overmorrow_hooks.py',
                 'third_party/overmorrow-tool-inputs-v1.json',
+                'third_party/overmorrow-hook-inputs-v1.json',
                 '.github/workflows/hosted-overmorrow.yml')
 GENERATED_PLATFORM_FILES = frozenset((
     '.flutter-plugins-dependencies', '.flutter-plugins', 'android/local.properties',
@@ -78,7 +80,8 @@ def guards():
     # P15 is allowed only its own files and its own Overmorrow workflow.
     _, changed = helper.process(['/usr/bin/git', '-C', str(ROOT), 'diff', '--name-only', BASE, 'HEAD'], 10)
     allowed = set(OWNED_SOURCE) | {'tests/test_hosted_overmorrow_candidate.py',
-        'tests/test_hosted_overmorrow_dependencies.py', 'docs/P15_OVERMORROW_CANDIDATE.md'}
+        'tests/test_hosted_overmorrow_dependencies.py', 'tests/test_hosted_overmorrow_hooks.py',
+        'docs/P15_OVERMORROW_CANDIDATE.md'}
     require(set(changed.decode().splitlines()) <= allowed, 'P15_SHARED_SOURCE_CHANGED')
     helper.process(['/usr/bin/git', '-C', str(ROOT), 'diff', '--quiet', 'HEAD', '--'], 10)
     return helper, platform
@@ -294,6 +297,8 @@ def execute():
                 info = STAGE.lstat(); stage_identity = (info.st_dev, info.st_ino)
         expected_source = source_files(STAGE)
         stage_git = {name: I.sha(I.read(STAGE / '.git' / name)) for name in ('HEAD', 'config')}
+        hooks = module('prepare_hosted_overmorrow_hooks')
+        hook_run = hooks.HookRun(STAGE, sdk, H.PRIVATE / 'pub-cache', expected_source['pubspec.yaml'])
         details['assets_before'] = asset_binding(STAGE, sdk)
         phase = 'controlled-pub-data'
         deps = module('prepare_hosted_overmorrow_dependencies')
@@ -330,8 +335,16 @@ def execute():
             phase = name
             require(time.monotonic() - started < 2100, 'P15_WHOLE_DEADLINE')
             verify_inputs(with_config=action != 'dependencies-offline')
-            raw = H.run(name, O.sandbox(command(action), mode='compile'), seconds,
-                env=O.environment(), memory=O.FLUTTER_MEMORY)
+            argv, child_environment = command(action), O.environment()
+            if action in ('test', 'build'):
+                details.setdefault('hook_authorizations', {})[action] = hook_run.before(action, argv, child_environment)
+            try:
+                raw = H.run(name, O.sandbox(argv, mode='compile'), seconds,
+                    env=child_environment, memory=O.FLUTTER_MEMORY)
+            except BaseException:
+                if action in ('test', 'build'):
+                    details['hook_execution_unverified'] = hook_run.failure_observation()
+                raise
             if action == 'dependencies-offline':
                 sealed_app = seal_app_sources(STAGE, app_packages)
                 fixture = STAGE / 'test/volparossa/fixtures/products.json'
@@ -344,6 +357,8 @@ def execute():
                 tests_passed = True
             if action == 'build':
                 compiled = True
+            if action in ('test', 'build'):
+                details['hook_execution'] = hook_run.after(action)
             verify_inputs(with_config=True)
         phase = 'output-integrity-and-notices'
         details['assets_output'] = asset_binding(STAGE, sdk, STAGE / 'build/web')
@@ -372,6 +387,11 @@ def execute():
         code = str(error)
         failure = dict(category=type(error).__name__,
             code=code if re.fullmatch(r'[A-Z0-9_]{1,100}', code) else 'P15_OPERATION_FAILED')
+        observation = getattr(error, 'observation', None)
+        if observation is not None:
+            require(type(observation) is dict and set(observation) == {'code', 'package', 'version', 'hook'}
+                and all(type(v) is str and len(v) <= 128 for v in observation.values()), 'P15_HOOK_OBSERVATION_SCHEMA')
+            details['hook_rejection'] = observation
     finally:
         for sig in handlers:
             signal.signal(sig, signal.SIG_IGN)

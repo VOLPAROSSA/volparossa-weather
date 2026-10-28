@@ -127,19 +127,45 @@ sdks:
                 D['parse_tool_lock'](raw)
 
     def test_complete_archive_binding(self):
-        self.assertEqual(D['authenticated_inventory'](self.raw, self.pin), self.files)
-        altered = dict(self.pin, files_sha256='0' * 64)
-        with self.assertRaisesRegex(ValueError, 'P15_ARCHIVE_MEMBER_BINDING'):
-            D['authenticated_inventory'](self.raw, altered)
+        calls = []
+        contract = SimpleNamespace(authorize_inventory=lambda archive, files: calls.append((archive, files)))
+        with patch.dict(D['lifecycle'].__globals__, hook_contract=lambda: contract):
+            self.assertEqual(D['authenticated_inventory'](self.raw, self.pin), self.files)
+            self.assertEqual(calls, [(self.inventory['sha256'], self.files)])
+            calls.clear()
+            for altered in (dict(self.pin, files_sha256='0' * 64), dict(self.pin, sha256='0' * 64)):
+                with self.assertRaisesRegex(ValueError, 'P15_ARCHIVE_MEMBER_BINDING'):
+                    D['authenticated_inventory'](self.raw, altered)
+            self.assertEqual(calls, [])
 
-    def test_hooks_block_before_extraction(self):
+    def test_lifecycle_preserves_typed_owner_rejection(self):
+        class HookContractError(ValueError):
+            observation = dict(package='example', version='1.0.0', hook='hook/build.dart', code='P15_HOOK_INPUT_CHANGED')
+        failure = HookContractError('P15_HOOK_INPUT_CHANGED')
+        calls = []
+        def authorize(archive, files):
+            calls.append((archive, files))
+            raise failure
+        contract = SimpleNamespace(authorize_inventory=authorize)
         for name in ('hook/build.dart', 'hook/link.dart', 'hooks/build.dart', 'build.dart'):
             files = dict(self.files, **{name: dict(type='file')})
-            with self.assertRaisesRegex(ValueError, 'P15_UNREVIEWED_PACKAGE_HOOK'):
-                D['lifecycle'](files)
+            with patch.dict(D['lifecycle'].__globals__, hook_contract=lambda: contract):
+                with self.assertRaisesRegex(ValueError, 'P15_HOOK_INPUT_CHANGED') as caught:
+                    D['lifecycle'](files, self.inventory['sha256'])
+            self.assertIs(caught.exception, failure)
+            self.assertEqual(caught.exception.observation['package'], 'example')
+            self.assertEqual(calls[-1], (self.inventory['sha256'], files))
 
-    def test_normal_bin_source_is_not_automatic_hook(self):
-        D['lifecycle'](self.files)
+    def test_no_hook_inventory_still_requires_exact_contract_authorization(self):
+        calls = []
+        receipt = dict(automatic_hook_count=0, package='example', version='1.0.0')
+        def authorize(archive, files):
+            calls.append((archive, files))
+            return receipt
+        contract = SimpleNamespace(authorize_inventory=authorize)
+        with patch.dict(D['lifecycle'].__globals__, hook_contract=lambda: contract):
+            self.assertEqual(D['lifecycle'](self.files, self.inventory['sha256']), receipt)
+        self.assertEqual(calls, [(self.inventory['sha256'], self.files)])
 
     def test_extraction_preserves_notice_bytes_and_execution_bit(self):
         target = self.extracted()

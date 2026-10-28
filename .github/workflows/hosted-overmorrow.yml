@@ -311,6 +311,7 @@ jobs:
           umask 077
           mkdir -m 700 -p build/p15-inert-tests
           export TMPDIR="$GITHUB_WORKSPACE/build/p15-inert-tests"
+          python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_hooks.py'
           python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_dependencies.py'
           python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_candidate.py'
           python3 -B -m unittest discover -s integrations/overmorrow -p 'test_build.py'

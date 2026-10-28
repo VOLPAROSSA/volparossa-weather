@@ -196,14 +196,21 @@ def private_map(cache):
     return cache.with_name(cache.name + '-p15-member-maps.json')
 
 
-def lifecycle(files):
-    # Dart discovers these entrypoints automatically; an archive digest alone
-    # does not review their execution or native tool/download requirements.
-    hooks = sorted(name for name, item in files.items()
-                   if item['type'] == 'file' and
-                   (name.startswith(('hook/', 'hooks/')) and name.endswith('.dart')
-                    or name in ('build.dart', 'link.dart')))
-    require(not hooks, 'P15_UNREVIEWED_PACKAGE_HOOK')
+def hook_contract():
+    # This is reviewed host orchestration, never a package import. The source
+    # commit binds this fixed module; its independently pinned record supplies
+    # the only hook/input/profile authority.
+    spec = importlib.util.spec_from_file_location('_p15_hook_contract',
+        ROOT / 'scripts/prepare_hosted_overmorrow_hooks.py')
+    contract = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(contract)
+    return contract
+
+
+def lifecycle(files, archive_sha256):
+    # Keep typed fixed owner observations from HookContractError intact. Source
+    # and complete member-map checks precede this call at both production sites.
+    return hook_contract().authorize_inventory(archive_sha256, files)
 
 
 def authenticated_inventory(raw, pin):
@@ -212,7 +219,7 @@ def authenticated_inventory(raw, pin):
             == {key: pin[key] for key in ('bytes', 'sha256', 'expanded_bytes')}
             and I.sha(I.canonical(inventory['files'])) == pin['files_sha256'],
             'P15_ARCHIVE_MEMBER_BINDING')
-    lifecycle(inventory['files'])
+    lifecycle(inventory['files'], inventory['sha256'])
     return inventory['files']
 
 
@@ -268,7 +275,7 @@ def prepare(cache, sdk, *, downloader=I.fetch):
     hosted, hashes = cache / 'hosted/pub.dev', cache / 'hosted-hashes/pub.dev'
     for parent in (cache / 'hosted', hosted, cache / 'hosted-hashes', hashes):
         parent.mkdir(mode=0o700)
-    maps, total, expanded, downloaded, preload_bytes, started = {}, 0, 0, 0, 0, time.monotonic()
+    maps, total, expanded, downloaded, preload_bytes, hook_count, started = {}, 0, 0, 0, 0, 0, time.monotonic()
     # Tool preloads first. The 29 identical app identities are already present
     # and are never downloaded again or overwritten by the app closure.
     ordered = sorted(union, key=lambda key: (union[key]['origin'] != 'sdk', key))
@@ -288,6 +295,7 @@ def prepare(cache, sdk, *, downloader=I.fetch):
         expanded += pin['expanded_bytes']
         require(total <= 512 * 1024**2 and expanded <= MAX_CACHE_BYTES, 'P15_PUB_TOTAL_BOUND')
         files = authenticated_inventory(raw, pin)
+        hook_count += sum(files.get(name, {}).get('type') == 'file' for name in ('hook/build.dart', 'hook/link.dart'))
         extract_regular(raw, hosted / key, files)
         I.write(hashes / (key + '.sha256'), entry['sha256'].encode())
         maps[key] = files
@@ -302,7 +310,7 @@ def prepare(cache, sdk, *, downloader=I.fetch):
                 tool_lock_sha256=TOOL_LOCK_SHA, tool_input_record_sha256=TOOL_INPUTS_SHA,
                 sdk_inventory_sha256=sdk_binding['inventory_sha256'],
                 package_record_sha256=I.PACKAGE_INPUTS['overmorrow'][1], package_code_executed=False,
-                lifecycle_hooks_found=0, production_authority=False)
+                lifecycle_hooks_found=hook_count, lifecycle_hooks_authorized=hook_count, production_authority=False)
 
 
 def regular_hash(path, expected):
@@ -631,10 +639,12 @@ def verify(cache, sdk, stage=None, *, tool_state=None, logical_cache=Path('/stat
     names = set(union)
     require({p.name for p in directory_paths(hosted, 225)} - {'.cache'} == names, 'P15_UNKNOWN_PACKAGE')
     require({p.name for p in directory_paths(hashes, 224)} == {name + '.sha256' for name in names}, 'P15_UNKNOWN_HASH_MARKER')
+    hook_count = 0
     for basename, item in sorted(union.items()):
         files = maps[basename]
         require(I.sha(I.canonical(files)) == item['archive']['files_sha256'], 'P15_PRIVATE_MAP_CHANGED')
-        lifecycle(files)
+        lifecycle(files, item['archive']['sha256'])
+        hook_count += sum(files.get(name, {}).get('type') == 'file' for name in ('hook/build.dart', 'hook/link.dart'))
         verify_package(hosted / basename, files)
         require(I.read(hashes / (basename + '.sha256'), 64) == item['input']['sha256'].encode(), 'P15_HASH_MARKER_CHANGED')
     metadata_count = cache_metadata(hosted, dict(entries, **tool))
@@ -646,6 +656,7 @@ def verify(cache, sdk, stage=None, *, tool_state=None, logical_cache=Path('/stat
     return dict(schema=1, kind='p15-locked-pub-reverification', app_hosted_packages=152,
                 tool_hosted_packages=101, union_hosted_packages=224, sdk_references=5,
                 member_maps_sha256=I.sha(maps_raw), original_package_files_unchanged=True,
+                lifecycle_hooks_found=hook_count, lifecycle_hooks_authorized=hook_count,
                 exact_package_set=True, metadata_files=metadata_count, active_roots=active_count,
                 generated_binding=generated, tool_generated_binding=tool_generated, plugin_binding=plugins,
                 tool_lock_sha256=TOOL_LOCK_SHA, tool_input_record_sha256=TOOL_INPUTS_SHA,
