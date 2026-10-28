@@ -360,6 +360,40 @@ class CandidateTests(unittest.TestCase):
                 W['diagnostic_boundary'](W['DIAGNOSTIC_MODE'], snapshots, expected,
                     lambda: dict(inventory_sha256='0' * 64), {})
 
+    def test_fixture_action_has_a_closed_file_and_directory_delta(self):
+        self.file('pubspec.yaml')
+        with W['S'].Inventory(self.base) as inventory:
+            before = inventory.capture()
+            self.file('test/volparossa/fixtures/products.json', b'{}')
+            after = inventory.capture()
+            self.assertEqual(W['fixture_delta'](before, after), W['inventory_fingerprint'](after))
+            self.file('.dart_tool/unknown.dart')
+            with self.assertRaisesRegex(ValueError, 'P15_FIXTURE_OUTPUT_CLOSURE'):
+                W['fixture_delta'](before, inventory.capture())
+
+    def test_fixture_delta_rejects_changed_original_and_unknown_empty_directory(self):
+        self.file('pubspec.yaml')
+        with W['S'].Inventory(self.base) as inventory:
+            before = inventory.capture()
+            self.file('test/volparossa/fixtures/products.json', b'{}')
+            self.file('pubspec.yaml', b'changed')
+            with self.assertRaisesRegex(ValueError, 'P15_FIXTURE_OUTPUT_CLOSURE'):
+                W['fixture_delta'](before, inventory.capture())
+            self.file('pubspec.yaml')
+            (self.base / 'build/unexpected').mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, 'P15_FIXTURE_OUTPUT_CLOSURE'):
+                W['fixture_delta'](before, inventory.capture())
+
+    def test_reviewed_source_set_replaces_old_unreachable_allowances(self):
+        self.file('pubspec.yaml')
+        expected = W['source_files'](self.base)
+        name = 'ios/Flutter/ephemeral/flutter_lldbinit'
+        self.file(name)
+        W['recheck_source'](self.base, expected, {}, generated_sources={name})
+        self.file('.flutter-plugins', b'old unrestricted name')
+        with self.assertRaisesRegex(ValueError, 'P15_UNKNOWN_GENERATED_SOURCE'):
+            W['recheck_source'](self.base, expected, {}, generated_sources={name})
+
     def test_exact_explicit_workflow_modes_only(self):
         event = self.file('event.json', b'{}')
         with patch.dict(os.environ, GITHUB_EVENT_PATH=str(event)):

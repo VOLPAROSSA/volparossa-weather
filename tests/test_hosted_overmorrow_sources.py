@@ -569,6 +569,101 @@ class InventoryTests(unittest.TestCase):
                 self.inventory.normalized(snapshot, ['lib/main.dart'], roots)
         self.assertEqual(descriptors(), count)
 
+    def test_private_contents_selects_exact_metadata_without_changing_snapshot(self):
+        name = 'build/' + 'a' * 32 + '/outputs.json'
+        raw = b'["/private/app/lib/generated.dart"]'
+        put(self.stage / name, raw)
+        snapshot = self.inventory.capture()
+        original = json.dumps(snapshot, sort_keys=True)
+        result = self.inventory.contents(snapshot, [name])
+        self.assertEqual(result, {name: raw})
+        self.assertEqual(json.dumps(snapshot, sort_keys=True), original)
+        self.assertNotIn('/private/app', json.dumps(S['projection'](snapshot, ())))
+        self.assertEqual(set(result), {name})
+
+    def test_private_contents_rejects_unknown_wrongtype_duplicate_and_unsafe_paths_before_open(self):
+        (self.stage / 'unknown-link').symlink_to('/private/never-open')
+        snapshot = self.inventory.capture()
+        for paths in (['not-captured'], ['lib'], ['unknown-link'], [None], [b'pubspec.yaml'],
+                      ['pubspec.yaml', 'pubspec.yaml'], ['../pubspec.yaml'], ['/pubspec.yaml']):
+            with patch.object(os, 'open', side_effect=AssertionError('must validate before reading')):
+                with self.assertRaisesRegex(ValueError, 'P15_SOURCE_CONTENTS_PATHS'):
+                    self.inventory.contents(snapshot, paths)
+
+    def test_private_contents_resource_caps_validate_complete_selection_before_read(self):
+        snapshot = self.inventory.capture()
+        self.assertEqual((S['MAX_CONTENT_PATHS'], S['MAX_CONTENT_FILE'], S['MAX_CONTENT_TOTAL']),
+                         (96, 1024**2, 16 * 1024**2))
+        names = ['pubspec.yaml', 'lib/main.dart']
+        total = sum(snapshot['files'][name]['bytes'] for name in names)
+        with patch.dict(G, MAX_CONTENT_TOTAL=total):
+            self.assertEqual(set(self.inventory.contents(snapshot, names)), set(names))
+        for limits, code in ((dict(MAX_CONTENT_PATHS=1), 'P15_SOURCE_CONTENTS_PATHS'),
+                             (dict(MAX_CONTENT_FILE=4), 'P15_SOURCE_CONTENTS_FILE'),
+                             (dict(MAX_CONTENT_TOTAL=total - 1), 'P15_SOURCE_CONTENTS_TOTAL')):
+            with patch.dict(G, **limits), patch.object(os, 'open', side_effect=AssertionError('no partial reads')):
+                with self.assertRaisesRegex(ValueError, code):
+                    self.inventory.contents(snapshot, names)
+
+    def test_private_contents_rejects_bytes_mode_and_closed_inventory(self):
+        snapshot = self.inventory.capture()
+        put(self.stage / 'lib/main.dart', b'changed original')
+        with self.assertRaisesRegex(ValueError, 'P15_SOURCE_CONTENTS_CHANGED'):
+            self.inventory.contents(snapshot, ['lib/main.dart'])
+        snapshot = self.inventory.capture()
+        (self.stage / 'lib/main.dart').chmod(0o644)
+        with self.assertRaisesRegex(ValueError, 'P15_PLUGIN_FILE_METADATA'):
+            self.inventory.contents(snapshot, ['lib/main.dart'])
+        self.inventory.close()
+        with self.assertRaisesRegex(ValueError, 'P15_SOURCE_INVENTORY_CLOSED'):
+            self.inventory.contents(snapshot, ['lib/main.dart'])
+
+    def test_private_contents_rejects_parent_directory_clone_and_symlink(self):
+        snapshot = self.inventory.capture()
+        (self.stage / 'lib').rename(self.base / 'original-lib')
+        shutil.copytree(self.base / 'original-lib', self.stage / 'lib')
+        with self.assertRaisesRegex(ValueError, 'P15_SOURCE_DIRECTORY_SWAP'):
+            self.inventory.contents(snapshot, ['lib/main.dart'])
+        shutil.rmtree(self.stage / 'lib')
+        (self.stage / 'lib').symlink_to(self.base / 'original-lib', target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, 'P15_PLUGIN_DIRECTORY_TYPE'):
+            self.inventory.contents(snapshot, ['lib/main.dart'])
+
+    def test_private_contents_leaf_swap_before_open_cannot_follow_target(self):
+        snapshot = self.inventory.capture()
+        outside = self.base / 'outside-original'
+        put(outside, b'const original = true;\n')
+        real_open = os.open
+        def swap(name, flags, *args, **kwargs):
+            self.assertNotEqual(name, str(outside))
+            if name == 'main.dart':
+                self.assertTrue(flags & os.O_NOFOLLOW)
+                self.assertTrue(flags & os.O_NONBLOCK)
+                (self.stage / 'lib/main.dart').unlink()
+                (self.stage / 'lib/main.dart').symlink_to(outside)
+            return real_open(name, flags, *args, **kwargs)
+        with patch.object(os, 'open', side_effect=swap):
+            with self.assertRaisesRegex(ValueError, 'P15_SOURCE_IO'):
+                self.inventory.contents(snapshot, ['lib/main.dart'])
+
+    def test_private_contents_mutation_race_and_repeated_reads_close_descriptors(self):
+        snapshot = self.inventory.capture()
+        count = descriptors()
+        for _ in range(12):
+            self.inventory.contents(snapshot, ['lib/main.dart'])
+        real_read = os.read
+        mutated = []
+        def mutate(fd, size):
+            raw = real_read(fd, size)
+            if raw and not mutated:
+                mutated.append(True)
+                put(self.stage / 'lib/main.dart', b'changed during FD read')
+            return raw
+        with patch.object(os, 'read', side_effect=mutate):
+            with self.assertRaisesRegex(ValueError, 'P15_PLUGIN_FILE_SWAP'):
+                self.inventory.contents(snapshot, ['lib/main.dart'])
+        self.assertEqual(descriptors(), count)
+
 
 class ProjectionTests(unittest.TestCase):
     def snapshot(self, names):

@@ -1,5 +1,9 @@
 # P15 Overmorrow candidate, 2026-10-28
 
+**Latest P15f evidence:** the diagnostic-only run identifies all four missing
+Darwin output paths and the complete 21-file addition set. All original source
+bytes and cleanup are intact. This is no candidate-build success.
+
 **P15e result:** the plugin-symlink blocker is resolved in the one hosted
 attempt. Both actual namespace proofs verify all 16 aliases against 13 original
 packages and their file identities. Post-pub package/configuration/plugin
@@ -78,6 +82,123 @@ GO only for one diagnostic run, not a candidate or generated-output admission.
 Private source/provenance evidence is retained under `build/p15f-source/`,
 inert checks under `build/p15f-inert-tests/`, and independent reviews under
 `build/p15f-review/`. No shared P13/runtime input, P14 or Core file changes.
+
+### Hosted P15f diagnostic result
+
+The one [diagnostic run 40754938838](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/40754938838)
+completed on `f522a786c5932d22b840f4ad9b6b0d42af16ae23`, manual attempt 1.
+It actually reproduces the complete rejected set, in sorted reporting order:
+
+- `ios/Flutter/ephemeral/flutter_lldb_helper.py`
+- `ios/Flutter/ephemeral/flutter_lldbinit`
+- `macos/Flutter/ephemeral/Flutter-Generated.xcconfig`
+- `macos/Flutter/ephemeral/flutter_export_environment.sh`
+
+The two iOS LLDB files are rendered by the original SDK's Xcode debug template
+writer. The macOS pair is written by the original Xcode configuration updater.
+Flutter's controlled pub preparation calls these platform-file generators even
+on this Linux runner when the original platform scaffolds are present. They
+are outputs of the reviewed SDK, not original app sources or packagehooks. The
+web/test commands do not execute these LLDB, shell or Xcode files. The old
+policy simply omitted their precise paths; the historical P15e first scan entry
+still cannot be reconstructed and is not claimed.
+
+All 199 hosted inert tests pass. Both real offline pub commands exit 0; twelve
+SDK Git checks and both namespace
+proofs pass. Tool pub changes no application nodes. App pub adds exactly 21
+regular files, 14 directories and 16 verified aliases: 386 -> 407 files and
+98 -> 112 directories. The 21 files are eleven new source/platform files, four
+`.dart_tool` files and six localization metadata files. All 53 predicted
+source/platform outputs are present. No original file changes or disappears;
+all 386 original bytes/hashes remain identical, including the 42 existing
+generated outputs. The fixture step then adds just its file and two parents:
+408 regular files and 114 directories. No unsafe node is present. The only
+opaque directory label independently resolves to the fixed `build` parent by
+its five-byte SHA256; every file and alias is identified. Dynamic build IDs are
+masked but remain distinguished by path hashes.
+
+Artifact `12845867953` contains exactly two bounded UTF-8 JSON files, ZIP
+93,548 bytes, SHA256
+`f1b80f90f4a46c4755125315d0b8a7730dfb11d3e743ca77ac7c2b7235c97cfb`.
+The API digest and all eleven controller-source bindings match the trial
+commit. Four complete checkpoint inventories and all deltas are retained.
+The old source gate still rejects those four names; its rejection fingerprint
+matches the published final state. `diagnostics_complete=true` is distinct
+from `success=false`, `candidate_success=false` and `admitted=false`.
+No hook authorization, Flutter application test or web compilation occurs.
+All six cleanup flags pass, descriptor cleanup is confirmed, and both failure
+fields are null. Private raw logs, contents, host paths and inode identities
+are not published. Evidence is retained in `build/p15f-diagnostic-hosted/`.
+
+The independent diagnostic-result review confirms the complete deltas, all
+386 original files, all controller bindings, namespace payload hashes and
+cleanup. Review SHA256:
+`1e1b549e929b37ccca848b0638a466ff37fb211cddc8bc3821ce914195da5359`. This review grants evidence-only GO.
+
+### Complete first-post-pub authorization contract
+
+The new P15-only [output record](../third_party/overmorrow-pub-outputs-v1.json)
+binds the original 386-file map, the producer and metadata catalogues, the
+original SDK inventory, and the actual diagnostic source/artifact/review.
+Its SHA256 is `c8d87288da4897bb2baf04b8f00c89c2816ced78abd94b5cdaa621c61e638509`.
+Its exact path sets describe all 53 source/platform outputs, the four fixed
+Dart-tool roles and six symbolic metadata paths. The concrete metadata directory
+ID is derived from the original SDK manifest's engineRevision and Flutter's
+literal `build` argument. It is never guessed from an unrelated engine stamp.
+
+The [output validator](../scripts/prepare_hosted_overmorrow_pub_outputs.py)
+requires exactly 407 regular files and 112 directories before fixtures, the
+original 386 files unchanged in bytes/hash/mode, exactly the 16 independently
+verified plugin alias names, and no unsafe or unexplained nodes. All directories
+must be original or exact parents of those files/aliases; extra empty directories
+are refused. Fifty-two source outputs bind exact context-normalized hashes,
+mode and SDK/app-root occurrence counts observed in the diagnostic run. Only
+the two caller-bound SDK/app roots are normalized; paths cannot choose a new
+root or introduce placeholder tokens. The date-bearing plugin manifest retains
+the original dependency/plugin semantic binders, plus an exact valid Dart
+timestamp shape and false SPM flags. The four tool files retain original
+package-config/graph verification, exact Flutter version bytes and an observed
+Dartpad registry hash. No Darwin output is granted execution authority.
+
+The original SDK manifest and localization target are separately bound to their
+original SDK inventory hashes before deriving metadata values. The
+[pure metadata validator](../scripts/prepare_hosted_overmorrow_pub_metadata.py)
+then checks all six exact names, closed JSON schemas, 36 ARB roles, 35 generated
+Dart roles, 38 stamp inputs, 73 exact private MD5 cache entries, source-proven
+ordered depfile bytes and the exact build ID. MD5 mirrors Flutter's metadata
+format; SHA256, original roots and source identities remain the authority.
+Metadata never supplies a path to open. Private reads use the existing held,
+no-follow directory descriptors and compare every selected file to its captured
+mode/byte count/SHA256, with per-file, aggregate and count bounds.
+
+After this complete preparation check, the fixture action may add only its one
+fixed file and required parent directories. It may change or remove no existing
+node. The full resulting fingerprint must still match before the first hook
+profile authorization. Thereafter the existing source sealing, hook/package,
+SDK, Boundary and output checks continue unchanged. The later source gate uses
+only the exact 53 reviewed source paths, removing the three unreachable old
+allowances rather than adding a generic generated-file rule. Before app pub,
+the candidate gate requires the original source hashes without mutable outputs.
+
+The complete expected file/directory set is also checked inertly against the
+actual diagnostic inventories; all 407 files, 112 directories, 16 aliases and
+52 normalized content pins agree, with no unresolved entry. The updated suite
+has 277 passing inert tests, including 59 descriptor/privacy, 18 metadata,
+12 complete-output and 42 controller tests. Negative cases cover unknown and
+extra files, modified originals, wrong hashes/modes/roles, duplicate metadata,
+wrong roots/build IDs, unsafe links, directory replacement, extra empty
+directories, fixture escapes and phase/fingerprint mismatches. This is
+preflight evidence; it is not Flutter application-test or compilation evidence.
+
+The independent complete candidate review approves exactly one bounded hosted
+`source-candidate-build` attempt with no retry or release authority. It repeats
+131 affected tests and four independent compound-negative fixtures, verifies
+the actual closure and original metadata producers, and has no open finding.
+Review SHA256:
+`eddacd5820f13b20cdcd4309370ef8ac3c4f9655eb234b937b6a5095b826dd79`.
+Raw metadata bytes were not exported by the diagnostic; their exact predicates
+are source-derived and must pass against the real bound runtime values.
+
 
 ## P15e: exact plugin targets and namespace identities
 

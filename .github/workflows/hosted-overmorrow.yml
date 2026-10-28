@@ -315,6 +315,8 @@ jobs:
           python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_hooks.py'
           python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_plugins.py'
           python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_sources.py'
+          python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_pub_metadata.py'
+          python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_pub_outputs.py'
           python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_dependencies.py'
           python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_candidate.py'
           python3 -B -m unittest discover -s integrations/overmorrow -p 'test_build.py'

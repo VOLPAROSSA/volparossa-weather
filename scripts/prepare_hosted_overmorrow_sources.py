@@ -20,6 +20,9 @@ MAX_TOTAL = 1024**3
 MAX_HELD_DIRS = 512
 MAX_NORMALIZED_FILE = 1024**2
 MAX_NORMALIZED_PATHS = 53
+MAX_CONTENT_PATHS = 96
+MAX_CONTENT_FILE = 1024**2
+MAX_CONTENT_TOTAL = 16 * 1024**2
 MAX_GIT_FILE = 16 * 1024
 ROOT_TOKENS = {'sdk': b'@P15_SDK_ROOT@', 'app': b'@P15_APP_ROOT@'}
 KINDS = ('files', 'directories', 'aliases', 'unsafe')
@@ -44,13 +47,17 @@ def sha(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
-def path_label(path, known_paths, kind=None):
-    """Allowlisted observation labels do not constitute source authorization."""
-    raw = os.fsencode(path)
-    safe = (type(path) is str and 0 < len(raw) <= 4096 and path.isascii()
+def safe_relative(path):
+    return (type(path) is str and 0 < len(os.fsencode(path)) <= 4096 and path.isascii()
             and all(32 <= ord(c) < 127 for c in path) and '\\' not in path and ':' not in path
             and not path.startswith('/') and len(path.split('/')) <= MAX_DEPTH
             and all(part not in ('', '.', '..') for part in path.split('/')))
+
+
+def path_label(path, known_paths, kind=None):
+    """Allowlisted observation labels do not constitute source authorization."""
+    raw = os.fsencode(path)
+    safe = safe_relative(path)
     # Diagnostic classification only: these exact producer-derived spellings
     # grant neither source admission nor permission to read/follow any node.
     metadata = (path == 'build/.last_build_id' or PUB_BUILD_FILE.fullmatch(path)
@@ -242,6 +249,53 @@ class Inventory:
             raise SourceFailure('P15_SOURCE_IO') from None
         return result
 
+    def _snapshot_bytes(self, snapshot, name, limit, directory_code, changed_code):
+        parts = P['components'](name)
+        expected = snapshot['files'][name]
+        def read(fd, index):
+            if index == len(parts) - 1:
+                return P['read_file'](fd, parts[index], limit, mode=expected['mode'])[0]
+            prefix = '/'.join(parts[:index + 1])
+            need(prefix in self.directories, directory_code)
+            with P['directory'](fd, parts[index], owned=True) as child:
+                need(P['identity'](os.fstat(child)) == self.directories[prefix]
+                     == P['identity'](os.fstat(self._pins[('directory', prefix)])),
+                     'P15_SOURCE_DIRECTORY_SWAP')
+                return read(child, index + 1)
+        try:
+            with P['absolute_directory'](self.stage, expected=self.ancestors) as root:
+                raw = read(root, 0)
+        except OSError:
+            raise SourceFailure('P15_SOURCE_IO') from None
+        need(len(raw) == expected['bytes'] and sha(raw) == expected['sha256'], changed_code)
+        return raw
+
+    def contents(self, snapshot, paths):
+        """Private bytes for an explicit caller-reviewed set; never public evidence.
+
+        Syntax and snapshot membership grant no output admission. The caller must
+        independently authorize its selection and keep returned bytes private.
+        """
+        need(not self._closed, 'P15_SOURCE_INVENTORY_CLOSED')
+        selected, seen, total = [], set(), 0
+        for name in paths:
+            need(len(selected) < MAX_CONTENT_PATHS and safe_relative(name) and name not in seen
+                 and name in snapshot['files'], 'P15_SOURCE_CONTENTS_PATHS')
+            row = snapshot['files'][name]
+            need(type(row['bytes']) is int and 0 <= row['bytes'] <= MAX_CONTENT_FILE
+                 and type(row['mode']) is int and not row['mode'] & 0o022, 'P15_SOURCE_CONTENTS_FILE')
+            total += row['bytes']
+            need(total <= MAX_CONTENT_TOTAL, 'P15_SOURCE_CONTENTS_TOTAL')
+            selected.append(name)
+            seen.add(name)
+        result, consumed = {}, 0
+        for name in sorted(selected):
+            raw = self._snapshot_bytes(snapshot, name, min(MAX_CONTENT_FILE, MAX_CONTENT_TOTAL - consumed),
+                                       'P15_SOURCE_CONTENTS_DIRECTORY', 'P15_SOURCE_CONTENTS_CHANGED')
+            consumed += len(raw)
+            result[name] = raw
+        return result
+
     def normalized(self, snapshot, paths, roots):
         """Observe caller-reviewed files with only the two declared roots masked.
 
@@ -271,35 +325,16 @@ class Inventory:
             selected.append(name)
             seen.add(name)
         result = {}
-        try:
-            for name in sorted(selected):
-                parts = P['components'](name)
-                expected = snapshot['files'][name]
-                def read(fd, index):
-                    if index == len(parts) - 1:
-                        return P['read_file'](fd, parts[index], MAX_NORMALIZED_FILE,
-                                              mode=expected['mode'])[0]
-                    prefix = '/'.join(parts[:index + 1])
-                    need(prefix in self.directories, 'P15_SOURCE_NORMALIZED_DIRECTORY')
-                    with P['directory'](fd, parts[index], owned=True) as child:
-                        need(P['identity'](os.fstat(child)) == self.directories[prefix]
-                             == P['identity'](os.fstat(self._pins[('directory', prefix)])),
-                             'P15_SOURCE_DIRECTORY_SWAP')
-                        return read(child, index + 1)
-                with P['absolute_directory'](self.stage, expected=self.ancestors) as root:
-                    raw = read(root, 0)
-                need(len(raw) == expected['bytes'] and sha(raw) == expected['sha256'],
-                     'P15_SOURCE_NORMALIZED_CHANGED')
-                need(not any(token in raw for token in ROOT_TOKENS.values()),
-                     'P15_SOURCE_NORMALIZED_TOKEN')
-                normalized, occurrences = raw, {}
-                for label in sorted(encoded, key=lambda key: (-len(encoded[key]), key)):
-                    occurrences[label] = normalized.count(encoded[label])
-                    normalized = normalized.replace(encoded[label], ROOT_TOKENS[label])
-                result[name] = dict(bytes=len(raw), sha256=sha(raw), normalized_sha256=sha(normalized),
-                                    root_occurrences=occurrences)
-        except OSError:
-            raise SourceFailure('P15_SOURCE_IO') from None
+        for name in sorted(selected):
+            raw = self._snapshot_bytes(snapshot, name, MAX_NORMALIZED_FILE,
+                                       'P15_SOURCE_NORMALIZED_DIRECTORY', 'P15_SOURCE_NORMALIZED_CHANGED')
+            need(not any(token in raw for token in ROOT_TOKENS.values()), 'P15_SOURCE_NORMALIZED_TOKEN')
+            normalized, occurrences = raw, {}
+            for label in sorted(encoded, key=lambda key: (-len(encoded[key]), key)):
+                occurrences[label] = normalized.count(encoded[label])
+                normalized = normalized.replace(encoded[label], ROOT_TOKENS[label])
+            result[name] = dict(bytes=len(raw), sha256=sha(raw), normalized_sha256=sha(normalized),
+                                root_occurrences=occurrences)
         return result
 
     def capture(self, plugin_aliases=None):
