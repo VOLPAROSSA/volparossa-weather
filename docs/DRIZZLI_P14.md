@@ -105,3 +105,54 @@ the existing approved complete member maps, including Vite archive SHA256
 and Kit archive SHA256
 `e6b95e341d93f11b611cf0df5a76f1eaec8817e4ee4a0a3a91846c5b4f336ca4`.
 No code from that source inspection was executed.
+
+## P14b: exact SDK project metadata
+
+The first candidate [40600642868](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/40600642868)
+stopped at `P14_UNREVIEWED_GENERATED_PATH` after successful localization. Its
+diagnostic did not retain the first rejected filename; that ordering cannot be
+reconstructed. Inert inspection of the unchanged pinned source establishes the
+exact refused set below. The original staged-source seal contains only
+`project.inlang/settings.json` in that directory.
+
+Paraglide 2.25.0 `compile()` calls SDK 3.0.3 `loadProjectFromDirectory()`. Missing
+README/gitignore triggers `saveProjectToDirectory(skipExporting: true)`, which
+writes three project-support metadata files. These are not executable code or
+application assets. README and gitignore are fixed SDK literals; absent prior
+`.meta.json` plus the pinned SDK version fixes `highestSdkVersion` to `3.0.3`.
+
+| Exact path | Bytes | SHA256 |
+| --- | ---: | --- |
+| `project.inlang/.gitignore` | 368 | `ee2c9073cd36a97eb77d35fa3321b6c08e3c032e5f42ac08f9cb105eaf57d5ef` |
+| `project.inlang/README.md` | 6439 | `aa3380d39ef750deede804f7d0ae96e4db3950f90f33dd26a1c70beeaf7d90f4` |
+| `project.inlang/.meta.json` | 34 | `7673ec216ada828b609aac29c19e16e89047497a466ad9a4de08b04532c67191` |
+
+The SDK archive SHA256 is
+`7252ecea2df7a6a9b94f78426bc2834364fda08fd18bfeda054f7467fd89d551`;
+the `saveProjectToDirectory` source member SHA256 is
+`ce3a8ac321f97d565a2c798423b3a59b37938fc51618002a49f64509032ad4c9`.
+Its complete archive member map and Paraglide's complete map match the existing
+approved package record. No source/dependency/runtime pin changes.
+
+P14b requires all three paths absent before sealing the original source. Only
+after localization returns successfully may these exact files appear, and all
+three are required at subsequent checkpoints. Each must match its fixed size
+and hash, be a nonexecutable regular file owned by the runner, have one link and
+mode 0600 or 0644. Nofollow parent/leaf descriptors and before/after file and
+directory identities reject aliases, replacements and concurrent mutation.
+Original stage/project directory identities stay bound across phases; original
+source hashes remain mandatory. No directory prefix or extra file is admitted.
+
+The SDK itself uses ordinary `writeFile`, which follows aliases. Existing
+prelaunch source/link checks, sealed dependencies, the dedicated runner without
+concurrent same-UID writers, and unchanged Boundary writable mounts remain
+essential. Postchecks do not claim protection against an arbitrary hostile
+same-UID host process. No additional writable path or mount is introduced.
+Unknown generated files still fail closed; the result now records a bounded
+source-relative filename, excluding absolute paths and file contents.
+
+One subsequent candidate may run only after targeted tests and independent
+review. Existing installation/localization/integrity/cleanup evidence is reused;
+the build still performs its necessary guards on its fresh disposable runner.
+Any independent next blocker stops that one attempt. Output/module notices,
+cold-build comparison and product admission remain separate gates.

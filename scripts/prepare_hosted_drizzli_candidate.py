@@ -31,6 +31,25 @@ MAX_PUBLIC = 96 * 1024**2
 RESULT_NAMES = frozenset(('p14-started.json', 'p14-result.json', 'p14-steps.json',
     'p14-output.json', 'p14-module-graphs.json', 'p14-dependencies.json',
     'p14-source-stage.json', 'p14-runtime.json', 'p14-source-inputs.json'))
+# Paraglide 2.25.0 -> @inlang/sdk 3.0.3 saveProjectToDirectory(skipExporting).
+# These fixed metadata literals are not code or a new source/dependency pin.
+# No prior .meta.json may contribute another highestSdkVersion.
+PROJECT_METADATA = {
+    'project.inlang/.gitignore': (368, 'ee2c9073cd36a97eb77d35fa3321b6c08e3c032e5f42ac08f9cb105eaf57d5ef'),
+    'project.inlang/README.md': (6439, 'aa3380d39ef750deede804f7d0ae96e4db3950f90f33dd26a1c70beeaf7d90f4'),
+    'project.inlang/.meta.json': (34, '7673ec216ada828b609aac29c19e16e89047497a466ad9a4de08b04532c67191'),
+}
+
+
+class UnreviewedGeneratedPath(ValueError):
+    def __init__(self, relative):
+        super().__init__('P14_UNREVIEWED_GENERATED_PATH')
+        self.relative_path = relative if re.fullmatch(r'[A-Za-z0-9_./@+\-]{1,256}', relative) else 'unrepresentable-path'
+
+
+class SourceSeal(dict):
+    # Directory identities stay private; JSON exports the original file map.
+    pass
 
 
 def require(ok, code):
@@ -81,7 +100,12 @@ def safe_directory(path, *, create=False):
 
 
 def source_input_seal(inputs, stage):
-    files, total = {}, 0
+    require(all(not (stage / name).exists() and not (stage / name).is_symlink()
+        for name in PROJECT_METADATA), 'P14_PROJECT_METADATA_ALREADY_PRESENT')
+    files, total = SourceSeal(), 0
+    files.stage_identity = directory_identity(stage)
+    project = stage / 'project.inlang'
+    files.project_identity = directory_identity(project) if project.exists() else None
     for directory, dirs, names in os.walk(stage, followlinks=False):
         for name in dirs + names:
             path = Path(directory) / name
@@ -98,12 +122,66 @@ def source_input_seal(inputs, stage):
     return files
 
 
-def check_source_inputs(inputs, stage, original):
+def directory_identity(path):
+    info = path.lstat()
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
+        and not info.st_mode & 0o022, 'P14_PROJECT_METADATA_PARENT')
+    return (info.st_dev, info.st_ino)
+
+
+def project_metadata_file(stage, relative, *, stage_identity=None, project_identity=None):
+    """Validate one fixed derived file through nofollow parent descriptors."""
+    require(relative in PROJECT_METADATA and stage.resolve() == stage, 'P14_PROJECT_METADATA_SCOPE')
+    size, expected = PROJECT_METADATA[relative]
+    anchor = os.open(stage, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    parent = None
+    try:
+        root_before = os.fstat(anchor)
+        parent = os.open('project.inlang', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=anchor)
+        parent_before = os.fstat(parent)
+        require((stage_identity is None or (root_before.st_dev, root_before.st_ino) == stage_identity)
+            and (project_identity is None or (parent_before.st_dev, parent_before.st_ino) == project_identity),
+            'P14_PROJECT_METADATA_REPLACED')
+        for item in (root_before, parent_before):
+            require(stat.S_ISDIR(item.st_mode) and item.st_uid == os.getuid()
+                and not item.st_mode & 0o022, 'P14_PROJECT_METADATA_PARENT')
+        leaf = relative.split('/')[1]
+        fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        try:
+            before = os.fstat(fd)
+            require(stat.S_ISREG(before.st_mode) and before.st_uid == os.getuid()
+                and before.st_nlink == 1 and stat.S_IMODE(before.st_mode) in (0o600, 0o644)
+                and before.st_size == size, 'P14_PROJECT_METADATA_FILE')
+            raw = os.read(fd, size + 1)
+            after = os.fstat(fd)
+        finally:
+            os.close(fd)
+        fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        def same(first, second):
+            return all(getattr(first, key) == getattr(second, key) for key in fields)
+        require(same(before, after) and same(after, os.stat(leaf, dir_fd=parent, follow_symlinks=False))
+            and same(parent_before, os.fstat(parent))
+            and same(parent_before, os.stat('project.inlang', dir_fd=anchor, follow_symlinks=False))
+            and same(root_before, os.fstat(anchor)) and same(root_before, stage.lstat()),
+            'P14_PROJECT_METADATA_REPLACED')
+        require(len(raw) == size and sha(raw) == expected, 'P14_PROJECT_METADATA_BYTES')
+    finally:
+        if parent is not None:
+            os.close(parent)
+        os.close(anchor)
+
+
+def check_source_inputs(inputs, stage, original, *, generated_metadata=False):
+    require(directory_identity(stage) == original.stage_identity, 'P14_PROJECT_METADATA_REPLACED')
+    if original.project_identity is not None:
+        require(directory_identity(stage / 'project.inlang') == original.project_identity,
+            'P14_PROJECT_METADATA_REPLACED')
+    require(not generated_metadata or original.project_identity is not None, 'P14_PROJECT_METADATA_PARENT')
     for name, expected in original.items():
         raw = inputs.read(stage / name, 128 * 1024**2)
         require(dict(bytes=len(raw), sha256=sha(raw)) == expected, 'P14_ORIGINAL_SOURCE_CHANGED')
     allowed = ('node_modules/', '.svelte-kit/', '.volparossa-source-graphs/', 'build/', 'src/lib/paraglide/')
-    count = 0
+    count, found = 0, set()
     for directory, dirs, names in os.walk(stage, followlinks=False):
         for name in dirs + names:
             count += 1
@@ -118,7 +196,17 @@ def check_source_inputs(inputs, stage, original):
                 continue
             require(stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode), 'P14_SOURCE_LINK_OR_SPECIAL')
             if stat.S_ISREG(info.st_mode):
-                require(relative in original or relative.startswith(allowed), 'P14_UNREVIEWED_GENERATED_PATH')
+                if generated_metadata and relative in PROJECT_METADATA:
+                    project_metadata_file(stage, relative, stage_identity=original.stage_identity,
+                        project_identity=original.project_identity)
+                    found.add(relative)
+                elif relative not in original and not relative.startswith(allowed):
+                    raise UnreviewedGeneratedPath(relative)
+    require(not generated_metadata or found == set(PROJECT_METADATA), 'P14_PROJECT_METADATA_MISSING')
+    require(directory_identity(stage) == original.stage_identity, 'P14_PROJECT_METADATA_REPLACED')
+    if original.project_identity is not None:
+        require(directory_identity(stage / 'project.inlang') == original.project_identity,
+            'P14_PROJECT_METADATA_REPLACED')
 
 
 def prepare_optional_cache(stage):
@@ -206,6 +294,7 @@ def build():
     safe_directory(h.OUTPUT, create=True)
     started = time.monotonic()
     attempted = installed = produced = False
+    project_metadata_verified = False
     phase, failure = 'package-provisioning', None
     boundary = None
     policy_removed = False
@@ -282,11 +371,12 @@ def build():
         inputs.write(OUTPUT / 'p14-dependencies.json', encoded(receipt('p14-installed-dependencies',
             installation=dependency_result)))
         phase = 'offline-compilation'
+        generated_metadata = False
         for name, cli, arguments, seconds in h.compile_commands():
             require(time.monotonic() - started <= 1800, 'P14_WHOLE_BUILD_DEADLINE')
             phase = name
             dependencies.check_execution_tree(h, record)
-            check_source_inputs(inputs, STAGE, source_seal)
+            check_source_inputs(inputs, STAGE, source_seal, generated_metadata=generated_metadata)
             check_optional_cache(STAGE, optional_cache)
             boundary.check()
             executable = h.installed_cli(cli)
@@ -300,10 +390,14 @@ def build():
                 mode='compile', writable=STAGE), seconds, env=h.environment(), memory=h.compilation_memory(name))
             if name == 'production-build':
                 produced = True
+            if name == 'localization':
+                generated_metadata = True
             dependencies.check_execution_tree(h, record)
-            check_source_inputs(inputs, STAGE, source_seal)
+            check_source_inputs(inputs, STAGE, source_seal, generated_metadata=generated_metadata)
             check_optional_cache(STAGE, optional_cache)
             boundary.check()
+            if name == 'localization':
+                project_metadata_verified = True
         phase = 'output-inventory-and-notices'
         for path in (STAGE / 'build').rglob('*'):
             info = path.lstat()
@@ -327,6 +421,8 @@ def build():
     except BaseException as error:
         failure = dict(category=type(error).__name__,
             code=str(error) if re.fullmatch(r'[A-Z][A-Z0-9_]{0,79}', str(error)) else 'P14_CANDIDATE_FAILED')
+        if isinstance(error, UnreviewedGeneratedPath):
+            failure['relative_path'] = error.relative_path
         raise
     finally:
         for sig in prior_handlers:
@@ -343,6 +439,9 @@ def build():
                 candidate_complete=phase == 'complete' and h.DRAIN_CONFIRMED and policy_removed,
                 process_drain_confirmed=h.DRAIN_CONFIRMED, policy_removed=policy_removed,
                 independent_reproduction=False, output_admitted=False,
+                project_metadata_verified_after_localization=project_metadata_verified,
+                project_metadata_after_localization={name: dict(bytes=size, sha256=digest)
+                    for name, (size, digest) in PROJECT_METADATA.items()} if project_metadata_verified else {},
                 dependencies_lifecycle_executed=False, compiled_networkless=True,
                 release_created=False, assets_exported=False)
             inputs.write(OUTPUT / 'p14-result.json', encoded(result))

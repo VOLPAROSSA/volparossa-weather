@@ -80,8 +80,9 @@ class CandidateBoundary(unittest.TestCase):
         self.put(stage / 'src/input.ts', b'source\n')
         seal = C['source_input_seal'](I, stage)
         self.put(stage / 'unexpected-plugin.mjs', b'export default 1;\n')
-        with self.assertRaisesRegex(ValueError, 'P14_UNREVIEWED_GENERATED_PATH'):
+        with self.assertRaisesRegex(ValueError, 'P14_UNREVIEWED_GENERATED_PATH') as caught:
             C['check_source_inputs'](I, stage, seal)
+        self.assertEqual(caught.exception.relative_path, 'unexpected-plugin.mjs')
 
     def test_declared_generated_output_does_not_authorize_original_replacement(self):
         stage = self.root / 'stage'
@@ -153,6 +154,164 @@ class CandidateBoundary(unittest.TestCase):
                 C['cleanup']()
         self.assertTrue((stage / 'recovery.txt').exists())
         inputs.cleanup_candidate.assert_not_called()
+
+
+class ProjectMetadata(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.stage = Path(self.temp.name)
+        self.project = self.stage / 'project.inlang'
+        self.project.mkdir(mode=0o700)
+        (self.project / 'settings.json').write_bytes(b'{}\n')
+        (self.project / 'settings.json').chmod(0o600)
+        # Small independent byte fixtures exercise the actual bounded reader;
+        # clean hosted checkouts need no downloaded SDK or ignored build data.
+        self.payloads = {'project.inlang/.gitignore': b'cache\n',
+            'project.inlang/README.md': b'fixed SDK project metadata\n',
+            'project.inlang/.meta.json': b'{\n  "highestSdkVersion": "3.0.3"\n}'}
+        pins = {name: (len(raw), hashlib.sha256(raw).hexdigest()) for name, raw in self.payloads.items()}
+        self.mapping = patch.dict(G, PROJECT_METADATA=pins)
+        self.mapping.start()
+        self.addCleanup(self.mapping.stop)
+        self.seal = C['source_input_seal'](I, self.stage)
+
+    def generate(self):
+        for name, raw in self.payloads.items():
+            path = self.stage / name
+            path.write_bytes(raw)
+            path.chmod(0o600)
+
+    def verify(self):
+        C['check_source_inputs'](I, self.stage, self.seal, generated_metadata=True)
+
+    def test_exact_complete_metadata_with_bound_parents_succeeds_repeatedly(self):
+        self.generate()
+        self.verify()
+        self.verify()
+
+    def test_exact_real_sdk_meta_literal_matches_original_production_pin(self):
+        raw = self.payloads['project.inlang/.meta.json']
+        self.assertEqual((len(raw), hashlib.sha256(raw).hexdigest()), C['PROJECT_METADATA']['project.inlang/.meta.json'])
+
+    def test_metadata_is_not_permitted_before_localization(self):
+        self.generate()
+        with self.assertRaisesRegex(ValueError, 'P14_UNREVIEWED_GENERATED_PATH'):
+            C['check_source_inputs'](I, self.stage, self.seal)
+
+    def test_missing_file_cannot_silently_become_optional(self):
+        self.generate()
+        (self.project / '.meta.json').unlink()
+        with self.assertRaisesRegex(ValueError, 'P14_PROJECT_METADATA_MISSING'):
+            self.verify()
+
+    def test_extra_file_in_project_directory_is_rejected(self):
+        self.generate()
+        (self.project / 'new-code.js').write_bytes(b'code')
+        with self.assertRaisesRegex(ValueError, 'P14_UNREVIEWED_GENERATED_PATH'):
+            self.verify()
+
+    def test_metadata_cannot_exist_when_original_source_is_sealed(self):
+        self.generate()
+        with self.assertRaisesRegex(ValueError, 'P14_PROJECT_METADATA_ALREADY_PRESENT'):
+            C['source_input_seal'](I, self.stage)
+
+    def test_same_length_metadata_mutation_is_rejected(self):
+        self.generate()
+        path = self.project / '.meta.json'
+        path.write_bytes(path.read_bytes().replace(b'3.0.3', b'3.0.4'))
+        with self.assertRaisesRegex(ValueError, 'P14_PROJECT_METADATA_BYTES'):
+            self.verify()
+
+    def test_oversize_metadata_is_rejected_before_read(self):
+        self.generate()
+        (self.project / '.meta.json').write_bytes(b'x' * 128)
+        with self.assertRaisesRegex(ValueError, 'P14_PROJECT_METADATA_FILE'):
+            self.verify()
+
+    def test_symlink_metadata_is_rejected(self):
+        self.generate()
+        path = self.project / 'README.md'
+        path.rename(self.stage / 'readme-copy')
+        path.symlink_to('../readme-copy')
+        with self.assertRaises((OSError, ValueError)):
+            C['project_metadata_file'](self.stage, 'project.inlang/README.md')
+
+    def test_hardlink_metadata_is_rejected(self):
+        self.generate()
+        os.link(self.project / 'README.md', self.stage / 'readme-copy')
+        with self.assertRaisesRegex(ValueError, 'P14_PROJECT_METADATA_FILE'):
+            C['project_metadata_file'](self.stage, 'project.inlang/README.md')
+
+    def test_executable_and_writable_metadata_are_rejected(self):
+        self.generate()
+        for mode in (0o700, 0o666):
+            (self.project / 'README.md').chmod(mode)
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, 'P14_PROJECT_METADATA_FILE'):
+                C['project_metadata_file'](self.stage, 'project.inlang/README.md')
+
+    def test_replaced_project_directory_is_rejected_even_with_same_bytes(self):
+        self.generate()
+        self.project.rename(self.stage / 'retired')
+        self.project.mkdir(mode=0o700)
+        self.generate()
+        with self.assertRaisesRegex(ValueError, 'P14_PROJECT_METADATA_REPLACED'):
+            self.verify()
+
+    def test_project_directory_symlink_is_rejected_before_source_read(self):
+        self.generate()
+        self.project.rename(self.stage / 'retired')
+        self.project.symlink_to('retired', target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, 'P14_PROJECT_METADATA_PARENT'):
+            self.verify()
+
+    def test_parent_replacement_during_read_is_rejected(self):
+        self.generate()
+        actual_read = os.read
+        def replace(fd, bound):
+            raw = actual_read(fd, bound)
+            self.project.rename(self.stage / 'retired')
+            self.project.mkdir(mode=0o700)
+            self.generate()
+            return raw
+        with patch.object(os, 'read', side_effect=replace):
+            with self.assertRaisesRegex(ValueError, 'P14_PROJECT_METADATA_REPLACED'):
+                C['project_metadata_file'](self.stage, 'project.inlang/.meta.json')
+
+    def test_parent_replacement_between_original_check_and_metadata_open_is_rejected(self):
+        self.generate()
+        actual_read = I.read
+        def replace(path, bound):
+            raw = actual_read(path, bound)
+            self.project.rename(self.stage / 'retired')
+            self.project.mkdir(mode=0o700)
+            (self.project / 'settings.json').write_bytes(b'{}\n')
+            (self.project / 'settings.json').chmod(0o600)
+            self.generate()
+            return raw
+        with patch.object(I, 'read', side_effect=replace):
+            with self.assertRaisesRegex(ValueError, 'P14_PROJECT_METADATA_REPLACED'):
+                self.verify()
+
+    def test_file_replacement_during_read_is_rejected(self):
+        self.generate()
+        actual_read = os.read
+        def replace(fd, bound):
+            raw = actual_read(fd, bound)
+            path = self.project / '.meta.json'
+            path.unlink()
+            path.write_bytes(self.payloads['project.inlang/.meta.json'])
+            path.chmod(0o600)
+            return raw
+        with patch.object(os, 'read', side_effect=replace):
+            with self.assertRaisesRegex(ValueError, 'P14_PROJECT_METADATA_REPLACED'):
+                C['project_metadata_file'](self.stage, 'project.inlang/.meta.json')
+
+    def test_original_settings_cannot_be_replaced_by_metadata_contract(self):
+        self.generate()
+        (self.project / 'settings.json').write_bytes(b'changed source')
+        with self.assertRaisesRegex(ValueError, 'P14_ORIGINAL_SOURCE_CHANGED'):
+            self.verify()
 
 
 if __name__ == '__main__':
