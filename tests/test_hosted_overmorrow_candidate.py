@@ -125,7 +125,7 @@ class CandidateTests(unittest.TestCase):
         self.assertNotIn('/private', raw)
         self.assertTrue(value[0]['diagnostic_categories']['compiler'])
 
-    def failed_attempt(self, *, drain=True, cleanup_rejected=False, failure=None):
+    def failed_attempt(self, *, drain=True, cleanup_rejected=False, failure=None, mode=W['MODE'], expected_code=None):
         root = self.base / 'repo'
         build = root / 'build'
         build.mkdir(mode=0o700, parents=True)
@@ -149,12 +149,12 @@ class CandidateTests(unittest.TestCase):
                 patch.object(H, 'DRAIN_CONFIRMED', drain), patch.object(H, 'LOGS', []), \
                 patch.dict(os.environ, GITHUB_SHA='a'*40, GITHUB_RUN_ID='123', GITHUB_RUN_ATTEMPT='1'):
             with self.assertRaisesRegex(ValueError, 'P15_CANDIDATE_FAILED'):
-                W['execute']()
+                W['execute'](mode=mode)
         result = json.loads((public/'result.json').read_text())
         receipt = json.loads((public/'cleanup.json').read_text())
         self.assertFalse(result['success'])
         self.assertFalse(result['compiled'])
-        self.assertEqual(result['failure']['code'], str(failure))
+        self.assertEqual(result['failure']['code'], str(failure) if expected_code is None else expected_code)
         return result, receipt, inputs
 
     def test_finally_retains_closed_typed_git_failure_without_private_output(self):
@@ -251,6 +251,125 @@ class CandidateTests(unittest.TestCase):
         result, receipt, inputs = self.failed_attempt(drain=False)
         self.assertFalse(receipt['process_drain_confirmed'])
         self.assertTrue(inputs.exists())
+
+    def test_diagnostic_early_failure_is_not_a_completed_diagnostic_or_candidate(self):
+        result, receipt, _ = self.failed_attempt(mode=W['DIAGNOSTIC_MODE'])
+        self.assertEqual(result['kind'], 'p15-overmorrow-pub-diagnostic')
+        self.assertFalse(result['diagnostics_complete'])
+        self.assertFalse(result['candidate_success'])
+        self.assertFalse(result['compiled'])
+        self.assertTrue(receipt['private_inputs_absent'])
+
+    def test_incomplete_diagnostic_sentinel_cannot_claim_success_and_finally_still_cleans(self):
+        result, receipt, _ = self.failed_attempt(mode=W['DIAGNOSTIC_MODE'], failure=W['DiagnosticComplete'](),
+                                                expected_code='P15_DIAGNOSTIC_EXECUTION_SCOPE')
+        self.assertFalse(result['diagnostics_complete'])
+        self.assertFalse(result['candidate_success'])
+        self.assertTrue(receipt['private_inputs_absent'])
+
+    def test_source_failure_reports_all_rejected_paths_without_admitting_catalogue_labels(self):
+        self.file('pubspec.yaml', b'original')
+        expected = W['source_files'](self.base)
+        names = ['ios/Flutter/ephemeral/flutter_lldbinit',
+                 'ios/Flutter/ephemeral/flutter_lldb_helper.py',
+                 'macos/Flutter/ephemeral/Flutter-Generated.xcconfig',
+                 'macos/Flutter/ephemeral/flutter_export_environment.sh',
+                 'private-secret-name.txt']
+        for name in names:
+            self.file(name)
+        with self.assertRaises(W['SourceAdmissionFailure']) as caught:
+            W['recheck_source'](self.base, expected, {})
+        row = caught.exception.source_rejection
+        self.assertEqual(str(caught.exception), 'P15_UNKNOWN_GENERATED_SOURCE')
+        self.assertEqual(len(row['unknown']), 5)
+        self.assertFalse(row['authorizes_outputs'])
+        encoded = json.dumps(row)
+        self.assertNotIn('private-secret-name', encoded)
+        self.assertNotIn(str(self.base), encoded)
+        self.assertEqual({x['path'] for x in row['unknown'] if 'path' in x}, set(names[:-1]))
+
+    def test_complete_diagnostic_boundary_cannot_fall_through_to_application_actions(self):
+        self.file('pubspec.yaml', b'original')
+        with W['S'].Inventory(self.base) as inventory:
+            before = inventory.capture()
+            expected = W['S'].files(before)
+            self.file('macos/Flutter/ephemeral/Flutter-Generated.xcconfig', b'generated')
+            app = inventory.capture()
+            self.file('test/volparossa/fixtures/products.json', b'{}')
+            final = inventory.capture()
+            snapshots = dict(before=before, after_tool_pub=before, after_app_pub=app, after_fixtures=final)
+            details, trace = {}, []
+            def gate():
+                trace.append('existing-source-gate')
+                W['recheck_source'](self.base, expected, {}, inventory=inventory)
+            def tail():
+                W['diagnostic_boundary'](W['DIAGNOSTIC_MODE'], snapshots, expected, gate, details)
+                trace.extend(('hook-authorization', 'flutter-tests', 'web-build'))
+            with self.assertRaises(W['DiagnosticComplete']):
+                tail()
+        self.assertEqual(trace, ['existing-source-gate'])
+        report = details['source_diagnostic']
+        self.assertFalse(report['authorizes_outputs'])
+        self.assertFalse(report['existing_source_policy_passed'])
+        self.assertEqual(len(report['existing_source_policy_rejections']['unknown']), 1)
+        self.assertEqual({x['path'] for x in report['deltas']['fixtures']['added'] if 'path' in x},
+                         {'test/volparossa/fixtures/products.json', 'test/volparossa/fixtures',
+                          'test/volparossa', 'test'})
+        self.assertFalse(report['flutter_tests_reached'])
+        self.assertFalse(report['hook_authorization_reached'])
+        self.assertFalse(report['web_build_reached'])
+
+    def test_diagnostic_gate_cannot_swallow_an_independent_sandbox_or_integrity_failure(self):
+        details = {}
+        gate = Mock(side_effect=ValueError('P15_RUNTIME_CHANGED'))
+        with self.assertRaisesRegex(ValueError, 'P15_RUNTIME_CHANGED'):
+            W['diagnostic_boundary'](W['DIAGNOSTIC_MODE'], {}, {}, gate, details)
+        self.assertNotIn('source_diagnostic', details)
+        W['diagnostic_boundary'](W['MODE'], {}, {}, gate, details)
+        self.assertEqual(gate.call_count, 1)
+
+    def test_diagnostic_gate_cannot_report_a_stale_smaller_unknown_set(self):
+        self.file('pubspec.yaml', b'original')
+        with W['S'].Inventory(self.base) as inventory:
+            before = inventory.capture()
+            expected = W['S'].files(before)
+            self.file('first-unknown.txt')
+            observed = inventory.capture()
+            snapshots = dict(before=before, after_tool_pub=before,
+                             after_app_pub=observed, after_fixtures=observed)
+            details = {}
+            def gate():
+                self.file('second-unknown.txt')
+                return W['recheck_source'](self.base, expected, {}, inventory=inventory)
+            with self.assertRaisesRegex(ValueError, 'P15_SOURCE_DIAGNOSTIC_RACE'):
+                W['diagnostic_boundary'](W['DIAGNOSTIC_MODE'], snapshots, expected, gate, details)
+            self.assertNotIn('source_diagnostic', details)
+
+    def test_diagnostic_successful_gate_also_binds_the_exact_observed_inventory(self):
+        self.file('pubspec.yaml', b'original')
+        with W['S'].Inventory(self.base) as inventory:
+            observed = inventory.capture()
+            expected = W['S'].files(observed)
+            snapshots = {key: observed for key in ('before', 'after_tool_pub', 'after_app_pub', 'after_fixtures')}
+            details = {}
+            with self.assertRaises(W['DiagnosticComplete']):
+                W['diagnostic_boundary'](W['DIAGNOSTIC_MODE'], snapshots, expected,
+                    lambda: W['recheck_source'](self.base, expected, {}, inventory=inventory), details)
+            self.assertTrue(details['source_diagnostic']['existing_source_policy_passed'])
+            with self.assertRaisesRegex(ValueError, 'P15_SOURCE_DIAGNOSTIC_RACE'):
+                W['diagnostic_boundary'](W['DIAGNOSTIC_MODE'], snapshots, expected,
+                    lambda: dict(inventory_sha256='0' * 64), {})
+
+    def test_exact_explicit_workflow_modes_only(self):
+        event = self.file('event.json', b'{}')
+        with patch.dict(os.environ, GITHUB_EVENT_PATH=str(event)):
+            for mode in (W['MODE'], W['DIAGNOSTIC_MODE']):
+                event.write_text(json.dumps(dict(inputs=dict(input_mode=mode))))
+                self.assertEqual(W['selected_mode'](), mode)
+            for inputs in (dict(input_mode='allow-unknown'), dict(input_mode=W['MODE'], extra=True), {}):
+                event.write_text(json.dumps(dict(inputs=inputs)))
+                with self.assertRaisesRegex(ValueError, 'P15_EXPLICIT_MODE'):
+                    W['selected_mode']()
 
     def test_workflow_runs_only_one_manual_bounded_candidate_and_exports_two_json_files(self):
         workflow = (ROOT / '.github/workflows/hosted-overmorrow.yml').read_text()

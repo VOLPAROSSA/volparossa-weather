@@ -27,14 +27,21 @@ STAGE = ROOT / 'build/p15-overmorrow-stage'
 DEPLOY = ROOT / 'build/p15-overmorrow-web'
 P13_REPORT_SHA = '3a2988ab6f00ecee1ece59c00c9f1c169c7ef054da4d05fdba7848680bcbd4a9'
 MODE = 'source-candidate-build'
+DIAGNOSTIC_MODE = 'source-pub-diagnostic'
+OBSERVATIONS_SHA = '5dfda4d8a1716b798f9c3b5979cd18b3a7b3c7256304d5a2f8f3c4556d2918f9'
+METADATA_OBSERVATIONS_SHA = 'bc96728fd748e61420e3e9770035ddee8fac535f8e2e32b143d3c6d7f4c2b561'
+ORIGINAL_SOURCE_SHA = '94a0f9632f425453887f41b8b3e9926e3d4c3516f3fd4ce3d8db1540d7e48baf'
 MAX_STAGE_ENTRIES = 20000
 OWNED_SOURCE = ('scripts/prepare_hosted_overmorrow_candidate.py',
                 'scripts/prepare_hosted_overmorrow_dependencies.py',
                 'scripts/prepare_hosted_overmorrow_hooks.py',
                 'scripts/prepare_hosted_overmorrow_plugins.py',
+                'scripts/prepare_hosted_overmorrow_sources.py',
                 'third_party/overmorrow-tool-inputs-v1.json',
                 'third_party/overmorrow-hook-inputs-v1.json',
                 'third_party/overmorrow-plugin-inputs-v1.json',
+                'third_party/overmorrow-pub-source-observations-v1.json',
+                'third_party/overmorrow-pub-metadata-observations-v1.json',
                 '.github/workflows/hosted-overmorrow.yml')
 GENERATED_PLATFORM_FILES = frozenset((
     '.flutter-plugins-dependencies', '.flutter-plugins', 'android/local.properties',
@@ -57,6 +64,7 @@ def module(name):
 I = module('prepare_hosted_client_inputs')
 B = module('prepare_hosted_client_runtime')
 O = module('prepare_hosted_overmorrow_ci')
+S = module('prepare_hosted_overmorrow_sources')
 H = O.H
 require = I.require
 
@@ -129,12 +137,19 @@ class SDKGitChecks:
         return result
 
 
-def guards():
+def selected_mode():
+    event = I.document(I.read(Path(os.environ['GITHUB_EVENT_PATH']), 256 * 1024))
+    require(type(event.get('inputs')) is dict and set(event['inputs']) == {'input_mode'}
+            and event['inputs']['input_mode'] in (MODE, DIAGNOSTIC_MODE), 'P15_EXPLICIT_MODE')
+    return event['inputs']['input_mode']
+
+
+def guards(*, mode=MODE):
     I.hosted_guard(os.environ, 'overmorrow')
     require(os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch'
             and os.environ.get('GITHUB_RUN_ATTEMPT') == '1', 'P15_SINGLE_MANUAL_ATTEMPT')
     event = I.document(I.read(Path(os.environ['GITHUB_EVENT_PATH']), 256 * 1024))
-    require(event.get('inputs') == dict(input_mode=MODE), 'P15_EXPLICIT_MODE')
+    require(mode in (MODE, DIAGNOSTIC_MODE) and event.get('inputs') == dict(input_mode=mode), 'P15_EXPLICIT_MODE')
     require(os.getuid() == os.geteuid() != 0, 'ORDINARY_RUNNER_REQUIRED')
     helper = H.policy_helper()
     platform = runpy.run_path(str(ROOT / 'scripts/prepare_hosted_decoder.py'))
@@ -146,57 +161,176 @@ def guards():
     allowed = set(OWNED_SOURCE) | {'tests/test_hosted_overmorrow_candidate.py',
         'tests/test_hosted_overmorrow_dependencies.py', 'tests/test_hosted_overmorrow_hooks.py',
         'tests/test_hosted_overmorrow_plugins.py',
+        'tests/test_hosted_overmorrow_sources.py',
         'docs/P15_OVERMORROW_CANDIDATE.md'}
     require(set(changed.decode().splitlines()) <= allowed, 'P15_SHARED_SOURCE_CHANGED')
     helper.process(['/usr/bin/git', '-C', str(ROOT), 'diff', '--quiet', 'HEAD', '--'], 10)
     return helper, platform
 
 
-def source_files(stage, *, app_packages=None, plugin_aliases=None):
-    """Seal application inputs, excluding Git metadata, before any SDK runs."""
-    files, total, count = {}, 0, 0
-    pending = [stage]
-    while pending:
-        directory = pending.pop()
-        with os.scandir(directory) as entries:
-            for entry in entries:
-                path = Path(entry.path)
-                name = path.relative_to(stage).as_posix()
-                if name == '.git':
-                    continue
-                count += 1
-                require(count <= MAX_STAGE_ENTRIES and len(path.relative_to(stage).parts) <= 64,
-                        'P15_STAGE_ENTRY_BOUND')
-                info = entry.stat(follow_symlinks=False)
-                if stat.S_ISLNK(info.st_mode):
-                    match = re.fullmatch(r'(?:linux|windows)/flutter/ephemeral/\.plugin_symlinks/([a-z0-9_]+)', name)
-                    require(match is not None and app_packages is not None
-                            and match[1] in app_packages and app_packages[match[1]]['source'] == 'hosted', 'P15_SOURCE_ALIAS')
-                    require(plugin_aliases is not None, 'P15_PLUGIN_BINDING_REQUIRED')
-                    plugin_aliases.check_leaf(name, info)
-                    continue
-                require(stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode), 'P15_SOURCE_ALIAS')
-                require(info.st_uid == os.getuid() and not info.st_mode & 0o022, 'P15_SOURCE_FILE')
-                if stat.S_ISDIR(info.st_mode):
-                    pending.append(path)
-                else:
-                    total += info.st_size
-                    require(info.st_nlink == 1 and info.st_size <= 256 * 1024**2
-                            and total <= 1024**3, 'P15_SOURCE_FILE')
-                    with path.open('rb') as stream:
-                        files[name] = hashlib.file_digest(stream, 'sha256').hexdigest()
-    require(0 < len(files) < 10000, 'P15_SOURCE_COUNT')
-    return files
+def capture_source(stage, inventory=None, plugin_aliases=None):
+    owned = inventory is None
+    inventory = S.Inventory(stage) if owned else inventory
+    try:
+        value = inventory.capture(plugin_aliases)
+        require(sum(len(value[k]) for k in S.KINDS) <= MAX_STAGE_ENTRIES, 'P15_STAGE_ENTRY_BOUND')
+        require(0 < len(value['files']) < 10000, 'P15_SOURCE_COUNT')
+        return value
+    except S.SourceFailure as error:
+        mapping = dict(P15_SOURCE_ENTRY_BOUND='P15_STAGE_ENTRY_BOUND',
+                       P15_SOURCE_DEPTH_BOUND='P15_STAGE_ENTRY_BOUND', P15_SOURCE_FILE_METADATA='P15_SOURCE_FILE')
+        raise ValueError(mapping.get(str(error), str(error))) from None
+    finally:
+        if owned:
+            require(inventory.close(), 'P15_SOURCE_DESCRIPTOR_CLEANUP')
 
 
-def recheck_source(stage, expected, app_packages, plugin_aliases=None):
-    actual = source_files(stage, app_packages=app_packages, plugin_aliases=plugin_aliases)
-    generated = {}
-    localizations = {'lib/l10n/app_localizations.dart'}
+def snapshot_files(snapshot, app_packages=None, plugin_aliases=None):
+    for name in snapshot['aliases']:
+        package = name.rsplit('/', 1)[-1]
+        require(app_packages is not None and package in app_packages
+                and app_packages[package]['source'] == 'hosted', 'P15_SOURCE_ALIAS')
+    for name, row in snapshot['unsafe'].items():
+        match = re.fullmatch(r'(?:linux|windows)/flutter/ephemeral/\.plugin_symlinks/([a-z0-9_]+)', name)
+        require(row['type'] == 'symlink' and match is not None and app_packages is not None
+                and match[1] in app_packages and app_packages[match[1]]['source'] == 'hosted', 'P15_SOURCE_ALIAS')
+        require(plugin_aliases is not None, 'P15_PLUGIN_BINDING_REQUIRED')
+        require(False, 'P15_SOURCE_ALIAS')
+    return S.files(snapshot)
+
+
+def source_files(stage, *, app_packages=None, plugin_aliases=None, inventory=None):
+    """Observe through anchored descriptors, then require the existing policy."""
+    return snapshot_files(capture_source(stage, inventory, plugin_aliases), app_packages, plugin_aliases)
+
+
+def source_catalogue():
+    raw = I.read(ROOT / 'third_party/overmorrow-pub-source-observations-v1.json', 256 * 1024)
+    require(I.sha(raw) == OBSERVATIONS_SHA, 'P15_SOURCE_OBSERVATION_CATALOGUE_CHANGED')
+    value = I.document(raw)
+    require(value['kind'] == 'p15f-controlled-pub-generated-source-closure'
+            and value['admitted'] is False and value['pub_executed'] is False
+            and value['regular_count'] == len(value['regular_files']) == 53,
+            'P15_SOURCE_OBSERVATION_CATALOGUE_SCHEMA')
+    return value
+
+
+def localization_paths(expected):
+    # Retain the previous acceptance conditions during diagnostic discovery.
+    # The producer catalogue does not enlarge this set or grant output authority.
+    result = {'lib/l10n/app_localizations.dart'}
     for name in expected:
         match = re.fullmatch(r'lib/l10n/app_([a-z]{2,3}(?:_[A-Za-z0-9]+)*)\.arb', name)
         if match:
-            localizations.add('lib/l10n/app_localizations_' + match[1] + '.dart')
+            result.add('lib/l10n/app_localizations_' + match[1] + '.dart')
+    return result
+
+
+def source_differences(expected, actual):
+    mutable = set(GENERATED_PLATFORM_FILES) | localization_paths(expected)
+    return dict(missing=sorted(expected.keys() - actual.keys()),
+        changed_original=sorted(n for n in expected.keys() & actual.keys()
+            if expected[n] != actual[n] and n not in mutable),
+        unknown=sorted(n for n in actual.keys() - expected.keys()
+            if not n.startswith(('.dart_tool/', 'build/'))
+            and n != 'test/volparossa/fixtures/products.json' and n not in mutable))
+
+
+def observation_labels(expected):
+    catalogue = source_catalogue()
+    raw = I.read(ROOT / 'third_party/overmorrow-pub-metadata-observations-v1.json', 128 * 1024)
+    require(I.sha(raw) == METADATA_OBSERVATIONS_SHA, 'P15_METADATA_OBSERVATION_CATALOGUE_CHANGED')
+    metadata = I.document(raw)
+    require(metadata['admitted'] is False and metadata['pub_executed'] is False
+            and metadata['parent_catalogue_sha256'] == OBSERVATIONS_SHA,
+            'P15_METADATA_OBSERVATION_CATALOGUE_SCHEMA')
+    result = set(expected) | {row['path'] for row in catalogue['regular_files']}
+    result.update(catalogue['desktop_aliases']['paths'])
+    result.update(('.dart_tool/package_config.json', '.dart_tool/package_graph.json', '.dart_tool/version',
+                   '.dart_tool/dartpad/web_plugin_registrant.dart', 'test/volparossa/fixtures/products.json'))
+    # Parent names are reviewed labels too, never source admission.
+    for name in list(result):
+        result.update(str(p) for p in Path(name).parents if str(p) != '.')
+    return result
+
+
+def inventory_fingerprint(snapshot):
+    return I.sha(I.canonical({kind: snapshot[kind] for kind in S.KINDS}))
+
+
+class SourceAdmissionFailure(ValueError):
+    def __init__(self, code, differences, expected, snapshot=None):
+        super().__init__(code)
+        self.inventory_sha256 = inventory_fingerprint(snapshot) if snapshot is not None else None
+        labels = observation_labels(expected)
+        self.source_rejection = dict(code=code, authorizes_outputs=False,
+            **{key: [S.path_label(name, labels) for name in rows] for key, rows in differences.items()})
+
+
+def diagnostic_projection(snapshot, labels):
+    value = S.projection(snapshot, labels)
+    if 'normalized_outputs' in snapshot:
+        value['normalized_outputs'] = [dict(S.path_label(path, labels), **row)
+                                       for path, row in snapshot['normalized_outputs'].items()]
+        value['missing_catalogue_outputs'] = [S.path_label(path, labels)
+                                              for path in snapshot['missing_catalogue_outputs']]
+    return value
+
+
+def source_diagnostic_report(snapshots, expected):
+    require(set(snapshots) == {'before', 'after_tool_pub', 'after_app_pub', 'after_fixtures'},
+            'P15_SOURCE_DIAGNOSTIC_CHECKPOINTS')
+    labels = observation_labels(expected)
+    def public_delta(before, after):
+        changes = S.delta(before, after)
+        return {key: [dict(S.path_label(row['path'], labels, row.get('after', row.get('before'))['kind']),
+                     **{side: row[side] for side in ('before', 'after') if side in row}) for row in rows]
+                for key, rows in changes.items()}
+    actual = S.files(snapshots['after_fixtures'])
+    differences = source_differences(expected, actual)
+    return dict(schema=1, kind='p15-pub-source-observations', authorizes_outputs=False,
+        original_source_sha256=I.sha(I.canonical(expected)), catalogue_sha256=OBSERVATIONS_SHA, metadata_catalogue_sha256=METADATA_OBSERVATIONS_SHA,
+        inventories={name: diagnostic_projection(value, labels) for name, value in snapshots.items()},
+        deltas=dict(tool_pub=public_delta(snapshots['before'], snapshots['after_tool_pub']),
+                    app_pub=public_delta(snapshots['after_tool_pub'], snapshots['after_app_pub']),
+                    fixtures=public_delta(snapshots['after_app_pub'], snapshots['after_fixtures'])),
+        existing_source_policy_passed=not any(differences.values()) and not snapshots['after_fixtures']['unsafe'],
+        existing_source_policy_rejections={key: [S.path_label(n, labels) for n in names]
+                                           for key, names in differences.items()},
+        unsafe_entries=len(snapshots['after_fixtures']['unsafe']),
+        flutter_tests_reached=False, hook_authorization_reached=False, web_build_reached=False)
+
+
+class DiagnosticComplete(Exception):
+    """A completed measurement, never a successful candidate/source admission."""
+
+
+def diagnostic_boundary(mode, snapshots, expected, verify_gate, details):
+    if mode != DIAGNOSTIC_MODE:
+        return
+    try:
+        receipt = verify_gate()
+    except SourceAdmissionFailure as error:
+        require(error.inventory_sha256 == inventory_fingerprint(snapshots['after_fixtures']),
+                'P15_SOURCE_DIAGNOSTIC_RACE')
+        details['source_rejection'] = error.source_rejection
+    else:
+        require(type(receipt) is dict and receipt.get('inventory_sha256') == inventory_fingerprint(snapshots['after_fixtures']),
+                'P15_SOURCE_DIAGNOSTIC_RACE')
+    details['source_diagnostic'] = source_diagnostic_report(snapshots, expected)
+    details.pop('source_checkpoints', None)
+    # Returning into the application-command loop is forbidden in this mode.
+    raise DiagnosticComplete()
+
+
+def recheck_source(stage, expected, app_packages, plugin_aliases=None, inventory=None):
+    snapshot = capture_source(stage, inventory, plugin_aliases)
+    actual = snapshot_files(snapshot, app_packages, plugin_aliases)
+    generated = {}
+    localizations = localization_paths(expected)
+    differences = source_differences(expected, actual)
+    if differences['missing'] or differences['changed_original']:
+        raise SourceAdmissionFailure('P15_SOURCE_CHANGED', differences, expected, snapshot)
     for name, checksum in expected.items():
         # These exact tracked files are generated by the pinned SDK gen-l10n
         # from unchanged ARBs. No other application input may be replaced.
@@ -204,19 +338,18 @@ def recheck_source(stage, expected, app_packages, plugin_aliases=None):
                 or name in GENERATED_PLATFORM_FILES), 'P15_SOURCE_CHANGED')
         if actual[name] != checksum:
             generated[name] = actual[name]
-    for name in actual.keys() - expected.keys():
-        require(name.startswith(('.dart_tool/', 'build/'))
-                or name == 'test/volparossa/fixtures/products.json'
-                or name in GENERATED_PLATFORM_FILES or name in localizations, 'P15_UNKNOWN_GENERATED_SOURCE')
+    if differences['unknown']:
+        raise SourceAdmissionFailure('P15_UNKNOWN_GENERATED_SOURCE', differences, expected, snapshot)
     return dict(original_files=len(expected), original_sha256=I.sha(I.canonical(expected)),
+                inventory_sha256=inventory_fingerprint(snapshot),
                 generated_localization_files=len(generated), generated_localization_sha256=I.sha(I.canonical(generated)))
 
 
-def seal_app_sources(stage, app_packages, plugin_aliases=None):
+def seal_app_sources(stage, app_packages, plugin_aliases=None, inventory=None):
     # Generated compilation state is not source authority. All source and
     # platform-generator outputs are sealed after the sole app-pub operation.
     return {name: digest for name, digest in source_files(stage, app_packages=app_packages,
-            plugin_aliases=plugin_aliases).items()
+            plugin_aliases=plugin_aliases, inventory=inventory).items()
             if not name.startswith(('.dart_tool/', 'build/'))
             and name != 'test/volparossa/fixtures/products.json'}
 
@@ -285,13 +418,16 @@ def cleanup_owned(path, identity):
     require(not path.exists() and not path.is_symlink(), 'P15_OUTPUT_CLEANUP')
 
 
-def execute():
-    helper, platform = guards()
+def execute(*, mode=MODE):
+    helper, platform = guards(mode=mode)
     PUBLIC.mkdir(mode=0o700)
     INPUT.mkdir(mode=0o700)
     private = INPUT / 'runtime-private'
     private.mkdir(mode=0o700)
     installed = attempted = runtime_started = success = compiled = tests_passed = False
+    diagnostics_complete = False
+    source_inventory = None
+    source_snapshots = {}
     phase = 'package-provisioning'
     stage_identity = deploy_identity = None
     details = {}
@@ -360,8 +496,13 @@ def execute():
         finally:
             if STAGE.is_dir() and not STAGE.is_symlink():
                 info = STAGE.lstat(); stage_identity = (info.st_dev, info.st_ino)
-        expected_source = source_files(STAGE)
-        stage_git = {name: I.sha(I.read(STAGE / '.git' / name)) for name in ('HEAD', 'config')}
+        source_inventory = S.Inventory(STAGE)
+        source_snapshots['before'] = capture_source(STAGE, source_inventory)
+        expected_source = snapshot_files(source_snapshots['before'])
+        require(I.sha(I.canonical(expected_source)) == ORIGINAL_SOURCE_SHA, 'P15_ORIGINAL_SOURCE_INVENTORY_CHANGED')
+        if mode == DIAGNOSTIC_MODE:
+            details['source_checkpoints'] = dict(before=S.projection(source_snapshots['before'], observation_labels(expected_source)))
+        stage_git = source_inventory.git_binding()
         hooks = module('prepare_hosted_overmorrow_hooks')
         hook_run = hooks.HookRun(STAGE, sdk, H.PRIVATE / 'pub-cache', expected_source['pubspec.yaml'])
         details['assets_before'] = asset_binding(STAGE, sdk)
@@ -381,6 +522,17 @@ def execute():
         app_packages = I.pub_lock(I.read(ROOT / 'third_party/client-locks/overmorrow-pubspec.lock'))
         tool_ready = False
         sealed_app = None
+        def source_checkpoint(name, aliases=None):
+            source_snapshots[name] = capture_source(STAGE, source_inventory, aliases)
+            if mode == DIAGNOSTIC_MODE:
+                if name in ('after_app_pub', 'after_fixtures'):
+                    candidates = {row['path'] for row in source_catalogue()['regular_files']}
+                    selected = sorted(candidates & source_snapshots[name]['files'].keys())
+                    source_snapshots[name]['normalized_outputs'] = source_inventory.normalized(
+                        source_snapshots[name], selected, dict(sdk=str(sdk), app=str(STAGE))) if selected else {}
+                    source_snapshots[name]['missing_catalogue_outputs'] = sorted(candidates - set(selected))
+                details.setdefault('source_checkpoints', {})[name] = diagnostic_projection(
+                    source_snapshots[name], observation_labels(expected_source))
         def verify_plugins():
             plugin_aliases.check_probe_input(H.PRIVATE)
             expected = plugin_aliases.verify()
@@ -401,18 +553,19 @@ def execute():
                 tool_state=O.SDK_TOOL_STATE if tool_ready else None)
             if sealed_app is not None:
                 verify_plugins()
+            require(stage_git == source_inventory.git_binding(), 'P15_STAGE_GIT_CHANGED')
             details['source'] = recheck_source(STAGE, expected_source, app_packages,
-                plugin_aliases if sealed_app is not None else None)
-            require(stage_git == {name: I.sha(I.read(STAGE / '.git' / name))
-                for name in stage_git}, 'P15_STAGE_GIT_CHANGED')
+                plugin_aliases if sealed_app is not None else None, source_inventory)
             if sealed_app is not None:
-                require(seal_app_sources(STAGE, app_packages, plugin_aliases) == sealed_app,
+                require(seal_app_sources(STAGE, app_packages, plugin_aliases, source_inventory) == sealed_app,
                         'P15_GENERATED_APP_SOURCE_CHANGED')
+            return details['source']
         phase = 'p15-tool-pub-offline'
         verify_inputs()
         H.run(phase, O.sandbox(tool_command(), mode='compile'), 180,
               env=O.environment(), memory=O.FLUTTER_MEMORY)
         tool_ready = True
+        source_checkpoint('after_tool_pub')
         verify_inputs()
         for action, name, seconds in (('dependencies-offline', 'p15-pub-offline', 180),
                 ('test', 'p15-flutter-tests', 900), ('build', 'p15-flutter-web-build', 900)):
@@ -437,12 +590,20 @@ def execute():
                 details['plugins_sealed'] = plugin_aliases.seal()
                 plugin_aliases.write_probe_input(H.PRIVATE)
                 verify_plugins()
-                sealed_app = seal_app_sources(STAGE, app_packages, plugin_aliases)
+                source_checkpoint('after_app_pub', plugin_aliases)
+                sealed_app = seal_app_sources(STAGE, app_packages, plugin_aliases, source_inventory)
                 fixture = STAGE / 'test/volparossa/fixtures/products.json'
                 fixture.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 H.run('p15-test-fixtures', O.sandbox([str(H.NODE),
                     str(ROOT / 'integrations/overmorrow/test-fixtures.mjs'), str(fixture)], mode='compile'),
                     30, env=O.environment())
+                if mode == DIAGNOSTIC_MODE:
+                    source_checkpoint('after_fixtures', plugin_aliases)
+                    # The real source gate still runs. Only its measured
+                    # rejection is caught here; no hook/test/build follows.
+                    require(stage_git == source_inventory.git_binding(), 'P15_STAGE_GIT_CHANGED')
+                    diagnostic_boundary(mode, source_snapshots, expected_source,
+                                        lambda: verify_inputs(with_config=True), details)
             if action == 'test':
                 require(re.search(rb'\+24: All tests passed!', raw), 'P15_FLUTTER_TEST_COUNT')
                 tests_passed = True
@@ -474,12 +635,25 @@ def execute():
         details['tool_state'] = O.tool_state_binding()
         verify_inputs(with_config=True)
         phase, success = 'complete', True
+    except DiagnosticComplete:
+        report = details.get('source_diagnostic')
+        if (mode == DIAGNOSTIC_MODE and not compiled and not tests_passed
+                and 'hook_authorizations' not in details and type(report) is dict
+                and report.get('authorizes_outputs') is False
+                and report.get('original_source_sha256') == ORIGINAL_SOURCE_SHA
+                and set(report.get('inventories', {})) == {'before', 'after_tool_pub', 'after_app_pub', 'after_fixtures'}):
+            phase = 'source-diagnostic-complete'
+            diagnostics_complete = True
+        else:
+            failure = dict(category='ValueError', code='P15_DIAGNOSTIC_EXECUTION_SCOPE')
     except BaseException as error:
         code = str(error)
         failure = dict(category=type(error).__name__,
             code=code if re.fullmatch(r'[A-Z0-9_]{1,100}', code) else 'P15_OPERATION_FAILED')
         if isinstance(error, SDKGitFailure):
             failure['sdk_git'] = error.sdk_git_failure
+        if isinstance(error, SourceAdmissionFailure):
+            details['source_rejection'] = error.source_rejection
         if 'plugins' in locals() and isinstance(error, plugins.PluginFailure):
             details['plugin_rejection'] = error.plugin_failure
         observation = getattr(error, 'observation', None)
@@ -491,9 +665,11 @@ def execute():
         for sig in handlers:
             signal.signal(sig, signal.SIG_IGN)
         try:
+            inventory_closed = source_inventory.close() if source_inventory is not None else True
+            details['source_inventory_descriptors_closed'] = inventory_closed
             helper.DRAIN_CONFIRMED = helper.DRAIN_CONFIRMED and H.DRAIN_CONFIRMED
             cleaning = helper.cleanup(platform, attempted, installed) if installed or attempted else dict(complete=True)
-            drained = H.DRAIN_CONFIRMED and cleaning['complete']
+            drained = H.DRAIN_CONFIRMED and cleaning['complete'] and inventory_closed
             if runtime_started:
                 record(INPUT / 'runtime-boundary-cleanup.json', dict(schema=1, admitted=False,
                     process_drain_confirmed=H.DRAIN_CONFIRMED, policy_removed=cleaning['complete']))
@@ -513,8 +689,11 @@ def execute():
             except BaseException as error:
                 cleanup_error = dict(category=type(error).__name__, code='P15_CLEANUP_UNPROVEN')
             success = success and all(cleanup.values()) and cleanup_error is None
+            diagnostics_complete = diagnostics_complete and all(cleanup.values()) and cleanup_error is None
             record(PUBLIC / 'cleanup.json', dict(schema=1, admitted=False, **cleanup, failure=cleanup_error))
-            record(PUBLIC / 'result.json', dict(schema=1, kind='p15-overmorrow-first-candidate', admitted=False,
+            record(PUBLIC / 'result.json', dict(schema=1,
+                kind='p15-overmorrow-pub-diagnostic' if mode == DIAGNOSTIC_MODE else 'p15-overmorrow-first-candidate',
+                mode=mode, diagnostics_complete=diagnostics_complete, candidate_success=success, admitted=False,
                 source=os.environ['GITHUB_SHA'], base=BASE, run_id=os.environ['GITHUB_RUN_ID'],
                 run_attempt=os.environ['GITHUB_RUN_ATTEMPT'], p13_acceptance_sha256=P13_REPORT_SHA,
                 phase=phase, success=success, failure=failure, cleanup_failure=cleanup_error,
@@ -527,13 +706,13 @@ def execute():
             H.BOUNDARY = None
             for sig, handler in handlers.items():
                 signal.signal(sig, handler)
-    require(success, 'P15_CANDIDATE_FAILED')
+    require(success or mode == DIAGNOSTIC_MODE and diagnostics_complete, 'P15_CANDIDATE_FAILED')
 
 
 def main():
     require(sys.argv[1:] == [], 'P15_NO_ARGUMENTS')
     os.umask(0o077)
-    execute()
+    execute(mode=selected_mode())
 
 
 if __name__ == '__main__':

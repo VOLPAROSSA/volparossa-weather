@@ -8,7 +8,7 @@ on:
         description: Historical build, input data or installed environment inventory
         type: choice
         default: historical-v1
-        options: [historical-v1, source-input-inventory, installed-environment-inventory, runtime-boundary-verification, source-candidate-build]
+        options: [historical-v1, source-input-inventory, installed-environment-inventory, runtime-boundary-verification, source-candidate-build, source-pub-diagnostic]
   push:
     branches: [feature/hosted-overmorrow]
     paths:
@@ -293,7 +293,8 @@ jobs:
           python3 -B scripts/prepare_hosted_client_inputs.py --profile overmorrow --mode cleanup-input-data
 
   source-candidate:
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.input_mode == 'source-candidate-build'
+    name: P15 ${{ github.event.inputs.input_mode }}
+    if: github.event_name == 'workflow_dispatch' && (github.event.inputs.input_mode == 'source-candidate-build' || github.event.inputs.input_mode == 'source-pub-diagnostic')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -313,6 +314,7 @@ jobs:
           export TMPDIR="$GITHUB_WORKSPACE/build/p15-inert-tests"
           python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_hooks.py'
           python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_plugins.py'
+          python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_sources.py'
           python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_dependencies.py'
           python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_candidate.py'
           python3 -B -m unittest discover -s integrations/overmorrow -p 'test_build.py'
@@ -324,7 +326,7 @@ jobs:
           ref: 08bac388a0abfd06426bebe8f6fabd0157d2e709
           path: build/hosted-browser-source
           persist-credentials: false
-      - name: Build one candidate with closed app and Flutter-tool inputs
+      - name: Run the bounded candidate or diagnostic-only pub prefix
         run: |
           set -euo pipefail
           umask 077

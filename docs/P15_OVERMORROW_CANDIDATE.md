@@ -7,6 +7,78 @@ binding also passes. The full source check then stops at
 `P15_UNKNOWN_GENERATED_SOURCE`, before hook authorization, Flutter tests or
 web compilation. All six cleanup flags pass. No automatic retry followed.
 
+## P15f: complete post-pub measurement before authorization
+
+The P15e source and runtime results above remain authoritative. Its closed
+artifact does not contain the rejected filename, scan order or complete
+post-pub inventory. Consequently, no historical rejected filename is claimed.
+A new diagnostic-only verification is required before deciding output admission.
+
+The original application is staged inertly at the same source pin. Its 386-file
+map is SHA256 `94a0f9632f425453887f41b8b3e9926e3d4c3516f3fd4ce3d8db1540d7e48baf`,
+exactly matching the retained P15e pre-pub receipt. Flutter remains 3.38.5 and
+Dart 3.10.4. The bundled Dart revision is
+`a0daa5004ec02c0638ba6e50791ba9338a87374c`; its original DEPS binds pub to
+`f7f1891e2de3d795532f45ec214f88ac912ffcd6`. No SDK/package code ran locally.
+
+The [source producer catalogue](../third_party/overmorrow-pub-source-observations-v1.json)
+is explicitly observational, SHA256
+`5dfda4d8a1716b798f9c3b5979cd18b3a7b3c7256304d5a2f8f3c4556d2918f9`.
+It records 53 regular writer/touched paths outside build state: 35 localization
+Dart files and 18 platform/metadata files. Forty-two already exist and eleven
+are potential additions. Sixteen desktop links remain separately authenticated
+by the unchanged plugin helper. Four source-predicted paths are absent from the
+old acceptance set: the two iOS ephemeral LLDB files and the macOS ephemeral
+configuration/environment files. These are predictions, not observed historical
+rejections or output authorizations. Three old allowances have no producer in
+this source profile: `.flutter-plugins` and separate pt_BR/zh_Hant Dart files.
+
+The [metadata supplement](../third_party/overmorrow-pub-metadata-observations-v1.json),
+SHA256 `bc96728fd748e61420e3e9770035ddee8fac535f8e2e32b143d3c6d7f4c2b561`,
+records four app `.dart_tool` files and six persistent localization build-system
+metadata files, their exact producers and expected schemas. Build identifiers
+are source-derived lowercase MD5 values; the actual engineRevision input is
+not inferred from an unrelated SDK artifact stamp. Diagnostic labels recognize
+only the five exact leaves under a lowercase hex32 directory and `.last_build_id`;
+the identifier is rendered as `<pub-build-id>`. This grants no output authority.
+
+The explicit `source-pub-diagnostic` mode uses the existing Boundary and the same
+two locked offline pub commands, dependency/plugin checks and fixture prefix.
+Four descriptor-anchored inventories cover before pub, after tool pub, after
+app pub and after fixtures. Complete additions, changes and removals are
+recorded with bounded relative labels or redacted path hashes. Reviewed source
+outputs also receive root-normalized hashes and occurrence counts; neither
+source bytes nor host paths are exported. Original sources, file types,
+permissions, directory identities and no-follow Git metadata remain checked.
+The source gate runs unchanged; only its measured source-admission failure may
+be collected, and its full inventory fingerprint must equal the published final
+checkpoint. Any different integrity failure remains fatal.
+
+Diagnostic completion stops before hook authorization, Flutter application
+tests and web compilation. It is separate from candidate success; output and
+production admission remain false. Process cleanup, persistent descriptor
+cleanup and all six existing cleanup invariants remain required. Unknown
+redacted entries remain unresolved. A diagnostic result cannot authorize a
+candidate: the complete observed closure still needs explicit content checks,
+negative tests and an independent candidate review before one real attempt.
+
+All 237 relevant inert tests pass, including 52 inventory/privacy tests and
+39 candidate lifecycle tests. Unknown files, changed originals, directory and
+Git-admin replacement, symlinks, hardlinks, resource limits, diagnostic gate
+races and attempted fall-through are covered negatively. Twelve existing
+shared/runtime and P15 dependency/hook/plugin helpers remain byte-identical.
+
+Independent diagnostic-only preflight review: SHA256
+`19d6248282f6a22eb7a09e2f0e284aaf8c4b38a7cecf8224532f29befb73ae5b`.
+The final metadata-label delta is independently approved, SHA256
+`95fe671ca5f6622d7fdbdadb2dc277e46eb73654e8f96e465ed41300483b3fa9`,
+with 91 affected tests independently repeated and no open findings. This is
+GO only for one diagnostic run, not a candidate or generated-output admission.
+
+Private source/provenance evidence is retained under `build/p15f-source/`,
+inert checks under `build/p15f-inert-tests/`, and independent reviews under
+`build/p15f-review/`. No shared P13/runtime input, P14 or Core file changes.
+
 ## P15e: exact plugin targets and namespace identities
 
 The original [P15d run 40726035128](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/40726035128)
