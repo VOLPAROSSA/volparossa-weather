@@ -1,10 +1,10 @@
 # P15 Overmorrow candidate, 2026-10-28
 
-**P15d preflight:** the SDK-Git stop is reproduced with the original authorized
-Git 2.43.0 and SDK. A P15-only content comparison preserves all integrity checks
-without refreshing the original index. All 144 relevant inert tests pass.
-Independent review approves exactly one newly authorized hosted attempt.
-Hook runtime and the candidate build remain unverified.
+**P15d result:** the SDK-Git correction passed the single hosted attempt.
+Offline Flutter-tool and application resolution both returned exit 0. The run
+then stopped at `P15_PLUGIN_SYMLINK_TARGET` during source sealing, before hook
+authorization, tests or compilation. All six cleanup flags passed. No additional
+run or guard relaxation followed; a successful candidate remains unverified.
 
 ## P15d: immutable SDK index and Git 2.43.0
 
@@ -18,7 +18,8 @@ historical stderr.
 The original SDK archive was acquired as inert data at its unchanged fixed URL,
 length and SHA256. Its complete 17,240-file inventory again matches P13's
 `98df602485d0dd66195f614e950dc59ed3f7dddf5169431ece5a4c2a92ace5c7`.
-Only Git runs locally; no Flutter, Dart, package code or sandbox starts locally.
+Only Git runs locally; no Flutter, Dart, pub hooks, application code or sandbox
+starts locally.
 The previously authorized Ubuntu package `git 1:2.43.0-1ubuntu7.4` was privately
 extracted without installation or lifecycle scripts: 3,680,654 bytes, SHA256
 `c79b7948ef9860c97ec74293a90178676e63368a0711c95c28a55af4edf1adab`.
@@ -80,6 +81,62 @@ Private evidence remains under `build/p15d-investigation/`,
 P13, P14, Core, shared pins/helpers and all dependency versions are unchanged.
 No build success, reproducible output or production admission follows from
 these inert results.
+
+### Hosted P15d result
+
+Exactly one [P15d run 40726035128](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/40726035128)
+was dispatched, manual attempt 1 at executable source
+`13a7c62f2c5d2c4781cd633f2175b85fe872fb5e`. All 106 hosted inert tests passed
+(19 hook, 31 dependency, 31 candidate, 13 build-contract and 12 deploy tests).
+The nine SDK-Git receipts are three complete `rev-parse`/`diff`/`ls-files`
+triplets, all exit 0. The original SDK/source/dependency checks therefore passed
+before tool resolution, after tool resolution and before application resolution.
+
+Five recorded sandbox steps returned exit 0 and drained: cache generation,
+cache listing, compile preflight, `p15-tool-pub-offline` (258 ms), and
+`p15-pub-offline` (1,302 ms). The actual offline Dart tool resolver completed;
+the generated 102-package tool configuration and graph were reauthenticated
+against the original inputs. The 224 original cache archives, original SDK
+inventory and tool lock remained bound at that verification. All ten compile
+isolation/negative flags were true. The two pub steps' `sdk_download` diagnostic
+booleans are only matches for the coarse `(Downloading|download failed)` log
+pattern, not evidence of a download. Both commands retained `--offline` and the
+unchanged compile Boundary with external networking unavailable.
+
+The next check failed closed with category `ValueError`, code
+`P15_PLUGIN_SYMLINK_TARGET`, phase `p15-pub-offline`. `seal_app_sources()` calls
+the existing `source_files()` guard, which requires each admitted generated
+Linux/Windows plugin symlink's literal target to match its exact original
+application-cache package/version root. The rejected package and actual target
+were not retained. A relative path, trailing separator, changed version or
+other cause is **not established**; the guard was not relaxed.
+
+Application pub exit 0 does not complete application input acceptance: source
+sealing and the post-app-pub generated configuration/plugin/dependency/SDK
+rechecks were not completed. The retained `dependencies_final` receipt is the
+last successful **pre-app-pub** check, with tool state authenticated but
+application generated/plugin bindings still null. No test fixtures, hook
+authorization, Flutter tests or application compilation were reached. There is
+no accepted build output or generated-output notice/asset result.
+
+Artifact `12834260731` is the original 2,868-byte ZIP, SHA256
+`6d1b5e0818a18d3dd1ecafadc6b05229d6c4a9193cb5a218d6453e1a92affbcd`,
+matching the GitHub API digest. It contains exactly two bounded UTF-8 JSON
+files; all six controller source hashes match the trial commit. Cleanup confirms
+process drain, policy removal, private-input absence, stage absence, output
+absence and unchanged host network namespace; both cleanup failure fields are
+null. The locally extracted SDK/archive/Git package were also removed after
+their data proof and original notices/index data were retained privately.
+The independent result review has SHA256
+`d2ed220ba58b95fc13d85371b1b3131a17c56f5f23d7ec1e79d619d7f1e9d84b`.
+It confirms the SDK-Git resolution, actual pub progress, new closed stop and
+cleanup, while retaining the application-integrity and diagnostic limits above.
+
+The remaining dependency is a separate, inert review of the generated plugin
+alias contract and its actual target representation. There is no second P15d
+attempt, automatic merge, output/reproducibility admission or production release.
+The SDK-Git blocker is resolved; the first successful Overmorrow candidate and
+hook runtime remain unverified.
 
 ## Initial P15 stop (preserved evidence)
 
