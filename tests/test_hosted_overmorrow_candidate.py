@@ -125,7 +125,7 @@ class CandidateTests(unittest.TestCase):
         self.assertNotIn('/private', raw)
         self.assertTrue(value[0]['diagnostic_categories']['compiler'])
 
-    def failed_attempt(self, *, drain=True, cleanup_rejected=False):
+    def failed_attempt(self, *, drain=True, cleanup_rejected=False, failure=None):
         root = self.base / 'repo'
         build = root / 'build'
         build.mkdir(mode=0o700, parents=True)
@@ -137,7 +137,8 @@ class CandidateTests(unittest.TestCase):
         public = build / 'p15-overmorrow-candidate-public'
         inputs = build / 'hosted-overmorrow-input-candidate'
         helper = SimpleNamespace(DRAIN_CONFIRMED=True)
-        apt = SimpleNamespace(installed_inventory=Mock(side_effect=ValueError('TEST_PROVISIONING_REJECTED')))
+        failure = failure or ValueError('TEST_PROVISIONING_REJECTED')
+        apt = SimpleNamespace(installed_inventory=Mock(side_effect=failure))
         cleanup = I.cleanup_candidate
         if cleanup_rejected:
             cleanup = Mock(side_effect=ValueError('INSTALLER_CLEANUP_UNCONFIRMED'))
@@ -153,8 +154,86 @@ class CandidateTests(unittest.TestCase):
         receipt = json.loads((public/'cleanup.json').read_text())
         self.assertFalse(result['success'])
         self.assertFalse(result['compiled'])
-        self.assertEqual(result['failure']['code'], 'TEST_PROVISIONING_REJECTED')
+        self.assertEqual(result['failure']['code'], str(failure))
         return result, receipt, inputs
+
+    def test_finally_retains_closed_typed_git_failure_without_private_output(self):
+        observation = dict(command='diff', category='exit-status', exit_status=1,
+                           output_bytes=0, output_sha256=I.sha(b''))
+        result, receipt, _ = self.failed_attempt(failure=W['SDKGitFailure'](observation))
+        self.assertEqual(result['failure']['sdk_git'], observation)
+        self.assertTrue(receipt['private_inputs_absent'])
+
+    def test_git_proxy_preserves_checks_timeouts_and_uses_explicit_patch_comparison(self):
+        helper = H.policy_helper()
+        result = (0, b'private source data')
+        helper.process = Mock(return_value=result)
+        receipts = []
+        checked = W['SDKGitChecks'](helper, receipts)
+        for name, argv, seconds in checked.expected:
+            expected = list(argv)
+            if name == 'diff':
+                offset = expected.index('--quiet')
+                expected[offset:offset + 1] = ['--patch', '--no-ext-diff', '--no-textconv']
+                result = (0, b'')
+                helper.process.return_value = result
+            self.assertIs(checked.process(argv, seconds), result)
+            helper.process.assert_called_with(expected, seconds)
+            self.assertEqual(receipts[-1]['command'], name)
+        self.assertNotIn('private', json.dumps(receipts))
+        with self.assertRaisesRegex(ValueError, 'P15_SDK_GIT_CALL_COUNT'):
+            checked.process(checked.expected[0][1], 10)
+
+    def test_each_git_failure_projects_only_validated_typed_fields(self):
+        for index in range(3):
+            for category, status in (('exit-status', 1), ('exit-status', 128),
+                                     ('deadline', None), ('output-bound', None)):
+                with self.subTest(command=index, category=category, status=status):
+                    helper = H.policy_helper()
+                    raw = b'secret token and /private/path and ENV=value'
+                    error = helper.CommandFailure(category, status, raw)
+                    helper.process = Mock(side_effect=error)
+                    receipts = []
+                    checked = W['SDKGitChecks'](helper, receipts)
+                    checked.index = index
+                    _, argv, seconds = checked.expected[index]
+                    with self.assertRaises(W['SDKGitFailure']) as caught:
+                        checked.process(argv, seconds)
+                    value = caught.exception.sdk_git_failure
+                    self.assertEqual(value, dict(command=checked.expected[index][0],
+                        category=category, exit_status=status, output_bytes=len(raw), output_sha256=I.sha(raw)))
+                    projected = json.dumps([value, receipts])
+                    for private in ('secret', '/private', 'ENV', 'token'):
+                        self.assertNotIn(private, projected)
+
+    def test_git_proxy_rejects_unknown_calls_timeouts_diagnostics_and_excess_receipts(self):
+        helper = H.policy_helper()
+        helper.process = Mock()
+        for altered in ('argv', 'timeout', 'receipts', 'schema'):
+            with self.subTest(altered=altered):
+                checked = W['SDKGitChecks'](helper, [{}] * (64 if altered == 'receipts' else 0))
+                _, argv, seconds = checked.expected[0]
+                if altered == 'argv': argv = argv + ['--untrusted']
+                if altered == 'timeout': seconds += 1
+                error = helper.CommandFailure('exit-status', True, b'private')
+                helper.process.side_effect = error
+                with self.assertRaisesRegex(ValueError, 'P15_SDK_GIT_'):
+                    checked.process(argv, seconds)
+
+    def test_even_whitespace_or_private_patch_output_is_rejected_without_export(self):
+        for raw in (b'\n', b'diff --git a/private/token b/private/token\nsecret\n'):
+            helper = H.policy_helper()
+            helper.process = Mock(return_value=(0, raw))
+            checked = W['SDKGitChecks'](helper, [])
+            checked.index = 1
+            _, argv, seconds = checked.expected[1]
+            with self.assertRaises(W['SDKGitFailure']) as caught:
+                checked.process(argv, seconds)
+            value = caught.exception.sdk_git_failure
+            self.assertEqual(value['category'], 'content-difference')
+            self.assertEqual(value['output_sha256'], I.sha(raw))
+            self.assertNotIn('private', json.dumps(value))
+            self.assertNotIn('secret', json.dumps(value))
 
     def test_actual_finally_cleans_early_failure_and_projects_original_failure(self):
         result, receipt, inputs = self.failed_attempt()
@@ -186,6 +265,128 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual([line.strip() for line in exports if line.strip()], [
             'build/p15-overmorrow-candidate-public/result.json',
             'build/p15-overmorrow-candidate-public/cleanup.json'])
+
+
+class SDKGitBehaviorTests(unittest.TestCase):
+    """Real inert Git fixtures; never execute SDK or package code."""
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.sdk = Path(temporary.name)
+        self.helper = H.policy_helper()
+        self.git = ['/usr/bin/git', '-c', 'core.hooksPath=/dev/null',
+                    '-c', 'commit.gpgsign=false', '-c', 'user.name=Fixture',
+                    '-c', 'user.email=fixture@example.invalid', '-C', str(self.sdk)]
+        self.helper.process(self.git + ['init', '--quiet', '--template='], 10)
+        self.source = self.sdk / 'source.txt'
+        self.source.write_bytes(b'original SDK fixture\n')
+        self.source.chmod(0o600)
+        self.helper.process(self.git + ['add', 'source.txt'], 10)
+        self.helper.process(self.git + ['commit', '--quiet', '-m', 'Inert fixture'], 10)
+        _, head = self.helper.process(self.git + ['rev-parse', 'HEAD'], 10)
+        self.lock = self.sdk / 'pubspec.lock'
+        self.lock.write_bytes(b'original lock')
+        self.pin = dict(flutter_commit=head.decode().strip(), pubspec_lock_sha256=I.sha(self.lock.read_bytes()))
+
+    def verify(self, *, expected_commit=None):
+        pin = dict(self.pin)
+        if expected_commit is not None:
+            pin['flutter_commit'] = expected_commit
+        receipts = []
+        with patch.object(O, 'SDK', self.sdk), patch.object(O, 'STAGE', self.sdk), \
+                patch.object(O, 'build_contract', return_value={'SDK_FILES': {}}), \
+                patch.object(O, 'sdk_inventory', return_value={'fixture': True}):
+            checked = W['SDKGitChecks'](self.helper, receipts)
+            O.verify_phase_inputs(checked, pin)
+            self.assertEqual(checked.index, 3)
+        return receipts
+
+    def index(self):
+        return I.sha((self.sdk / '.git/index').read_bytes())
+
+    def test_clean_git_fixture_with_stale_stat_is_accepted_without_index_write(self):
+        before = self.index()
+        self.source.write_bytes(self.source.read_bytes())  # new stat, identical bytes
+        self.assertTrue(all(row['success'] for row in self.verify()))
+        self.assertEqual(self.index(), before)
+
+    def test_changed_source_bytes_are_rejected_without_index_write(self):
+        before = self.index()
+        self.source.write_bytes(b'changed SDK fixture!\n')
+        with self.assertRaises(W['SDKGitFailure']) as caught:
+            self.verify()
+        self.assertEqual(caught.exception.sdk_git_failure['command'], 'diff')
+        self.assertEqual(caught.exception.sdk_git_failure['category'], 'content-difference')
+        self.assertEqual(caught.exception.sdk_git_failure['exit_status'], 0)
+        self.assertEqual(self.index(), before)
+
+    def test_changed_executable_bit_is_rejected(self):
+        before = self.index()
+        self.source.chmod(0o700)
+        with self.assertRaises(W['SDKGitFailure']):
+            self.verify()
+        self.assertEqual(self.index(), before)
+
+    def test_deleted_source_is_rejected(self):
+        self.source.unlink()
+        with self.assertRaises(W['SDKGitFailure']):
+            self.verify()
+
+    def test_same_size_and_mtime_source_change_is_rejected(self):
+        info = self.source.stat()
+        before = self.index()
+        raw = self.source.read_bytes()
+        self.source.write_bytes(b'X' + raw[1:])
+        os.utime(self.source, ns=(info.st_atime_ns, info.st_mtime_ns))
+        with self.assertRaises(W['SDKGitFailure']):
+            self.verify()
+        self.assertEqual(self.index(), before)
+
+    def test_binary_source_change_is_rejected(self):
+        self.source.write_bytes(b'\x00changed binary')
+        with self.assertRaises(W['SDKGitFailure']):
+            self.verify()
+
+    def test_source_type_change_is_rejected(self):
+        self.source.unlink()
+        self.source.symlink_to('/unopened-private-target')
+        with self.assertRaises(W['SDKGitFailure']):
+            self.verify()
+
+    def test_source_rename_is_rejected(self):
+        self.source.rename(self.sdk / 'renamed.txt')
+        with self.assertRaises(W['SDKGitFailure']):
+            self.verify()
+
+    def test_staged_new_source_is_rejected_without_index_write(self):
+        added = self.sdk / 'added.txt'
+        added.write_bytes(b'new source')
+        self.helper.process(self.git + ['add', 'added.txt'], 10)
+        before = self.index()
+        with self.assertRaises(W['SDKGitFailure']):
+            self.verify()
+        self.assertEqual(self.index(), before)
+
+    def test_wrong_head_and_application_lock_are_still_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'FLUTTER_COMMIT_CHANGED'):
+            self.verify(expected_commit='0' * 40)
+        self.lock.write_bytes(b'modified lock')
+        with self.assertRaisesRegex(ValueError, 'DEPENDENCY_LOCK_CHANGED'):
+            self.verify()
+
+    def test_unknown_bootstrap_file_is_still_rejected(self):
+        bootstrap = self.sdk / 'bin/internal/unreviewed.sh'
+        bootstrap.parent.mkdir(mode=0o700, parents=True)
+        bootstrap.write_bytes(b'never executed')
+        with self.assertRaisesRegex(ValueError, 'UNREVIEWED_FLUTTER_BOOTSTRAP'):
+            self.verify()
+
+    def test_unresolved_git_head_has_typed_command_failure(self):
+        (self.sdk / '.git/HEAD').write_bytes(b'ref: refs/heads/absent\n')
+        with self.assertRaises(W['SDKGitFailure']) as caught:
+            self.verify()
+        self.assertEqual(caught.exception.sdk_git_failure['command'], 'rev-parse')
+        self.assertEqual(caught.exception.sdk_git_failure['exit_status'], 128)
 
 
 if __name__ == '__main__':

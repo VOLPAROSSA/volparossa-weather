@@ -1,10 +1,85 @@
 # P15 Overmorrow candidate, 2026-10-28
 
-**P15c result:** the exact hook data gate passed on all 224 original archives,
-with one authorized hook. The one hosted attempt then stopped in the existing
-SDK-Git phase validation before the first Dart/pub command. Independent review
-verified the safe stop and cleanup. Hook runtime and the candidate build remain
-unverified; no additional run, P13/P14/Core change or guard relaxation followed.
+**P15d preflight:** the SDK-Git stop is reproduced with the original authorized
+Git 2.43.0 and SDK. A P15-only content comparison preserves all integrity checks
+without refreshing the original index. All 144 relevant inert tests pass.
+Independent review approves exactly one newly authorized hosted attempt.
+Hook runtime and the candidate build remain unverified.
+
+## P15d: immutable SDK index and Git 2.43.0
+
+The original [P15c run 40718328100](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/40718328100)
+artifact and independent review are preserved unchanged. That artifact lost the
+structured Git command failure: its historical exact command/exit status cannot
+be recovered directly. The following is an exact-input local reproduction,
+consistent with the proven failure location before Dart, not newly recovered
+historical stderr.
+
+The original SDK archive was acquired as inert data at its unchanged fixed URL,
+length and SHA256. Its complete 17,240-file inventory again matches P13's
+`98df602485d0dd66195f614e950dc59ed3f7dddf5169431ece5a4c2a92ace5c7`.
+Only Git runs locally; no Flutter, Dart, package code or sandbox starts locally.
+The previously authorized Ubuntu package `git 1:2.43.0-1ubuntu7.4` was privately
+extracted without installation or lifecycle scripts: 3,680,654 bytes, SHA256
+`c79b7948ef9860c97ec74293a90178676e63368a0711c95c28a55af4edf1adab`.
+Its Git binary has SHA256
+`eb54b535467e0975c1284d4c4d08eea779aeb248a5d34b02e2ee171382e22201`.
+Local host libraries differ from the hosted Ubuntu runtime; this is a targeted
+Git reproduction, not another P13 runtime acceptance claim.
+
+Under the original helper's exact `PATH/LANG/LC_ALL` environment, Git 2.43.0
+returns `rev-parse HEAD: 0`, `diff --quiet HEAD --: 1` (zero output bytes), and
+`ls-files --others bin/internal: 0` (zero output bytes). Git 2.47.3 returns zero
+for all three on the same data. The actual commit remains
+`f6ff1529fd6d8af5f706051d9251ac9231c83407`. All 31 original Git files and their
+exact file closure remain unchanged during these fixed checks.
+
+The archive index is version 2 with 15,102 entries. Every tracked path, blob ID,
+Git mode, size and index flag matches after a diagnostic stat refresh; only
+cached ctime, device, inode and mtime nanoseconds differ. An initial local
+environment probe used the broader sandbox environment and was superseded by
+the exact-helper-environment probe. One subsequent diagnostic variant omitted
+`diff.autoRefreshIndex=false` and inadvertently refreshed only the temporary
+local index despite `--no-optional-locks`. That failure and the refreshed index
+are retained privately. The original index was restored from the authenticated
+archive and all 17,240 original file bytes/modes and the exact closure rechecked.
+Index refresh is **not** the implemented correction or an allowed build step.
+
+Git 2.43.0's stat-based `--quiet`/`--exit-code` result is unsuitable with this
+immutable producer index: even `--exit-code --patch` returns one with an empty
+patch. The P15 controller recognizes only the adapter's exact fixed SDK diff
+call and substitutes `diff --patch --no-ext-diff --no-textconv HEAD --`.
+It requires both successful command execution **and exactly empty combined
+output**; every patch, diagnostic byte, nonzero exit, deadline or output limit
+fails closed. External diff/textconv execution is explicitly disabled.
+`--no-optional-locks`, `diff.autoRefreshIndex=false`, disabled Git hooks, the full
+HEAD/path scope and original command deadlines remain intact. The original
+adapter, helper, source commit checks, bootstrap-file check, complete SDK/cache
+inventories, dependency locks and hook policy remain unchanged.
+
+The P15-only proxy also records fixed command names, typed failure categories,
+exit status, output length and SHA256. It exports no raw Git output, command
+paths, tokens or environment values. Source receipts still require all three
+commands; unknown commands or deadlines are rejected.
+
+Validation: 144 existing relevant inert tests pass, including 31 candidate tests.
+An additional exact Git 2.43.0 check executes the actual proxy on the original
+SDK and nine fresh inert Git fixtures: clean stale stats pass; same-size and
+same-mtime content changes, executable-bit changes, deletion, binary changes,
+symlink type changes, rename, staged new source and staged changed source fail.
+The original SDK Git closure and every fixture's Git metadata remain unchanged
+during the comparisons; fixture processes drain and temporary fixtures are
+removed. Independent implementation review is recorded before any dispatch.
+The independent review has SHA256
+`781d088af09b8b40b3c3878df555d7ed9d6fe8661c84d2f472d754e5b92bf160`:
+no findings; GO for exactly one manual bounded attempt on candidate source SHA256
+`7d48bbeb3a50c9407aa4cb6e88941ca64b0d16b33a7b7db34391cff95ed59f72`.
+
+Private evidence remains under `build/p15d-investigation/`,
+`build/p15d-sdk-data/`, `build/p15d-inert-tests/` and `build/p15d-review/`.
+P13, P14, Core, shared pins/helpers and all dependency versions are unchanged.
+No build success, reproducible output or production admission follows from
+these inert results.
 
 ## Initial P15 stop (preserved evidence)
 

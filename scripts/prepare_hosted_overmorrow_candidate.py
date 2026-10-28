@@ -65,6 +65,68 @@ def record(path, value):
     I.write(path, raw)
 
 
+class SDKGitFailure(ValueError):
+    """Closed diagnostics only; never retain Git output, argv or environment."""
+    def __init__(self, observation):
+        super().__init__('P15_SDK_GIT_COMMAND_FAILED')
+        self.sdk_git_failure = observation
+
+
+class SDKGitChecks:
+    """Preserve the adapter's checks with a content comparison on Git 2.43.
+
+    Its immutable archive index contains the producer's cached file stats.
+    With index refresh disabled, 2.43's --quiet/--exit-code falsely reports
+    stat-only changes even when the rendered patch is empty. Require an empty
+    explicit patch instead; nonzero commands AND any patch/output still fail.
+    The original index is never refreshed. No external diff/textconv executes.
+    Timeouts, environment and process cleanup use the unchanged P13 helper.
+    """
+    def __init__(self, helper, receipts):
+        self.helper, self.receipts = helper, receipts
+        self.expected = (
+            ('rev-parse', ['/usr/bin/git', '--no-optional-locks', '-C', str(O.SDK), 'rev-parse', 'HEAD'], 10),
+            ('diff', O.sdk_diff_command(), 20),
+            ('ls-files', ['/usr/bin/git', '--no-optional-locks', '-C', str(O.SDK),
+                          'ls-files', '--others', 'bin/internal'], 10),
+        )
+        self.index = 0
+
+    def process(self, argv, seconds):
+        require(self.index < len(self.expected), 'P15_SDK_GIT_CALL_COUNT')
+        name, expected, limit = self.expected[self.index]
+        require(argv == expected and seconds == limit, 'P15_SDK_GIT_COMMAND_CHANGED')
+        require(len(self.receipts) < 64, 'P15_SDK_GIT_RECEIPT_BOUND')
+        self.index += 1
+        command = list(argv)
+        if name == 'diff':
+            offset = command.index('--quiet')
+            command[offset:offset + 1] = ['--patch', '--no-ext-diff', '--no-textconv']
+        try:
+            result = self.helper.process(command, seconds)
+        except self.helper.CommandFailure as error:
+            # Validate typed fields before export, including bool/int and
+            # integer bounds. No str(error), private paths or raw output.
+            category, code = error.category, error.code
+            count, digest = error.output_bytes, error.output_sha256
+            require(type(category) is str and category in ('deadline', 'output-bound', 'exit-status')
+                    and (code is None or type(code) is int and -255 <= code <= 255)
+                    and type(count) is int and 0 <= count <= self.helper.LIMIT
+                    and type(digest) is str and re.fullmatch(r'[0-9a-f]{64}', digest),
+                    'P15_SDK_GIT_DIAGNOSTIC_SCHEMA')
+            observation = dict(command=name, category=category, exit_status=code,
+                               output_bytes=count, output_sha256=digest)
+            self.receipts.append(dict(observation, success=False))
+            raise SDKGitFailure(observation) from None
+        if name == 'diff' and result[1]:
+            observation = dict(command=name, category='content-difference', exit_status=result[0],
+                               output_bytes=len(result[1]), output_sha256=I.sha(result[1]))
+            self.receipts.append(dict(observation, success=False))
+            raise SDKGitFailure(observation)
+        self.receipts.append(dict(command=name, category='complete', exit_status=0, success=True))
+        return result
+
+
 def guards():
     I.hosted_guard(os.environ, 'overmorrow')
     require(os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch'
@@ -316,7 +378,9 @@ def execute():
         def verify_inputs(with_config=False):
             boundary.check()
             require(H.runtime_inventory() == runtime_before, 'P15_RUNTIME_CHANGED')
-            O.verify_phase_inputs(helper, I.document(I.read(ROOT / 'integrations/overmorrow/upstream.json')))
+            checked = SDKGitChecks(helper, details.setdefault('sdk_git_checks', []))
+            O.verify_phase_inputs(checked, I.document(I.read(ROOT / 'integrations/overmorrow/upstream.json')))
+            require(checked.index == 3, 'P15_SDK_GIT_CALL_COUNT')
             details['source'] = recheck_source(STAGE, expected_source, app_packages)
             require(stage_git == {name: I.sha(I.read(STAGE / '.git' / name))
                 for name in stage_git}, 'P15_STAGE_GIT_CHANGED')
@@ -387,6 +451,8 @@ def execute():
         code = str(error)
         failure = dict(category=type(error).__name__,
             code=code if re.fullmatch(r'[A-Z0-9_]{1,100}', code) else 'P15_OPERATION_FAILED')
+        if isinstance(error, SDKGitFailure):
+            failure['sdk_git'] = error.sdk_git_failure
         observation = getattr(error, 'observation', None)
         if observation is not None:
             require(type(observation) is dict and set(observation) == {'code', 'package', 'version', 'hook'}
