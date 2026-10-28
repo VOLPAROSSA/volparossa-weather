@@ -1,9 +1,10 @@
 # P15 Overmorrow candidate, 2026-10-28
 
-**P15c status:** the exact package hook closure is now identified and narrowly
-authorized for the original web and Linux-test profiles. Independent review
-approves one bounded manual attempt. Actual P15c execution is pending; the failed
-P15b evidence below remains preserved. P13, P14 and Core stay unchanged.
+**P15c result:** the exact hook data gate passed on all 224 original archives,
+with one authorized hook. The one hosted attempt then stopped in the existing
+SDK-Git phase validation before the first Dart/pub command. Independent review
+verified the safe stop and cleanup. Hook runtime and the candidate build remain
+unverified; no additional run, P13/P14/Core change or guard relaxation followed.
 
 ## Initial P15 stop (preserved evidence)
 
@@ -426,3 +427,60 @@ Private evidence is retained under `build/p15c-hook-inventory/` and
 `build/p15c-hook-review/`, including the complete immutable source-archive set,
 original membermaps/notices, exact pinned protocol/runner/Flutter sources and
 independent review. Earlier failed reports remain separate and unchanged.
+
+
+## P15c hosted result: hook data gate passed, SDK-Git check stopped execution
+
+The one authorized [P15c run 40718328100](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/40718328100)
+used exact commit `a0ab43f5890ff54a26c4594eeb7316f968693d40`, manual attempt 1.
+The hosted preflight passed all 89 inert tests (19 hook, 31 dependency,
+14 candidate, 13 original build-contract and 12 original deployment tests).
+The four other workflow jobs were skipped.
+
+Actual closed metadata verifies:
+
+- All 224 original archives materialized and reverified: 152 app archives,
+  101 tool archives, 29 identical reused SDK/app archives, five SDK references.
+- Exactly one hook found and authorized. Original cache bytes and membermaps
+  remained unchanged; the hook rejection from P15b did not recur.
+- All ten existing compile-Boundary negative/isolation flags passed. Loader
+  cache generation/listing and the compile preflight returned exit 0 and drained.
+- Phase `p15-tool-pub-offline` stopped with category `CommandFailure` and public
+  code `P15_OPERATION_FAILED`, before the corresponding `H.run` launch. No Dart
+  command, hook kernel/protocol, Flutter test or application compiler executed.
+- All six cleanup checks passed: process drain, policy removal, private inputs
+  absent, stage absent, output absent, hosted network namespace unchanged.
+  Both cleanup-error fields are null.
+
+Artifact `12830565481` contains only two bounded UTF-8 JSON files. The original
+2,423-byte ZIP SHA256 matches the API:
+`21f7892042b6ed8e909463788599d279172de31fd2476c9c9a67c4ba18ea6b0f`.
+Independent review checked ZIP contents, source hashes, exact run/attempt,
+full-cache/hook-gate and preflight receipts and cleanup. Private original API,
+job log, ZIP and independent result review are retained separately under
+`build/p15c-hosted/`; no historical evidence was replaced or binaries published.
+
+### Exact remaining evidence limit and decision
+
+The source sets `p15-tool-pub-offline` before `verify_inputs()`. The failure
+occurs before its source-receipt assignment. In that prefix, a helper
+`CommandFailure` can originate from the three existing SDK Git calls in
+`prepare_hosted_overmorrow_ci.py:verify_phase_inputs`: SDK `rev-parse HEAD`,
+`diff --quiet HEAD --`, or `ls-files --others bin/internal`. Source pin mismatches
+would use a different exception. Neither the closed artifact nor retained job
+log identifies which Git call failed, its exit status, category or diagnostic.
+The original helper has structured failure fields, but the candidate's generic
+exception projection did not retain them. Do not infer a dirty SDK, hook failure,
+resolver failure, changed upstream bytes or invalidated P13 acceptance.
+
+Technical decision: keep the closed hook correction and its passing actual
+224-archive data gate; stop before any source/permission change or forced build.
+A further bounded task must establish the SDK-Git failure with P15-local typed
+command/category/exit/hash diagnostics or independently retained original
+failure data. This does not justify a broad Flutter rebuild, altered pins,
+shared P13 runtime correction or automatic rerun. The P15c attempt is consumed.
+
+[PR #35](https://github.com/VOLPAROSSA/volparossa-weather/pull/35) stays draft
+above unchanged P13 PR #33. Hook execution, the first successful application
+candidate, independent cold-build reproducibility, consumer/product acceptance
+and release remain unverified. No automatic merge or release was performed.
