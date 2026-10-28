@@ -27,11 +27,11 @@ export function observeResult(result, inspect) {
 }
 
 /** Preserve this, every argument, synchronous exceptions, and the result contract.
- * F captures the original complete function signature, including hook context.
+ * Preserve F's call signature, including hook context, as a structural function.
  * @template {(this:never,...args:never[])=>unknown} F
  * @param {F} original
  * @param {(value:Awaited<ReturnType<F>>,args:Parameters<F>,context:ThisParameterType<F>)=>void} inspect
- * @returns {F}
+ * @returns {(this:ThisParameterType<F>,...args:Parameters<F>)=>ReturnType<F>}
  */
 export function observeHook(original, inspect) {
   /** @this {ThisParameterType<F>} @param {Parameters<F>} args @returns {ReturnType<F>} */
@@ -39,7 +39,7 @@ export function observeHook(original, inspect) {
     const result = /** @type {ReturnType<F>} */ (Reflect.apply(original, this, args));
     return observeResult(result, (value) => inspect(value, args, this));
   }
-  return /** @type {F} */ (observed);
+  return (observed);
 }
 
 /** Clone only to replace the handler; retain all other descriptors/prototype.
