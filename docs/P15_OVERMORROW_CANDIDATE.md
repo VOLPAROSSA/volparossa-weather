@@ -1,8 +1,12 @@
 # P15 Overmorrow candidate, 2026-10-28
 
-**Latest P15f evidence:** the diagnostic-only run identifies all four missing
-Darwin output paths and the complete 21-file addition set. All original source
-bytes and cleanup are intact. This is no candidate-build success.
+**P15f final result: STOP at a new cache-integrity predicate.** The complete
+post-pub filename set and four previously rejected Darwin outputs are identified.
+The one real candidate attempt passes both offline pub commands and reaches the
+closed metadata checks, then stops at `P15_PUB_METADATA_CACHE_HASH`. No fixtures,
+hook profile, Flutter application tests or web compilation follow. All cleanup
+passes. There is no successful first web build, reproducibility or product
+admission; no automatic retry or code correction follows this new blocker.
 
 **P15e result:** the plugin-symlink blocker is resolved in the one hosted
 attempt. Both actual namespace proofs verify all 16 aliases against 13 original
@@ -199,6 +203,69 @@ Review SHA256:
 Raw metadata bytes were not exported by the diagnostic; their exact predicates
 are source-derived and must pass against the real bound runtime values.
 
+
+### Hosted P15f candidate result and stop decision
+
+Exactly one real [candidate run 40758942786](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/40758942786)
+was dispatched on source `19198e9c30ed425f2e5b4c20c4c9080859fa20da`, manual
+attempt 1, using the final independently approved executable hashes. It fails
+closed during `p15-pub-offline` with `P15_PUB_METADATA_CACHE_HASH`.
+
+All 239 hosted inert tests pass. Both actual offline pub commands exit 0. Six
+harness commands return exit 0 and confirm process drain; nine SDK Git checks
+pass. Post-pub dependency/configuration binding again verifies the 224 original
+package trees. The host plugin seal and one actual namespace proof verify the
+16 aliases against 13 original packages. Source fonts/assets remain checked;
+output fonts/notices are not reached because compilation never starts.
+
+The failure is in the known `build/<pub-build-id>/.filecache`, produced by
+`FlutterBuildSystem.build` / `FileStore` during localization preparation.
+Its exact hash entry and observed/expected values were not exported. The new
+validator requires a string equal to the independently computed private MD5
+of each authorized input/output. At least one such entry fails that predicate.
+The artifact does not prove which entry, whether its type/value differs, or
+why. The retained producer uses the SDK's custom `Md5Hash`; that implementation
+reference is unresolved here and is not asserted to explain the mismatch.
+Neither corruption nor an SDK/application modification is inferred.
+
+The precise approved source flow establishes that the following earlier gates
+were reached successfully before that code: original SDK manifest/target hashes,
+exact 407-file / 112-directory closure, all 386 original file rows unchanged,
+16 alias names, 52 normalized source hashes/root counts, plugin scalars, version
+and Dartpad binding, localization input/output lists, stamp lists, output list,
+filecache version 2 and 73-entry count. This is a control-flow inference from
+the exact bound code and typed failure, not a separate `pub_outputs` success
+receipt: the validator throws before returning that receipt. Complete cache
+membership/hash validity, the later depfile comparison and final build-ID
+scalar comparison are not established. No fixture generator, hook-profile
+authorization, Flutter application-test command or web-build command is reached.
+
+Artifact `12847772815` is exactly two bounded UTF-8 JSON files, ZIP 5,180 bytes,
+SHA256 `09646594fe4536cce6c932bb55609ba125bf219de8b0fcbcbb84e3976dc6bd9f`.
+The API digest, all fourteen controller-source bindings and final run/job failure
+status match the trial source. All six cleanup flags pass; both failure fields
+for cleanup are null, and descriptor closure is confirmed. Runner-private
+inputs, source stage, outputs and policy are removed, processes drained and the
+host network namespace unchanged. The local inert 386-file source copy was
+also rehashed and removed; private source/provenance and review evidence remain.
+
+The independent final-result review confirms the artifact/source/proof/cleanup
+bindings and distinguishes direct receipts from the earlier-gate inference.
+Review SHA256:
+`e0c9504232f546f0aba06069698aee56350796dbbff51fbc575e811635ddee42`.
+Evidence is retained under `build/p15f-candidate-hosted/` and
+`build/p15f-review/candidate-result-review.json`. Original failures, the diagnostic
+review and preflight GO remain separate and unchanged.
+
+**Acceptance decision: STOP_NEW_BLOCKER_NO_BUILD_ACCEPTANCE.** The complete
+preparation filename closure is demonstrated, but the full post-pub content
+integrity gate is not closed. The next bounded acceptance dependency is proof
+of the original SDK's `.filecache` hash representation/semantics against the
+validator, with sufficient non-sensitive typed observations to explain the
+mismatch. No cache-hash exception, source/dependency change, runtime correction,
+further diagnostic/candidate run or general Flutter rebuild is performed here.
+A new attempt requires new user authorization. PR #35 remains draft/open on
+unchanged #33. P13, P14, Core, sandbox permissions and shared helpers are unchanged.
 
 ## P15e: exact plugin targets and namespace identities
 
