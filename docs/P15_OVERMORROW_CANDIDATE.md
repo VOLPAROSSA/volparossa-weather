@@ -1,11 +1,11 @@
 # P15 Overmorrow candidate, 2026-10-28
 
-**P15e preflight:** the exact pinned producer spells desktop plugin targets as
-absolute package roots with one trailing slash. A P15-only identity binding
-authenticates the original packages and exact aliases, then checks the same
-file identities inside the unchanged compile Boundary. All 177 relevant inert
-tests pass; independent implementation review approves exactly one newly
-authorized hosted attempt. No application build is claimed yet.
+**P15e result:** the plugin-symlink blocker is resolved in the one hosted
+attempt. Both actual namespace proofs verify all 16 aliases against 13 original
+packages and their file identities. Post-pub package/configuration/plugin
+binding also passes. The full source check then stops at
+`P15_UNKNOWN_GENERATED_SOURCE`, before hook authorization, Flutter tests or
+web compilation. All six cleanup flags pass. No automatic retry followed.
 
 ## P15e: exact plugin targets and namespace identities
 
@@ -89,6 +89,72 @@ and gives GO for exactly one bounded manual attempt with no open findings.
 Private evidence is retained in `build/p15e-investigation/`,
 `build/p15e-inert-tests/` and `build/p15e-review/`. Earlier failures remain
 separate. No P13/P14/Core change, dependency upgrade or release follows.
+
+### Hosted P15e result
+
+Exactly one [P15e run 40735268382](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/40735268382)
+was dispatched, manual attempt 1, on source
+`adfc787848accde04390d8907ecaa2a543a12801`; implementation commit
+`99d23547d68e007593accf989fc4c118c6385151` has identical executable inputs.
+The intervening commit binds the finalized preflight-review hash in this report.
+All 139 hosted inert tests pass (19 hook, 33 plugin, 31 dependency, 31 candidate,
+13 build-contract and 12 deployment tests).
+
+Both real offline pub commands return exit 0. The first full post-pub dependency
+verification now succeeds: all 224 original archives/package trees remain bound,
+the application configuration/graph has 158 authorized roots, the tool state
+has 102, and the plugin metadata binds 53 platform entries and 42 graph entries
+to original package source declarations. Twelve SDK-Git checks, four complete
+triplets, all return exit 0. All ten compile isolation/negative flags are true.
+
+The host seals all 16 actual aliases. Two subsequent probes through the existing
+compile Boundary independently verify the same 16 alias/package/version/archive
+and membermap identities and every original selected file identity. Both
+proofs have `namespace_identity_verified=true` and match the sealed host proof
+apart from that flag. Thus the absolute trailing-slash producer spelling is
+now **actually observed and accepted** for all eight Windows and eight Linux
+aliases. For example,
+`windows/flutter/ephemeral/.plugin_symlinks/dynamic_system_colors` binds exactly
+to `/state/pub-cache/hosted/pub.dev/dynamic_system_colors-1.9.0/`.
+This first newly verified alias does not identify the historical first rejected
+P15d alias, whose scan order/owner/raw bytes were not retained.
+
+Eight recorded sandbox steps return exit 0 and drain: cache generation/listing,
+compile preflight, tool pub, application pub, `p15-plugins-0`, Node test-fixture
+generation, and `p15-plugins-1`. The fixture step is not a Flutter application
+test. Full source rechecking after these steps fails closed with category
+`ValueError`, code `P15_UNKNOWN_GENERATED_SOURCE`, phase `p15-pub-offline`.
+The existing `recheck_source()` extra-file gate found a path absent from the
+original source and the exact authorized generated-output set. Its filename
+was not retained and the cleaned stage cannot supply it afterward. No output
+name, producer or harmlessness is guessed, and no generated-file allowance is
+expanded. Source/output admission remains incomplete despite the now successful
+package and alias binding.
+
+No hook-profile authorization, Flutter application test or web compilation is
+reached; `compiled=false` and `flutter_tests=null`. Hook runtime remains
+unverified. There is no first successful web candidate, reproducible output or
+production/consumer admission.
+
+Artifact `12837916565` is the original 4,944-byte ZIP, SHA256
+`a79a5b388974888ee472bba6507fb485f71460655591cc393439eb23ac753e04`,
+matching the API. It contains exactly two bounded UTF-8 JSON files and all eight
+controller source hashes match the trial commit. The retained proofs contain
+controlled relative names and original hashes, not raw targets, inode numbers,
+host paths or raw private logs. All six cleanup flags pass: processes drained,
+policy removed, private inputs/stage/output absent and host network namespace
+unchanged; both cleanup failure fields are null.
+The independent result review has SHA256
+`85e91d5ca018be7ad846d69775ded27a23c076aa8dd61b025abec55cdd864ba3`.
+It also reconstructs the canonical probe payloads from the closed proofs and
+matches their recorded 5,788-byte output lengths and hashes. It accepts the
+bounded alias correction while preserving the new source/output acceptance
+blocker and all hook/test/build/reproducibility/product limitations above.
+
+The next separate dependency is a bounded review of the rejected generated
+source/output and its precise provenance. This P15e attempt is consumed. The
+unknown-file guard stays closed, and no further fix, hosted retry, merge or
+release is performed in this task.
 
 ## P15d: immutable SDK index and Git 2.43.0
 
