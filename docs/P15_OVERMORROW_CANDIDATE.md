@@ -1,9 +1,11 @@
 # P15 Overmorrow candidate, 2026-10-28
 
-**P15g preflight, 2026-10-29:** the original cache producer mismatch is
-reproduced on all 73 original files and the validator is corrected. All 287
-relevant inert tests pass. Independent implementation review and the one
-allowed hosted verification remain separate gates.
+**P15g final result, 2026-10-29:** the cache correction is hosted-verified.
+All 73 cache entries and six metadata files pass; all 24 actual Flutter tests
+also pass. The existing post-test hook-state validation then stops at
+`P15_HOOK_TASK_SET` for objective_c 9.5.0. No web build follows. Cleanup passes,
+and no retry or new hook allowance is performed. P15 still has no successful
+first web candidate, independently verified reproducibility or product admission.
 
 **P15f final result: STOP at a new cache-integrity predicate.** The complete
 post-pub filename set and four previously rejected Darwin outputs are identified.
@@ -130,6 +132,81 @@ open findings. Review SHA256:
 GO permits at most one bounded manual candidate attempt on the reviewed bytes;
 a new independent error requires a stop without retry. It grants neither
 successful-build evidence nor reproducibility or production/release admission.
+
+### Hosted P15g verification and remaining independent blocker
+
+Exactly one [P15g candidate run 40797200583](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/40797200583)
+was dispatched on implementation source
+`a2945e48205c40c81893af9898c6cd7645806125`, manual attempt 1. No diagnostic-only
+hosted run was needed or performed. All 249 hosted inert tests pass; local
+preflight covered 287 relevant tests and the independent review repeated 82
+changed tests plus separate source/data/composite checks.
+
+Both real offline pub commands exit 0. The original 224-archive dependency and
+configuration binders pass. Fifteen SDK Git controls and three actual plugin
+namespace proofs pass; the latter authenticate all 16 aliases against the
+13 original packages. The source gate before test entry retains all 386 original
+file hashes and the source-derived preparation policy. The fixture generator
+runs and its closed delta/final fingerprint checks pass. The actual pub-output
+receipt confirms 407 regular files, 53 source/platform outputs, four Dart-tool
+roles and all six metadata files. The nested metadata receipt confirms all
+73 cache entries, 38 inputs and 35 outputs, including the later depfile and
+build-ID scalar checks: 40,501 metadata bytes, aggregate SHA256
+`e45c0e5503882d68c09b4e0a432b3fcbfb1211a7280bf93f26140b7275ca449c`.
+Thus the previous cache-integrity blocker is resolved as a complete metadata
+set, not just a single previously unknown entry.
+
+The test profile is explicitly authorized as
+`linux-x64-tests-no-native-output`, with native compilation and additional
+network/filesystem rights both false. The real `p15-flutter-tests` command
+returns exit 0 and the controlled success marker confirms all 24 tests pass.
+Raw Flutter stdout remains private; this claim is bound to the exact reviewed
+controller's exit/marker gate and its retained command receipt, not to an
+exported raw test transcript. All ten harness commands return exit 0 and confirm
+process drain.
+
+After the passing tests, `HookRun.after('test')` rejects the hook task set with
+`P15_HOOK_TASK_SET` / `HookContractError`, identifying the already known
+`objective_c 9.5.0/hook/build.dart`. Expected/observed task names and their
+cause are not retained in the closed artifact. No cause, harmlessness, actual
+hook execution or unauthorized native operation is inferred. No successful
+`hook_execution` receipt exists. The later post-test `verify_inputs` phase,
+web-build command, final SDK/output/font/notice checks and output copier are
+not reached. `compiled=false`, `success=false` and `candidate_success=false`;
+this is a successful cache correction and test command, not a successful
+full web candidate or reproducible/production admission.
+
+Artifact `12864179265` contains exactly two bounded UTF-8 JSON files, ZIP
+5,957 bytes, SHA256
+`4ed5d6b25dc8fd0b216a2763cdd7f30da3d2ae8191974b1f28709cfc504e6209`.
+The API digest, all fifteen controller-source hashes and final failed run/job
+status match the implementation source and reviewed bytes. Every one of the
+six cleanup flags passes; descriptor closure is confirmed and cleanup failure
+fields are null. Private inputs, stage and outputs are absent, the policy is
+removed, processes are drained and the host network namespace is unchanged.
+Local inert test temporary directories are empty. P15g's public-source input
+copies and unique proof/review files remain private, hashed evidence.
+Original application/dependency notices remain unchanged; the translated cache
+compatibility code retains the exact original BSD notice. Web output notices
+are not claimed because no web output was produced.
+
+The independent final-result review verifies source/API/ZIP bindings, all 249
+hosted inert checks, ten exit-zero/drained commands, fifteen SDK Git controls,
+three namespace payload hashes, successful metadata receipt, actual test gate
+and complete cleanup. Review SHA256:
+`05cf407ec34f46e85071b1649a9e7e20c54251887d45bc085cb11822c1b02eec`.
+Evidence is retained under `build/p15g-candidate-hosted/` and
+`build/p15g-review/candidate-result-review.json`; earlier failed results and
+preflight reviews remain preserved separately.
+
+**Decision: STOP_NEW_POST_TEST_HOOK_STATE_BLOCKER.** P15g resolves and verifies
+the requested filecache hash correction. The remaining acceptance dependency
+is the distinct post-test hook task-set contract, with sufficient bounded
+expected/observed task identities before any correction or authorization.
+No hook guard, sandbox right, source/dependency pin or shared helper is changed
+after this failure; no second attempt is started. PR #35 remains draft/open on
+the unchanged P13/#33 base. P13, P14 and Core are untouched. First web-build,
+reproducibility, browser/product and release acceptance remain unproven.
 
 ## P15f: complete post-pub measurement before authorization
 
