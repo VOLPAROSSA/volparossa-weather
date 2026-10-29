@@ -68,9 +68,9 @@ class SourceRecipeTests(unittest.TestCase):
 
     def test_fixed_profiles_and_self_inclusion(self):
         self.assertEqual(set(RECIPE.PROFILES), {"drizzli", "overmorrow"})
-        self.assertEqual(len(RECIPE.source_paths("drizzli")), 71)
+        self.assertEqual(len(RECIPE.source_paths("drizzli")), 73)
         self.assertEqual(len(RECIPE.source_paths("overmorrow")), 69)
-        self.assertEqual(len(set().union(*RECIPE.PROFILES.values())), 94)
+        self.assertEqual(len(set().union(*RECIPE.PROFILES.values())), 96)
         for profile in RECIPE.PROFILES:
             self.assertIn(RECIPE.HELPER, RECIPE.source_paths(profile))
             self.assertIn("third_party/client-installer-companions-v1.json", RECIPE.source_paths(profile))

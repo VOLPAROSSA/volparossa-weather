@@ -50,6 +50,8 @@ PROFILES = {
         "integrations/drizzli/output-notices-v1.json",
         "integrations/drizzli/virtual-module-guards.mjs",
         "integrations/drizzli/test-virtual-module-guards.mjs",
+        "integrations/drizzli/virtual-module-context.mjs",
+        "integrations/drizzli/test-virtual-module-context.mjs",
         "integrations/drizzli/test-client.mjs",
         "integrations/drizzli/test-render.mjs",
         "integrations/drizzli/upstream.json",

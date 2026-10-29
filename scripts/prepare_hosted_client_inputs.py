@@ -411,7 +411,8 @@ def prepare_source_stage(profile, stage):
         observer = read(ROOT / 'integrations/drizzli/source-module-graph.mjs')
         write(stage / 'volparossa-source-module-graph.mjs', observer)
         guard_sources = {}
-        for name in ('virtual-module-guards.mjs', 'test-virtual-module-guards.mjs'):
+        for name in ('virtual-module-guards.mjs', 'test-virtual-module-guards.mjs',
+                'virtual-module-context.mjs', 'test-virtual-module-context.mjs'):
             data = read(ROOT / 'integrations/drizzli' / name)
             write(stage / name, data)
             guard_sources[name] = dict(bytes=len(data), sha256=sha(data))

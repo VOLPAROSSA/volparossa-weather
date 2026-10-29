@@ -231,3 +231,44 @@ Only metadata, hashes, original notices and bounded logs leave the runner. Outpu
 and process cleanup, no automatic retry and all admission boundaries remain as
 above. Complete candidate module/notice coverage, two independent cold matching
 builds, consumer delivery and release/product acceptance are separate claims.
+
+## P14g: authenticate Kit's actual URL callback context
+
+[P14f run 40744456867](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/40744456867)
+proved the full strict typecheck succeeds (0 errors, 0 warnings), then stopped in
+the SSR options hook at `P14_VIRTUAL_CONTEXT`. Its log does not identify a field.
+Inert inspection of the unchanged approved Kit 2.70.1 and Vite 8.3.1 members
+establishes the first false expectation: Kit installs `experimental.renderBuiltUrl`
+in both production configurations, while the original guard rejected any truthy
+callback. All twelve earlier and the remaining context predicates match the
+independently derived SSR/client field matrix; no runtime value is promoted to
+authority and the application configuration is not changed.
+
+Only the exact original Kit method is accepted: 1076 UTF-8 bytes, SHA256
+`b2e81ff8fba88a56e0ce4c2ef946bb15a7903cc5d152e75dce33e5dbb0947df1`,
+from the already member-bound `src/exports/vite/index.js`. The sealed Drizz.li
+configuration preserves its closure inputs (`paths.base=''`, `paths.assets=''`,
+`paths.relative=true`, `appDir='_app'`). Initial source authentication captures
+that callback instance; every actual environment/checkpoint must retain the same
+instance. A missing, arbitrary or replaced callback, including another function
+with identical source, fails. Existing producer/member/content and notice guards
+remain mandatory.
+
+Pinned Vite computes preload source using `!!renderBuiltUrl || isRelativeBase`.
+Thus `renderBuiltUrl` is true for both environments and both native options use
+the already approved 2198-byte relative helper (`a4a1c9fd…`), including SSR with
+base `/`. `insertPreload` and `isRelativeBase` remain false for SSR and true for
+client; `optimizeModulePreloadRelativePaths` remains false. The former SSR
+2162-byte expectation was for an absent callback and does not describe Kit's
+approved configuration. No new helper bytes or dependency versions are allowed.
+
+The shared pure context guard preserves the other original comparisons and the
+five-field graph environment schema. Its deterministic first-failure diagnostic
+contains only a fixed predicate key and finite type/boolean/null classification;
+it never serializes configuration, source, callback names, URLs or paths. Full
+SSR/client source-derived fixtures and independent negative mutations run against
+that exact first-party JavaScript in the controlled tool V8 environment, without
+Node, native/upstream imports, host installation or compiler execution. The same
+fixtures also run through the existing approved Node/Boundary gate before the
+application compiler. One reviewed hosted candidate may then exercise the full
+typecheck, Vite and output/notice closure; it grants no admission or reproduction.

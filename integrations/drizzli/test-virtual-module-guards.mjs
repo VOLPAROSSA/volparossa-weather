@@ -2,6 +2,10 @@
 // Executes only these pure first-party guards, inside the existing P13 Boundary.
 import { strict as assert } from 'node:assert';
 import { captureLoad, observeHook, observeResult, rejectLateTransform, replaceHandler } from './virtual-module-guards.mjs';
+import { validateVirtualContext, preloadContextOptions } from './virtual-module-context.mjs';
+import { runVirtualContextTests } from './test-virtual-module-context.mjs';
+
+const contextTests = runVirtualContextTests(validateVirtualContext, preloadContextOptions);
 
 const id = '\0virtual:__sveltekit/env';
 const code = 'export const value = 1;\n';
@@ -97,4 +101,5 @@ assert.equal(hook.handler, original);
 
 process.stdout.write(JSON.stringify({ kind: 'p14-virtual-module-guard-tests', passed: true,
   causal_wrong_producer: true, unknown_id: true, changed_code: true, duplicate_receipt: true,
-  late_magic_string: true, sync_promise_context_arguments_and_hook_metadata: true }) + '\n');
+  late_magic_string: true, sync_promise_context_arguments_and_hook_metadata: true,
+  context_tests: contextTests }) + '\n');

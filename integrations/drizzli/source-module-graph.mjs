@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { viteBuildImportAnalysisPlugin } from 'rolldown/experimental';
 import { captureLoad, observeHook, observeResult, rejectLateTransform, replaceHandler } from './virtual-module-guards.mjs';
+import { validateVirtualContext, preloadContextOptions } from './virtual-module-context.mjs';
 
 /** @typedef {import('vite').Plugin<unknown>} VitePlugin */
 /** @typedef {import('vite').Environment} Environment */
@@ -15,12 +16,14 @@ import { captureLoad, observeHook, observeResult, rejectLateTransform, replaceHa
 /** @typedef {'sveltekit'|'vite'|'rolldown'} Producer */
 /** @typedef {{kind:'kit-load'|'native-dispatch'|'runtime-task',sha256:string,bytes:number}} LoadReceipt */
 /** @typedef {{id:string,producer:Producer,plugin:string,hook_sha256:string|null,load:LoadReceipt,transformed:Digest,native_member_sha256:string|null}} VirtualReceipt */
-/** @typedef {{name:string,consumer:string,ssr:boolean,base:string,platform:string}} GraphEnvironment */
+/** @typedef {import('./virtual-module-context.mjs').GraphEnvironment} GraphEnvironment */
 /** @typedef {{plugin:VitePlugin,load:VitePlugin['load'],transform:VitePlugin['transform'],apply:VitePlugin['applyToEnvironment'],state:string}} PluginSeal */
 /** @typedef {{context:GraphEnvironment,plugins:readonly VitePlugin[],seals:PluginSeal[],receipts:Map<string,VirtualReceipt>,loads:Map<string,import('./virtual-module-guards.mjs').LoadReceipt>,preload:VitePlugin|null}} EnvironmentState */
 
 const KIT_PLUGIN = 'vite-plugin-sveltekit-virtual-modules';
 const KIT_HOOK = '42da1ec046c9e229f91a2ed83d7f149768231f40f968815c0f7e361a0b66011f';
+// Exact Kit 2.70.1 config hook method in the already member-bound index.js.
+const KIT_RENDER_BUILT_URL = 'b2e81ff8fba88a56e0ce4c2ef946bb15a7903cc5d152e75dce33e5dbb0947df1';
 const VITE_HOOK = 'e5cb966ffeb7afe04daa03dfc138efe233ae02dec2060ca731072cb5bc35b376';
 const NATIVE_MEMBER = '34e3f5cc135d0fec7f0d9837e30413f1a151037b1568911f074048bf941d68e5';
 const RUNTIME = '\0rolldown/runtime.js';
@@ -87,24 +90,11 @@ function pluginState(plugin) {
     apply: plugin.applyToEnvironment, enforce: plugin.enforce,
     native: '_options' in plugin ? plugin._options : null }));
 }
-/** @param {Environment} environment @returns {GraphEnvironment} */
-function contextOf(environment) {
-  const config = environment.config;
-  const ssr = environment.name === 'ssr';
-  const platform = config.build.rolldownOptions.platform ?? (ssr ? 'node' : 'browser');
-  if (!['ssr', 'client'].includes(environment.name) || config.command !== 'build' || config.mode !== 'production'
-      || config.isBundled !== true || config.isWorker || config.build.lib || config.build.watch || config.build.write !== true
-      || config.consumer !== (ssr ? 'server' : 'client') || config.build.ssr !== ssr
-      || config.base !== (ssr ? '/' : './') || platform !== (ssr ? 'node' : 'browser')
-      || config.experimental.renderBuiltUrl || config.build.rolldownOptions.experimental?.devMode
-      || config.build.rolldownOptions.moduleTypes !== undefined
-      || !config.build.modulePreload || config.build.modulePreload.polyfill !== true) throw new Error('P14_VIRTUAL_CONTEXT');
-  return { name: environment.name, consumer: config.consumer, ssr, base: config.base, platform };
-}
-
 /** @returns {VitePlugin} */
 export default function sourceModuleGraph() {
   let root = '';
+  /** @type {import('vite').RenderBuiltAssetUrl|undefined} */
+  let renderBuiltUrlCallback;
   /** @type {Set<string>} */
   const validatedInputs = new Set();
   /** @type {string[]} */
@@ -124,6 +114,23 @@ export default function sourceModuleGraph() {
   const nativePrototype = Object.getPrototypeOf(viteBuildImportAnalysisPlugin({
     preloadCode: '', insertPreload: false, optimizeModulePreloadRelativePaths: false, renderBuiltUrl: false, isRelativeBase: true,
   }));
+
+  /** Vite's environment proxy supplies shared fields from resolved config and
+   * build/consumer fields from the actual environment. Never substitute another
+   * environment or admit an arbitrary observed callback as its authority.
+   * @param {Environment} environment @returns {GraphEnvironment} */
+  const contextOf = (environment) => {
+    const config = environment.config;
+    return validateVirtualContext({ name: environment.name, command: config.command,
+      mode: config.mode, isBundled: config.isBundled, isWorker: config.isWorker,
+      lib: config.build.lib, watch: config.build.watch, write: config.build.write,
+      consumer: config.consumer, ssr: config.build.ssr, base: config.base,
+      platform: config.build.rolldownOptions.platform ?? (environment.name === 'ssr' ? 'node' : 'browser'),
+      renderBuiltUrl: config.experimental.renderBuiltUrl,
+      devMode: config.build.rolldownOptions.experimental?.devMode,
+      moduleTypes: config.build.rolldownOptions.moduleTypes,
+      modulePreload: config.build.modulePreload }, renderBuiltUrlCallback);
+  };
 
   /** @param {Environment} environment */
   const stateOf = (environment) => {
@@ -237,6 +244,11 @@ export default function sourceModuleGraph() {
         if (!metadata || typeof metadata !== 'object' || !('name' in metadata) || !('version' in metadata)
             || metadata.name !== name || metadata.version !== version) throw new Error('P14_VIRTUAL_DEPENDENCY_VERSION');
       }
+      const callback = config.experimental.renderBuiltUrl;
+      const source = typeof callback === 'function' ? digest(Function.prototype.toString.call(callback)) : null;
+      if (renderBuiltUrlCallback !== undefined || !source || source.bytes !== 1076
+          || source.sha256 !== KIT_RENDER_BUILT_URL) throw new Error('P14_VIRTUAL_CONTEXT:renderBuiltUrl:unreviewed-source');
+      renderBuiltUrlCallback = callback;
       for (const plugin of config.plugins) preparePlugin(plugin);
     },
     options: {
@@ -288,17 +300,17 @@ export default function sourceModuleGraph() {
         if (kits !== 1 || kitPlugins.size !== 1 || !preload) throw new Error('P14_AMBIGUOUS_VIRTUAL_PRODUCER');
         if (!('_options' in preload) || !preload._options || typeof preload._options !== 'object') throw new Error('P14_PRELOAD_OPTIONS');
         const native = preload._options;
+        const expectedOptions = preloadContextOptions(context);
         const keys = Object.keys(native).sort().join(',');
         if (keys !== 'insertPreload,isRelativeBase,optimizeModulePreloadRelativePaths,preloadCode,renderBuiltUrl'
             || !('preloadCode' in native) || typeof native.preloadCode !== 'string'
-            || !('insertPreload' in native) || native.insertPreload !== !context.ssr
-            || !('optimizeModulePreloadRelativePaths' in native) || native.optimizeModulePreloadRelativePaths !== false
-            || !('renderBuiltUrl' in native) || native.renderBuiltUrl !== false
-            || !('isRelativeBase' in native) || native.isRelativeBase !== !context.ssr) throw new Error('P14_PRELOAD_OPTIONS');
-        // The SSR helper is not emitted, but its immutable native option still
-        // has the absolute-base producer derivation (2162 bytes).
-        const expectedPreload = context.ssr ? { bytes: 2162, sha256: 'ab3f9fab077f29a47a120a90458f39d11f615e42e66ad92810cb3c49ba582400' }
-          : EXPECTED.client[PRELOAD];
+            || !('insertPreload' in native) || native.insertPreload !== expectedOptions.insertPreload
+            || !('optimizeModulePreloadRelativePaths' in native) || native.optimizeModulePreloadRelativePaths !== expectedOptions.optimizeModulePreloadRelativePaths
+            || !('renderBuiltUrl' in native) || native.renderBuiltUrl !== expectedOptions.renderBuiltUrl
+            || !('isRelativeBase' in native) || native.isRelativeBase !== expectedOptions.isRelativeBase) throw new Error('P14_PRELOAD_OPTIONS');
+        // Exact Kit renderBuiltUrl is present in both contexts. Pinned Vite
+        // chooses the already approved relative helper even for SSR base '/'.
+        const expectedPreload = EXPECTED.client[PRELOAD];
         const preloadCode = digest(native.preloadCode);
         if (preloadCode.sha256 !== expectedPreload.sha256 || preloadCode.bytes !== expectedPreload.bytes) throw new Error('P14_PRELOAD_OPTIONS');
         states.set(context.name, { context, plugins: [...environment.plugins], loads: new Map(), receipts: new Map(), preload,
