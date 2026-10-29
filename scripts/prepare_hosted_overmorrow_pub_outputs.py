@@ -202,9 +202,14 @@ def validate(inventory, snapshot, before, policy, roots, metadata_validator, sdk
          and sha(raw[DARTPAD]) == policy['dart_tool'][DARTPAD]['sha256'], 'P15_PUB_OUTPUT_TOOL_CONTENT')
     need(set(metadata_validator.ARBS) == ARBS and set(metadata_validator.OUTPUTS) == L10N_OUTPUTS
          and metadata_validator.SDK_TARGET == SDK_TARGET, 'P15_PUB_OUTPUT_METADATA_ROLES')
-    input_hashes = {roots['app'] + '/' + name: md5(raw[name]) for name in ARBS | {'l10n.yaml'}}
-    input_hashes[roots['sdk'] + SDK_TARGET] = md5(sdk_metadata['target'])
-    output_hashes = {roots['app'] + '/' + name: md5(raw[name]) for name in L10N_OUTPUTS}
+    # Mirror the original SDK's cache bookkeeping, including its final-block
+    # behavior. Full source SHA256 and normalized-output bindings above remain
+    # the integrity authority; build-ID derivation still uses ordinary MD5.
+    input_hashes = {roots['app'] + '/' + name: metadata_validator.cache_hash(raw[name])
+                    for name in ARBS | {'l10n.yaml'}}
+    input_hashes[roots['sdk'] + SDK_TARGET] = metadata_validator.cache_hash(sdk_metadata['target'])
+    output_hashes = {roots['app'] + '/' + name: metadata_validator.cache_hash(raw[name])
+                     for name in L10N_OUTPUTS}
     receipt = metadata_validator.validate({name: raw[name] for name in metadata_modes}, app_root=roots['app'],
         sdk_root=roots['sdk'], engine_revision=engine, input_hashes=input_hashes, output_hashes=output_hashes)
     return dict(schema=1, kind='p15f-first-post-pub-source-validation', admitted=False,

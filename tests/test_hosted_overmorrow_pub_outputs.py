@@ -100,8 +100,8 @@ class OutputTests(unittest.TestCase):
         arbs = [app + '/' + name for name in M.ARBS]
         dep_inputs = [app + '/l10n.yaml', *arbs]
         inputs = [sdk + M.SDK_TARGET, *dep_inputs]
-        checksum = {app + '/' + name: V['md5'](self.raw[name]) for name in set(M.ARBS) | set(M.OUTPUTS) | {'l10n.yaml'}}
-        checksum[sdk + M.SDK_TARGET] = V['md5'](self.sdk['target'])
+        checksum = {app + '/' + name: M.cache_hash(self.raw[name]) for name in set(M.ARBS) | set(M.OUTPUTS) | {'l10n.yaml'}}
+        checksum[sdk + M.SDK_TARGET] = M.cache_hash(self.sdk['target'])
         prefix = 'build/' + self.build_id + '/'
         self.raw[prefix + 'gen_l10n_inputs_and_outputs.json'] = V['canonical'](dict(inputs=arbs, outputs=outputs))
         self.raw[prefix + 'gen_localizations.stamp'] = V['canonical'](dict(inputs=inputs, outputs=outputs))
@@ -131,6 +131,29 @@ class OutputTests(unittest.TestCase):
         rendered = json.dumps(result)
         self.assertNotIn('/inert/', rendered)
         self.assertNotIn(self.build_id, rendered)
+
+    def test_cache_padding_collision_cannot_authorize_changed_original_source(self):
+        name = 'lib/l10n/app_fr.arb'
+        original = b'x' * 63
+        changed = original[:-7] + b'y' * 7
+        self.assertEqual(M.cache_hash(original), M.cache_hash(changed))
+        self.assertNotEqual(V['sha'](original), V['sha'](changed))
+        self.raw[name] = original
+        self.before['files'][name] = row(original)
+        self.snapshot['files'][name] = row(original)
+        checksum = V['sha'](V['canonical']({n: r['sha256'] for n, r in self.before['files'].items()}))
+        self.policy['before_files_sha256'] = checksum
+        with patch.dict(G, BEFORE_SHA=checksum):
+            self.make_metadata()
+            self.snapshot['files'].update({n: row(raw) for n, raw in self.raw.items()})
+            self.validate()
+            self.raw[name] = changed
+            self.snapshot['files'][name] = row(changed)
+            # Even self-consistent cache bookkeeping must not replace SHA256.
+            self.make_metadata()
+            self.snapshot['files'].update({n: row(raw) for n, raw in self.raw.items()})
+            with self.assertRaisesRegex(ValueError, 'P15_PUB_OUTPUT_ORIGINAL_CHANGED'):
+                self.validate()
 
     def test_unknown_missing_and_fixture_outputs_are_rejected_before_reads(self):
         for name in ('unknown.dart', 'build/private/extra', 'test/volparossa/fixtures/products.json'):

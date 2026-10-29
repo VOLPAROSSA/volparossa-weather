@@ -394,6 +394,15 @@ class CandidateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'P15_UNKNOWN_GENERATED_SOURCE'):
             W['recheck_source'](self.base, expected, {}, generated_sources={name})
 
+    def test_cache_semantics_record_is_fixed_and_bookkeeping_only(self):
+        receipt = W['cache_semantics']()
+        self.assertTrue(receipt['bookkeeping_only'])
+        self.assertEqual((receipt['inputs'], receipt['outputs'], receipt['cache_entries']), (38, 35, 73))
+        self.assertEqual(receipt['original_source_sha256'], W['ORIGINAL_SOURCE_SHA'])
+        with patch.object(I, 'read', return_value=b'{}'):
+            with self.assertRaisesRegex(ValueError, 'P15_FILECACHE_SEMANTICS_CHANGED'):
+                W['cache_semantics']()
+
     def test_exact_explicit_workflow_modes_only(self):
         event = self.file('event.json', b'{}')
         with patch.dict(os.environ, GITHUB_EVENT_PATH=str(event)):

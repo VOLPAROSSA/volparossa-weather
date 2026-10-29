@@ -31,6 +31,7 @@ DIAGNOSTIC_MODE = 'source-pub-diagnostic'
 OBSERVATIONS_SHA = '5dfda4d8a1716b798f9c3b5979cd18b3a7b3c7256304d5a2f8f3c4556d2918f9'
 METADATA_OBSERVATIONS_SHA = 'bc96728fd748e61420e3e9770035ddee8fac535f8e2e32b143d3c6d7f4c2b561'
 PUB_OUTPUTS_SHA = 'c8d87288da4897bb2baf04b8f00c89c2816ced78abd94b5cdaa621c61e638509'
+CACHE_SEMANTICS_SHA = '314a60c54b76753e2fda91a77357e7de22da2764ad1f1b33f510e1075d8d0edc'
 ORIGINAL_SOURCE_SHA = '94a0f9632f425453887f41b8b3e9926e3d4c3516f3fd4ce3d8db1540d7e48baf'
 MAX_STAGE_ENTRIES = 20000
 OWNED_SOURCE = ('scripts/prepare_hosted_overmorrow_candidate.py',
@@ -46,6 +47,7 @@ OWNED_SOURCE = ('scripts/prepare_hosted_overmorrow_candidate.py',
                 'third_party/overmorrow-pub-source-observations-v1.json',
                 'third_party/overmorrow-pub-metadata-observations-v1.json',
                 'third_party/overmorrow-pub-outputs-v1.json',
+                'third_party/overmorrow-filecache-semantics-v1.json',
                 '.github/workflows/hosted-overmorrow.yml')
 GENERATED_PLATFORM_FILES = frozenset((
     '.flutter-plugins-dependencies', '.flutter-plugins', 'android/local.properties',
@@ -219,6 +221,22 @@ def source_catalogue():
             and value['regular_count'] == len(value['regular_files']) == 53,
             'P15_SOURCE_OBSERVATION_CATALOGUE_SCHEMA')
     return value
+
+
+def cache_semantics():
+    raw = I.read(ROOT / 'third_party/overmorrow-filecache-semantics-v1.json', 128 * 1024)
+    require(I.sha(raw) == CACHE_SEMANTICS_SHA, 'P15_FILECACHE_SEMANTICS_CHANGED')
+    value = I.document(raw)
+    require(value['schema'] == 1 and value['kind'] == 'overmorrow-flutter-filecache-semantics'
+            and value['admitted'] is False and value['algorithm'] == 'flutter-3.38.5-Md5Hash'
+            and value['flutter_commit'] == 'f6ff1529fd6d8af5f706051d9251ac9231c83407'
+            and value['before_files_sha256'] == ORIGINAL_SOURCE_SHA
+            and value['summary'] == dict(inputs=38, outputs=35, entries=73,
+                                          producer_differences=12, standard_matches=61),
+            'P15_FILECACHE_SEMANTICS_SCHEMA')
+    return dict(record_sha256=CACHE_SEMANTICS_SHA, algorithm=value['algorithm'],
+                inputs=38, outputs=35, cache_entries=73,
+                original_source_sha256=ORIGINAL_SOURCE_SHA, bookkeeping_only=True)
 
 
 def localization_paths(expected):
@@ -447,6 +465,7 @@ def execute(*, mode=MODE):
     installed = attempted = runtime_started = success = compiled = tests_passed = False
     diagnostics_complete = False
     source_inventory = None
+    metadata_validator = None
     source_snapshots = {}
     phase = 'package-provisioning'
     stage_identity = deploy_identity = None
@@ -540,6 +559,7 @@ def execute(*, mode=MODE):
         runtime_before = H.runtime_inventory()
         sdk_before = sp.verify_materialized(sdk, allow_build_state=True)
         app_packages = I.pub_lock(I.read(ROOT / 'third_party/client-locks/overmorrow-pubspec.lock'))
+        details['filecache_semantics'] = cache_semantics()
         tool_ready = False
         sealed_app = None
         prepared_authorization = None
@@ -696,6 +716,8 @@ def execute(*, mode=MODE):
             code=code if re.fullmatch(r'[A-Z0-9_]{1,100}', code) else 'P15_OPERATION_FAILED')
         if isinstance(error, SDKGitFailure):
             failure['sdk_git'] = error.sdk_git_failure
+        if metadata_validator is not None and isinstance(error, metadata_validator.CacheHashFailure):
+            details['cache_hash_failure'] = error.cache_observation()
         if isinstance(error, SourceAdmissionFailure):
             details['source_rejection'] = error.source_rejection
         if 'plugins' in locals() and isinstance(error, plugins.PluginFailure):

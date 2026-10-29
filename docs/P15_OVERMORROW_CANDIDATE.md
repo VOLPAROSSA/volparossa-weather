@@ -1,5 +1,10 @@
 # P15 Overmorrow candidate, 2026-10-28
 
+**P15g preflight, 2026-10-29:** the original cache producer mismatch is
+reproduced on all 73 original files and the validator is corrected. All 287
+relevant inert tests pass. Independent implementation review and the one
+allowed hosted verification remain separate gates.
+
 **P15f final result: STOP at a new cache-integrity predicate.** The complete
 post-pub filename set and four previously rejected Darwin outputs are identified.
 The one real candidate attempt passes both offline pub commands and reaches the
@@ -14,6 +19,117 @@ packages and their file identities. Post-pub package/configuration/plugin
 binding also passes. The full source check then stops at
 `P15_UNKNOWN_GENERATED_SOURCE`, before hook authorization, Flutter tests or
 web compilation. All six cleanup flags pass. No automatic retry followed.
+
+## P15g: original Flutter filecache hash semantics
+
+P15g resumes the exact P15f report source
+`d426e96fbd373e04d093e96372de0a5e8f5fcea8` and reuses the retained candidate
+run, logs, artifact and independent result review. No earlier runtime/architecture
+trial is repeated. The original Flutter 3.38.5 / Dart 3.10.4 / Overmorrow pins,
+224 dependency archives, original SDK inventory and P15f output record remain
+unchanged. The correction concerns the validator's cache-format assumption.
+
+The original `packages/flutter_tools/lib/src/build_system/hash.dart`, 5,125 bytes,
+SHA256 `78abfb964a4611e1ce81ee53b44245c291229a80e27d6536e0890ca651ac549d`,
+and its original upstream tests are reauthenticated against the retained SDK
+inventory. `FileStore._hashFile` reads regular file bytes through a 64 KiB buffer
+and invokes this custom `Md5Hash`. On the pinned amd64 target the final Uint32List
+buffer is serialized little-endian. The finalizer always compresses one final
+64-byte block: it appends 0x80, then overwrites bytes 56..63 with the original
+bit length. For byte lengths modulo 64 in 56..63, the marker and up to seven
+payload bytes are overwritten, and the required second final block is absent.
+Consequently this cache producer differs from ordinary MD5 on those lengths.
+The SDK is preserved; only the validator mirrors this original format.
+
+All 73 relevant original byte inputs are reconstructed and individually checked
+against their original sizes/SHA256: 36 ARBs, l10n.yaml, the SDK localization
+target and 35 unchanged localization Dart outputs. Inert source-derived digest
+reproduction gives exactly twelve differences and 61 ordinary-MD5 matches.
+The differences below are calculated from original source bytes, not observed
+historical cache entries:
+
+| Original relative path | Bytes | Standard MD5 | Original Flutter cache digest |
+|---|---:|---|---|
+| `lib/l10n/app_fr.arb` | 9343 | `e34fdd3b080bbbfec0c0e8273a9776d6` | `0c2ef055b49fb58c6f1b479fb059326f` |
+| `lib/l10n/app_he.arb` | 1466 | `b0e6887c96ed250d8c23572e9e5c9046` | `e6f8919d57dd606f6e85cd59185e26a9` |
+| `lib/l10n/app_localizations_en.dart` | 10683 | `39de0e8293c156972eeb8cf683d1b223` | `d8a0506d04c14f8c19e64ef08297a9eb` |
+| `lib/l10n/app_localizations_it.dart` | 11262 | `57955f7203bbcc9b34b9676f26bacd15` | `9c151387460dc7dddc62f0575d8125e5` |
+| `lib/l10n/app_localizations_mk.dart` | 13052 | `5ad2a6a53b96fc3b219373ce8eb4a24d` | `a82dad2cad99ac18ee08bdd2b568f3ac` |
+| `lib/l10n/app_localizations_ro.dart` | 11262 | `3405c69768c04336fd35ba022dfa9beb` | `3ebad78f71a649007a2daff54352799a` |
+| `lib/l10n/app_localizations_sr.dart` | 10939 | `a760258ae3d926b4d97896f7991da6a6` | `74022606b0ee8b415cbd422158ed2107` |
+| `lib/l10n/app_localizations_tr.dart` | 11135 | `673831259e95f15123202abb1772fba3` | `99c54c48d1a3372260d90c99122c428f` |
+| `lib/l10n/app_localizations_uk.dart` | 13052 | `bb1d5d66e0b2e705568c35b297141dd7` | `4a50c8cc2f013692a7e7b21cfc18d7f4` |
+| `lib/l10n/app_localizations_uz.dart` | 10875 | `6a386fb0c716d1f2e8aa848eac268f76` | `789d9d4dfb729ce48aa7eb815e78442a` |
+| `lib/l10n/app_localizations_zh.dart` | 20990 | `f5e4e86fe371b3e385f0f089f029b386` | `9cee4e91c79bfc2b480966b999f4688b` |
+| `lib/l10n/app_uk.arb` | 12091 | `0e8df231a2ce7c94c08ad3829cbc4d95` | `1b1743c1fe862ea47cb54749f8ac3b09` |
+
+The first entry rejected in run 40758942786 remains unknown: neither its raw
+cache rows nor values were exported, and HashMap iteration order is not an
+identity contract. No particular historical scan position is inferred. The
+complete original-byte reproduction proves the validator algorithm mismatch
+without a hosted diagnostic run merely to obtain a missing hash.
+
+The timing and remaining metadata rules are audited together. On this fresh
+stage the depfile does not yet exist, so the early input-hash pass is skipped.
+The build system awaits localization generation and its awaited Dart formatter,
+then resolves and hashes all 38 inputs and 35 outputs. `persist` serializes the
+73 currentAssetKeys; the metadata files themselves are not cache-hashed. Source,
+generation, bookkeeping and SHA256 admission are separate. Existing stamp/list
+sets, source-proven depfile order/escaping and the build-ID scalar checks remain.
+The build ID explicitly uses ordinary `crypto.md5(engineRevision + 'build')`,
+not this custom filecache implementation. No analogous producer mismatch was
+found in these remaining predicates.
+
+The P15-only [semantics record](../third_party/overmorrow-filecache-semantics-v1.json)
+binds original SDK/source hashes, all 73 source roles and digest vectors, source
+timing, exact version/architecture, provenance and independent source review.
+Record SHA256:
+`314a60c54b76753e2fda91a77357e7de22da2764ad1f1b33f510e1075d8d0edc`.
+All vectors derive from authenticated original bytes; no current cache value
+becomes an expected source or integrity hash. The validator's ordinary MD5
+build-ID calculation remains separate. SHA256, unchanged original files,
+normalized generated-source hashes, package/membermap checks, plugin identities,
+hooks, SDK Git controls and the existing Boundary retain execution authority.
+A demonstrated last-seven-byte cache collision is rejected by the original
+source SHA256 gate; the cache digest alone cannot admit changed bytes.
+
+Independent source review uses its own compression reconstruction, six original
+upstream vectors and 269 boundary lengths, then rechecks the complete 73-file
+matrix. Source-review SHA256:
+`d39428c80c4fec266eb4cd6c9bf53fb5ab2c7d82eb638057efbd73ac4b26c98e`.
+Private evidence is retained in `build/p15g-source-hash/`,
+`build/p15g-metadata-audit/` and `build/p15g-review/`. No SDK, Dart, Flutter,
+packagehook, sandbox or native code runs locally. These are inert data tests;
+a final implementation review is still required before the one authorized
+hosted candidate attempt.
+
+The complete relevant inert suite now passes 287 tests, including 26 metadata,
+13 complete-output and 43 controller tests. The real-data reproduction runs
+the old exact validator against the source-derived cache and confirms its
+rejection; the corrected validator accepts all 73 roles and all six metadata
+files. Both a changed depfile and wrong build-ID scalar remain rejected.
+Controlled fixture roots/engine are synthetic; all 73 file bytes and digest
+vectors are authenticated original inputs. This is no claim that historical
+raw `.filecache` rows were retained.
+
+On a future cache mismatch the pure validator first validates the complete
+73-entry path set, detects unknown/duplicate paths, then reports all digest
+mismatches with fixed relative input/output labels. Only valid lowercase
+32-hex digest values are emitted; other values receive bounded type, length
+and SHA256 observations, never raw strings/objects or host paths. The controller
+catches this exact cache exception separately from existing hook diagnostics.
+Original Flutter copyright and the full original 1,519-byte BSD notice are
+retained in the compatibility module and checked by hash. No upstream SDK,
+application source, dependency record or shared runtime helper is changed.
+
+The final independent P15g preflight review repeats 82 affected tests and its
+own complete 73-role/six-metadata reproduction. It confirms source/diagnostic
+privacy, exact BSD notice retention and full SHA256 authority. There are no
+open findings. Review SHA256:
+`153a01a0eda511bf9d0811a879685bbfe4d758d4bb0a8c588a50143abbe48325`.
+GO permits at most one bounded manual candidate attempt on the reviewed bytes;
+a new independent error requires a stop without retry. It grants neither
+successful-build evidence nor reproducibility or production/release admission.
 
 ## P15f: complete post-pub measurement before authorization
 
