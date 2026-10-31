@@ -6,10 +6,13 @@ import { captureLoad, observeHook, observeResult, rejectLateTransform, replaceHa
 import { validateVirtualContext, preloadContextOptions } from './virtual-module-context.mjs';
 import { runVirtualContextTests } from './test-virtual-module-context.mjs';
 import { runObserverLifecycleTests } from './test-observer-lifecycle.mjs';
+import { createNativePluginGuard } from './native-plugin-guards.mjs';
+import { runNativePluginGuardTests, createNativePluginFixture } from './test-native-plugin-guards.mjs';
 
 const contextTests = runVirtualContextTests(validateVirtualContext, preloadContextOptions);
-const lifecycleTests = runObserverLifecycleTests(readFileSync(new URL('./volparossa-source-module-graph.mjs', import.meta.url), 'utf8'),
-  { captureLoad, observeHook, observeResult, rejectLateTransform, replaceHandler, validateVirtualContext, preloadContextOptions });
+const nativeTests = runNativePluginGuardTests(createNativePluginGuard);
+const lifecycleTests = await runObserverLifecycleTests(readFileSync(new URL('./volparossa-source-module-graph.mjs', import.meta.url), 'utf8'),
+  { captureLoad, observeHook, observeResult, rejectLateTransform, replaceHandler, validateVirtualContext, preloadContextOptions, createNativePluginGuard, createNativePluginFixture });
 
 const id = '\0virtual:__sveltekit/env';
 const code = 'export const value = 1;\n';
@@ -106,4 +109,4 @@ assert.equal(hook.handler, original);
 process.stdout.write(JSON.stringify({ kind: 'p14-virtual-module-guard-tests', passed: true,
   causal_wrong_producer: true, unknown_id: true, changed_code: true, duplicate_receipt: true,
   late_magic_string: true, sync_promise_context_arguments_and_hook_metadata: true,
-  context_tests: contextTests, lifecycle_tests: lifecycleTests }) + '\n');
+  context_tests: contextTests, lifecycle_tests: lifecycleTests, native_tests: nativeTests }) + '\n');

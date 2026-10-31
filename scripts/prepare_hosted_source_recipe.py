@@ -53,6 +53,8 @@ PROFILES = {
         "integrations/drizzli/virtual-module-context.mjs",
         "integrations/drizzli/test-virtual-module-context.mjs",
         "integrations/drizzli/test-observer-lifecycle.mjs",
+        "integrations/drizzli/native-plugin-guards.mjs",
+        "integrations/drizzli/test-native-plugin-guards.mjs",
         "integrations/drizzli/test-client.mjs",
         "integrations/drizzli/test-render.mjs",
         "integrations/drizzli/upstream.json",

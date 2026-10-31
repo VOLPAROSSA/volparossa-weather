@@ -313,3 +313,76 @@ or proof of actual compiler output. Shared guard/context code is exercised too.
 The same fixture runs with the approved Node inside the existing Boundary before
 application compilation. Full hosted typecheck, production, actual module and
 output/notice closure, and independent cold reproduction remain distinct gates.
+
+## P14i: complete native producer and dispatch boundaries
+
+[P14h run 41225609819](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/41225609819)
+passed full svelte-check (0 errors/warnings), then stopped before module
+transformation at `P14_UNREVIEWED_NATIVE_PLUGIN`. The original log contains no
+plugin name. The exact pinned sources independently identify the first missing
+producer as `builtin:vite-alias`: it precedes every other native instance in both
+original environments. This is source-derived identification, not a new logged
+observation or authorization from an observed name.
+
+Both SSR and client have the same ordered eleven native plugins, with prefix
+`builtin:`: `vite-alias`, `vite-module-preload-polyfill`, `vite-resolve`,
+`vite-transform`, `vite-json`, `vite-dynamic-import-vars`, `vite-import-glob`,
+`vite-build-import-analysis`, `vite-manifest`, `vite-reporter`, `vite-load-fallback`.
+The former allowlist's `oxc-runtime` is excluded in bundled environments;
+`vite-web-worker-post` requires a worker and is outside this non-worker contract.
+
+The native registry binds nine exact original Vite `applyToEnvironment`
+callbacks to their actual returned instances, and captures Vite's two direct
+JSON/fallback instances before any original user configResolved callback.
+It authenticates the original BuiltinPlugin constructor/prototype, exact producer
+member/version/native-binary inputs and callable bridge source. Alias, transform
+and manifest constructors also bind the already authorized
+`rolldown/dist/experimental-index.mjs` member, SHA256
+`c7e3856c8d6b65cbacccc4b1c54aa582d0c34bd5e6040b0a6415c0dbd42e4905`.
+The final plugin-driver source member `create-bundler-option-YGKfBl_D.mjs` is
+additionally checked against its original authorized SHA256
+`fe167cc4ec4b9432074978952993d0f2d18f0fab73a6dfd028b6f00f678727d9`.
+Neither new member binding changes a package, shared pin or dependency version.
+
+The existing exact-SHA config instrumentation now awaits a bounded private
+flattened capture of the original user-plugin identities during configuration
+loading. The exported original plugin-option structure and effective order are
+preserved, with the same first-party observer first. Later config.plugins changes
+cannot hide an original user producer. Existing user configResolved handlers keep
+their this/arguments/return/Promise behavior while their native topology is checked
+before and after execution. The resolved topology is immutable; environment
+selection constructs new lists. Preprocessing retains its P14h configuration-only
+path and gains no production authority.
+
+Names and prototypes alone never admit a native plugin. The complete ordered
+environment collection must contain exactly the registered selected identities.
+Own descriptors, nested argument callback identities, native argument values,
+instance/shared prototypes and hooks remain bound. The actual Vite clones in
+`inputOptions.plugins` are checked before every original options callback and on
+its result; the final options hook fixes that exact collection. Configured and
+returned output-plugin collections remain empty. Original Rolldown source proves
+`options -> outputOptions -> buildStart`, so output checks require the established
+production/input boundary rather than graph state that does not yet exist.
+
+Getter, inherited-property and Proxy dispatch inputs are rejected using original
+data descriptors and the pinned Node builtin `util.types.isProxy`. Diagnostics
+contain fixed tokens only. Finalization protects the input list/owner fields,
+native instances/clones, native argument data, shared native class and actual
+clone hook dispatch fields. It does not freeze ordinary plugin API caches or
+callback closures. Some native argument references also belong to resolved
+configuration (resolver arrays and transform JSX options); these selected stable
+data references intentionally become read-only after configuration, environment
+selection and options. This is not described as exclusively private native data.
+The original normalizers read native arguments and create fresh arrays; a later
+client observer accepts the exact source-bound canonical frozen class state.
+
+Pure fixtures replay the original constructor shapes and complete SSR/client
+sequences against the actual first-party guard and observer. External IO/hash/
+native seams are explicitly simulated, including four virtual-module receipts
+and graph metadata; they are not actual native/compiler/output proof. The shared
+fixtures are explicitly staged/exported for the existing approved Node/Boundary
+gate. Independent source review and inert tests precede a GO/NO-GO decision.
+P14i starts no hosted build. Any later authorized candidate must first pass full
+strict typecheck, then production, all four producer receipts, module/output/
+notice closure and cleanup. Independent cold reproduction and product admission
+remain separate and ungranted.

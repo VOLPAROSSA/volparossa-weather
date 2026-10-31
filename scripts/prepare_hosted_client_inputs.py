@@ -405,14 +405,19 @@ def prepare_source_stage(profile, stage):
         config = stage / 'vite.config.ts'
         raw = read(config, 32768)
         require(sha(raw) == '0c9545f12f38b29b4ed85467b8a75bf6a31ae8a3a7bbc8873f4b00c52dae42ce', 'VITE_CONFIG_SOURCE_CHANGED')
-        require(raw.count(b'plugins: [') == 1, 'VITE_PLUGIN_LOCATION')
-        patched = b"import sourceModuleGraph from './volparossa-source-module-graph.mjs';\n" + raw.replace(
-            b'plugins: [', b'plugins: [sourceModuleGraph(),', 1)
+        require(raw.count(b'plugins: [') == 1 and raw.count(b'export default defineConfig({') == 1
+            and b'volparossaConfig' not in raw and b'volparossaUsers' not in raw, 'VITE_PLUGIN_LOCATION')
+        patched = b"import sourceModuleGraph, { captureUserPlugins } from './volparossa-source-module-graph.mjs';\n" + raw.replace(
+            b'export default defineConfig({', b'const volparossaConfig = defineConfig({', 1)
+        patched += (b"\nconst volparossaUsers = await captureUserPlugins(volparossaConfig.plugins ?? []);\n"
+            b"volparossaConfig.plugins = [sourceModuleGraph(volparossaUsers), "
+            b"...(volparossaConfig.plugins ?? [])];\nexport default volparossaConfig;\n")
         observer = read(ROOT / 'integrations/drizzli/source-module-graph.mjs')
         write(stage / 'volparossa-source-module-graph.mjs', observer)
         guard_sources = {}
         for name in ('virtual-module-guards.mjs', 'test-virtual-module-guards.mjs',
-                'virtual-module-context.mjs', 'test-virtual-module-context.mjs', 'test-observer-lifecycle.mjs'):
+                'virtual-module-context.mjs', 'test-virtual-module-context.mjs', 'test-observer-lifecycle.mjs',
+                'native-plugin-guards.mjs', 'test-native-plugin-guards.mjs'):
             data = read(ROOT / 'integrations/drizzli' / name)
             write(stage / name, data)
             guard_sources[name] = dict(bytes=len(data), sha256=sha(data))

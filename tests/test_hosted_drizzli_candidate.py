@@ -85,6 +85,34 @@ class CandidateBoundary(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'P14_ORIGINAL_SOURCE_CHANGED'):
             C['check_source_inputs'](I, stage, seal)
 
+    def test_staging_awaits_original_user_capture_before_exporting_same_plugin_options(self):
+        stage = self.root / 'build' / 'stage'
+        # First-party syntax fixture only; no upstream configuration is executed.
+        raw = b"export default defineConfig({\n  plugins: [first, Promise.resolve([second])],\n  build: { write: true }\n});\n"
+        self.put(stage / 'vite.config.ts', raw)
+        for name in ('source-module-graph.mjs', 'virtual-module-guards.mjs', 'test-virtual-module-guards.mjs',
+                'virtual-module-context.mjs', 'test-virtual-module-context.mjs', 'test-observer-lifecycle.mjs',
+                'native-plugin-guards.mjs', 'test-native-plugin-guards.mjs'):
+            self.put(self.root / 'integrations/drizzli' / name, (ROOT / 'integrations/drizzli' / name).read_bytes())
+        function = I.prepare_source_stage
+        actual_sha = I.sha
+        def fixture_sha(value):
+            return '0c9545f12f38b29b4ed85467b8a75bf6a31ae8a3a7bbc8873f4b00c52dae42ce' if value == raw else actual_sha(value)
+        with patch.dict(function.__globals__, ROOT=self.root, sha=fixture_sha):
+            result = function('drizzli', stage)
+            emitted = (stage / 'vite.config.ts').read_bytes()
+            self.assertIn(b'plugins: [first, Promise.resolve([second])]', emitted)
+            self.assertIn(b'build: { write: true }', emitted)
+            self.assertIn(b'const volparossaUsers = await captureUserPlugins(volparossaConfig.plugins ?? []);', emitted)
+            self.assertIn(b'[sourceModuleGraph(volparossaUsers), ...(volparossaConfig.plugins ?? [])]', emitted)
+            self.assertEqual(emitted.count(b'export default'), 1)
+            self.assertTrue(emitted.endswith(b'export default volparossaConfig;\n'))
+            self.assertEqual(result['config_sha256'], actual_sha(emitted))
+            # Only the original source pin is admitted, including on a second
+            # call: generated/configured bytes are never promoted to authority.
+            with self.assertRaisesRegex(ValueError, 'VITE_CONFIG_SOURCE_CHANGED'):
+                function('drizzli', stage)
+
     def test_unknown_generated_source_fails_closed(self):
         stage = self.root / 'stage'
         self.put(stage / 'src/input.ts', b'source\n')
