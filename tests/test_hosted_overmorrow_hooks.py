@@ -53,22 +53,28 @@ class HookTests(unittest.TestCase):
         shared_owner = root / 'shared' / W['PACKAGE']
         shared = shared_owner / 'build'
         (shared/key[:10]).mkdir(mode=0o700, parents=True)
-        self.write(shared_owner/'.lock', b'private PID/time/path data')
-        self.write(task/'.lock', b'private PID/time/path data')
-        self.write(task/'hook.dill', b'inert kernel fixture, never executed')
-        self.write(task/'hook.dill.d', b'inert depfile fixture')
-        self.write(task/'stdout.txt', b'Running `private command/env/cwd`.\n')
+        (shared/key).mkdir(mode=0o700)
+        self.write(task/'.lock', b'Last acquired by /workspace/flutter/bin/cache/dart-sdk/bin/dart (pid 123) '
+            b'running file:///workspace/flutter/packages/flutter_tools/bin/flutter_tools.dart on 2026-10-31 12:00:00.000.')
+        self.write(shared_owner/'.lock', b'Last acquired by controlled Dart process; representative PID/time line.')
+        self.write(task/'hook.dill', b'INERT KERNEL FORMAT PLACEHOLDER - NEVER EXECUTED')
+        self.write(task/'hook.dill.d', (str(task/'hook.dill') + ': '
+            '/state/pub-cache/hosted/pub.dev/objective_c-9.5.0/hook/build.dart ' +
+            str(self.sdk/'bin/cache/dart-sdk/lib/_internal/vm_platform_strong.dill') + '\n').encode())
+        self.write(task/'stdout.txt', b'Running original Dart hook in controlled environment; representative private process line.\n')
         self.write(task/'stderr.txt', b'')
         value = dict(config=copy.deepcopy(WIRE_CONFIGS[action]), out_dir_shared=str(shared)+'/',
             out_file=str(task/'output.json'), package_name=W['PACKAGE'],
             package_root='/state/pub-cache/hosted/pub.dev/objective_c-9.5.0/', assets={})
         self.write(task/'input.json', value)
-        self.write(task/'output.json', dict(assets_for_linking={}, status='success', timestamp='2026-10-28 12:00:00.000'))
+        self.write(task/'output.json', dict(assets_for_linking={}, status='success', timestamp='2026-10-31 12:00:00.000'))
+        self.write(self.stage/'.dart_tool/package_config.json', b'{"configVersion":2,"packages":[]}\n')
+        self.write(self.sdk/'bin/cache/dart-sdk/version', b'3.10.4\n')
         self.write(task/'hook.dependencies_hash_file.json', dict(file_system=[
-            dict(path=str(self.stage/'.dart_tool/package_config.json'), hash=2**64-1),
-            dict(path=str(self.sdk/'bin/cache/dart-sdk/version'), hash=1)], environment=[]))
+            dict(path=str(self.stage/'.dart_tool/package_config.json'), hash=-3246432485929507267),
+            dict(path=str(self.sdk/'bin/cache/dart-sdk/version'), hash=8678580896246172231)], environment=[]))
         self.write(task/'dependencies.dependencies_hash_file.json', dict(file_system=[],
-            environment=[dict(key='HOME', hash=1), dict(key='PATH', hash=2**64-1)]))
+            environment=[dict(key='HOME', hash=1120332243444303402), dict(key='PATH', hash=8181591834748514862)]))
         if action == 'test':
             self.write(self.stage/'build/native_assets/linux/native_assets.json',
                        {'format-version': [1, 0, 0], 'native-assets': {}})
@@ -142,8 +148,10 @@ class HookTests(unittest.TestCase):
     def test_two_distinct_noop_profiles_validate_without_public_private_data(self):
         self.task('test'); first=self.run.after('test')
         self.assertEqual(first['tasks'],1)
+        self.assertEqual(first['shared_directories'],2)
         self.task('build'); final=self.run.after('build')
         self.assertEqual(final['tasks'],2)
+        self.assertEqual(final['shared_directories'],4)
         raw=json.dumps(final)
         self.assertNotIn(str(self.base),raw)
         self.assertNotIn('private command',raw)
@@ -220,11 +228,207 @@ class HookTests(unittest.TestCase):
         for action in ('test', 'build'):
             task = self.task(action)
             shared = self.run.root/'shared'/W['PACKAGE']/'build'/TASK_KEYS[action][:10]
-            for directory in (task/'out', shared):
+            for directory in (task/'out', shared, shared.with_name(TASK_KEYS[action])):
                 output = self.write(directory/'native.so', b'not authorized')
                 with self.assertRaisesRegex(ValueError, 'P15_HOOK_NATIVE_OUTPUT'): self.run.after(action)
                 output.unlink()
             self.run.after(action)
+
+    def test_full_lifecycle_inspects_exact_shared_sets_before_and_after_commands(self):
+        original = W['module']('prepare_hosted_overmorrow_ci'); original.SDK = self.sdk
+        for action, count in (('test', 2), ('build', 4)):
+            argv = original.flutter_command(action) + (['--no-tree-shake-icons'] if action == 'build' else [])
+            self.assertEqual(self.run.before(action, argv, original.environment())['profile'], W['PROFILES'][action])
+            self.task(action)
+            shared = self.run.root/'shared/objective_c/build'
+            expected = {TASK_KEYS['test'], TASK_KEYS['test'][:10]}
+            if action == 'build': expected |= {TASK_KEYS['build'], TASK_KEYS['build'][:10]}
+            self.assertEqual({p.name for p in shared.iterdir()}, expected)
+            self.assertEqual(self.run.after(action)['shared_directories'], count)
+        with self.assertRaisesRegex(ValueError, 'P15_HOOK_PHASE_ORDER'):
+            self.run.before('build', argv, original.environment())
+
+    def test_complete_trees_match_independent_original_producer_fixtures(self):
+        # Golden whole-tree data was derived independently from all original
+        # producer sites, not CONFIGS/TASK_FILES. Full JSON fixture SHA256:
+        # 88553580166352bcdfe998b592799b37bb8a08419486fe94866b0bb0b2c4a0ca.
+        # Public inert kernel/depfile/lock/log representatives are structural
+        # fixtures only; they are never executed or actual hosted artifacts.
+        golden = {'test': '9e7495951938b5eb2bc76dea2afdb35eb1226a51032996d66ad8deb3dcba0a75',
+                  'build': 'ffdf0fe966a030447c0c2fe03c82c16ecab227c67d549560acf0ee0cee854122'}
+        def symbolic(value):
+            if isinstance(value, str):
+                return value.replace(str(self.stage), '@STAGE@').replace(str(self.sdk), '@SDK@')
+            if isinstance(value, dict): return {symbolic(k): symbolic(v) for k, v in value.items()}
+            if isinstance(value, list): return [symbolic(v) for v in value]
+            return value
+        actions = []
+        for action in ('test', 'build'):
+            actions.append(action); self.task(action); self.run.after(action)
+            files = {}
+            for base in (self.stage, self.sdk):
+                for path in base.rglob('*'):
+                    if not path.is_file() or path == self.stage/'pubspec.yaml': continue
+                    kind = 'json' if path.name in ('input.json', 'output.json',
+                        'hook.dependencies_hash_file.json', 'dependencies.dependencies_hash_file.json',
+                        'native_assets.json') else 'utf8'
+                    value = json.loads(path.read_text()) if kind == 'json' else path.read_text()
+                    files[symbolic(str(path))] = dict(kind=kind, mode=path.stat().st_mode & 0o777, value=symbolic(value))
+            fixture = dict(actions=actions, directory_mode=0o700, files=files,
+                hook_directories=sorted(symbolic(str(p)) for p in [self.run.root, *self.run.root.rglob('*')] if p.is_dir()),
+                shared_children=sorted(p.name for p in (self.run.root/'shared/objective_c/build').iterdir()),
+                task_names=sorted((p.name for p in (self.run.root/'objective_c').iterdir()),
+                    key=[TASK_KEYS[a] for a in actions].index))
+            self.assertEqual(I.sha(I.canonical(fixture)), golden[action])
+
+    def test_original_signed_stamp_vectors_and_exact_native_range(self):
+        vectors = [(b'{"configVersion":2,"packages":[]}\n', -3246432485929507267),
+            (b'3.10.4\n', 8678580896246172231), (b'/home/runner', 1120332243444303402),
+            (b'/workspace/flutter/bin:/tools:/usr/bin:/bin', 8181591834748514862)]
+        for raw, expected in vectors:
+            self.assertEqual(int.from_bytes(hashlib.md5(raw).digest()[:8], 'little', signed=True), expected)
+            self.assertTrue(W['native_stamp_hash'](expected))
+        for value in (-(2**63), -1, 0, 1, 2**63-1): self.assertTrue(W['native_stamp_hash'](value))
+        for value in (-(2**63)-1, 2**63, 2**64-1, True, False, 1.0, '1', None):
+            self.assertFalse(W['native_stamp_hash'](value))
+
+    def test_invalid_stamp_hashes_and_missing_mandatory_roles_fail_in_both_profiles(self):
+        for action in ('test', 'build'):
+            task = self.task(action)
+            for name, rows, code in (('hook.dependencies_hash_file.json', 'file_system', 'P15_HOOK_STAMP_ENTRY'),
+                    ('dependencies.dependencies_hash_file.json', 'environment', 'P15_HOOK_STAMP_ENVIRONMENT')):
+                path = task/name; original = json.loads(path.read_text())
+                for value in (-(2**63)-1, 2**63, 2**64-1, True, 0.5, 'invalid', None):
+                    changed = copy.deepcopy(original); changed[rows][0]['hash'] = value; self.write(path, changed)
+                    with self.assertRaisesRegex(ValueError, code): self.run.after(action)
+                self.write(path, original)
+            path = task/'hook.dependencies_hash_file.json'; original = json.loads(path.read_text())
+            for index in (0, 1):
+                changed = copy.deepcopy(original); changed['file_system'].pop(index); self.write(path, changed)
+                with self.assertRaisesRegex(ValueError, 'P15_HOOK_STAMP_REQUIRED_INPUTS'): self.run.after(action)
+            self.write(path, original); self.run.after(action)
+
+    def test_stamp_scope_duplicate_rows_and_unknown_environment_are_rejected(self):
+        self.task('test'); task = self.run.root/'objective_c'/TASK_KEYS['test']
+        for name in ('hook.dependencies_hash_file.json', 'dependencies.dependencies_hash_file.json'):
+            path = task/name; original = json.loads(path.read_text()); changed = copy.deepcopy(original)
+            rows = 'file_system' if original['file_system'] else 'environment'
+            changed[rows].append(changed[rows][0].copy()); self.write(path, changed)
+            with self.assertRaisesRegex(ValueError, 'P15_HOOK_STAMP_SCHEMA|P15_HOOK_STAMP_ENTRY|P15_HOOK_STAMP_ENVIRONMENT'): self.run.after('test')
+            changed = copy.deepcopy(original)
+            if rows == 'file_system': changed['environment'] = [dict(key='HOME', hash=1)]
+            else: changed['environment'][0]['key'] = 'UNAUTHORIZED'
+            self.write(path, changed)
+            with self.assertRaisesRegex(ValueError, 'P15_HOOK_STAMP_SCOPE|P15_HOOK_STAMP_ENVIRONMENT'): self.run.after('test')
+            self.write(path, original)
+        self.run.after('test')
+
+    def test_all_nine_task_files_are_required_in_each_lifecycle(self):
+        # Literal roles independently checked against original runner producers.
+        roles = ('.lock', 'input.json', 'output.json', 'hook.dill', 'hook.dill.d',
+            'hook.dependencies_hash_file.json', 'dependencies.dependencies_hash_file.json', 'stdout.txt', 'stderr.txt')
+        for action in ('test', 'build'):
+            task = self.task(action)
+            for name in roles:
+                path = task/name; saved = self.base/'saved'; path.rename(saved)
+                with self.assertRaisesRegex(ValueError, 'P15_HOOK_TASK_FILES'): self.run.after(action)
+                saved.rename(path)
+            self.run.after(action)
+
+    def test_retained_linux_manifest_is_verified_after_web_too(self):
+        self.task('test'); self.run.after('test'); self.task('build')
+        path = self.stage/'build/native_assets/linux/native_assets.json'
+        self.write(path, {'format-version':[1,0,0], 'native-assets':{'unapproved':{}}})
+        with self.assertRaisesRegex(ValueError, 'P15_HOOK_NATIVE_ASSET_MANIFEST'): self.run.after('build')
+        self.assertEqual(self.run.completed, {'test'})
+
+    def test_generated_file_descriptor_is_closed_on_identity_rejection(self):
+        task = self.task('test'); path = task/'output.json'; original_fstat = os.fstat
+        before = set(os.listdir('/proc/self/fd'))
+        def changed(fd):
+            value = original_fstat(fd)
+            from types import SimpleNamespace
+            fields = {k: getattr(value, k) for k in ('st_dev', 'st_ino', 'st_mode', 'st_uid',
+                'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')}
+            fields['st_ino'] += 1
+            return SimpleNamespace(**fields)
+        with patch.object(W['os'], 'fstat', changed), self.assertRaisesRegex(ValueError, 'P15_HOOK_FILE_CHANGED'):
+            W['regular'](path)
+        self.assertEqual(set(os.listdir('/proc/self/fd')), before)
+
+    def test_missing_long_or_short_shared_child_is_rejected_for_both_lifecycles(self):
+        for action in ('test', 'build'):
+            self.task(action)
+            shared = self.run.root/'shared/objective_c/build'
+            for key in (TASK_KEYS[action], TASK_KEYS[action][:10]):
+                path = shared/key; path.rmdir()
+                with self.assertRaisesRegex(ValueError, 'P15_HOOK_SHARED_CHECKSUMS'): self.run.after(action)
+                path.mkdir(mode=0o700)
+            self.run.after(action)
+
+    def test_unknown_long_short_and_extra_shared_children_never_receive_authority(self):
+        for action in ('test', 'build'):
+            self.task(action)
+            shared = self.run.root/'shared/objective_c/build'
+            for key, replacement in ((TASK_KEYS[action], '0'*32), (TASK_KEYS[action][:10], '0'*10)):
+                path = shared/key; other = shared/replacement; path.rename(other)
+                with self.assertRaisesRegex(ValueError, 'P15_HOOK_SHARED_CHECKSUMS'): self.run.after(action)
+                other.rename(path)
+            extra = shared/'unknown-extra'; extra.mkdir(mode=0o700)
+            with self.assertRaisesRegex(ValueError, 'P15_HOOK_ENTRY_BOUND'): self.run.after(action)
+            extra.rmdir(); self.run.after(action)
+
+    def test_shared_directory_aliases_wrong_types_and_writable_directories_fail(self):
+        self.task('test'); shared = self.run.root/'shared/objective_c/build'
+        for key in (TASK_KEYS['test'], TASK_KEYS['test'][:10]):
+            path = shared/key; path.rmdir()
+            outside = self.base/('outside-'+key); outside.mkdir(mode=0o700)
+            path.symlink_to(outside)
+            with self.assertRaisesRegex(ValueError, 'P15_HOOK_DIRECTORY'): self.run.after('test')
+            path.unlink(); self.write(path, b'not a directory')
+            with self.assertRaisesRegex(ValueError, 'P15_HOOK_DIRECTORY'): self.run.after('test')
+            path.unlink(); path.mkdir(mode=0o700); path.chmod(0o770)
+            with self.assertRaisesRegex(ValueError, 'P15_HOOK_DIRECTORY'): self.run.after('test')
+            path.chmod(0o700)
+        self.run.after('test')
+
+    def test_native_manifest_ancestor_alias_is_rejected_and_phase_not_committed(self):
+        self.task('test'); parent = self.stage/'build/native_assets/linux'
+        saved = self.base/'saved-linux'; parent.rename(saved); parent.symlink_to(saved)
+        with self.assertRaisesRegex(ValueError, 'P15_HOOK_DIRECTORY'): self.run.after('test')
+        self.assertEqual(self.run.completed, set())
+        parent.unlink(); saved.rename(parent)
+        self.run.after('test')
+
+    def test_failed_manifest_keeps_build_phase_unauthorized(self):
+        self.task('test'); manifest = self.stage/'build/native_assets/linux/native_assets.json'
+        self.write(manifest, {'format-version':[1,0,0], 'native-assets':{'unapproved':{}}})
+        with self.assertRaisesRegex(ValueError, 'P15_HOOK_NATIVE_ASSET_MANIFEST'): self.run.after('test')
+        self.assertEqual(self.run.completed, set())
+        original = W['module']('prepare_hosted_overmorrow_ci'); original.SDK = self.sdk
+        with self.assertRaisesRegex(ValueError, 'P15_HOOK_PHASE_ORDER'):
+            self.run.before('build', original.flutter_command('build')+['--no-tree-shake-icons'], original.environment())
+
+    def test_regular_read_rejects_inode_replacement_before_open(self):
+        task = self.task('test'); target = task/'output.json'; original_open = os.open
+        other = self.write(self.base/'other.json', target.read_bytes())
+        def swapped(path, flags, *args, **kwargs):
+            if path == target:
+                target.unlink(); other.rename(target)
+            return original_open(path, flags, *args, **kwargs)
+        with patch.object(W['os'], 'open', swapped), self.assertRaisesRegex(ValueError, 'P15_HOOK_FILE_CHANGED'):
+            W['regular'](target)
+
+    def test_generated_state_file_modes_owner_and_resource_bounds_are_preserved(self):
+        task = self.task('test'); target = task/'output.json'
+        target.chmod(0o640)
+        with self.assertRaisesRegex(ValueError, 'P15_HOOK_FILE'): self.run.after('test')
+        target.chmod(0o600)
+        with self.assertRaisesRegex(ValueError, 'P15_HOOK_FILE'): W['regular'](target, 1)
+        # Owner comparison is meaningful even when the test cannot chown.
+        with patch.object(W['os'], 'getuid', return_value=os.getuid()+1), \
+                self.assertRaisesRegex(ValueError, 'P15_HOOK_DIRECTORY'): self.run.after('test')
+        self.run.after('test')
 
     def test_task_diagnostics_are_bounded_and_never_export_unknown_names(self):
         self.task('test')

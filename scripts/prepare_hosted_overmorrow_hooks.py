@@ -171,10 +171,22 @@ def children(path, maximum):
 
 
 def regular(path, maximum=2 * 1024**2):
+    # This private generated state has no authorized directory aliases. Check
+    # the ancestors too (notably the Linux native-assets manifest parent).
+    directory(path.parent)
     info = path.lstat()
     check(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_nlink == 1
         and stat.S_IMODE(info.st_mode) == 0o600 and info.st_size <= maximum, 'P15_HOOK_FILE')
-    return I.read(path, maximum)
+    identity = lambda value: (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+        value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        check(identity(os.fstat(stream.fileno())) == identity(info), 'P15_HOOK_FILE_CHANGED')
+        raw = stream.read(maximum + 1)
+        check(identity(os.fstat(stream.fileno())) == identity(info), 'P15_HOOK_FILE_CHANGED')
+    directory(path.parent)
+    check(len(raw) == info.st_size and identity(path.lstat()) == identity(info), 'P15_HOOK_FILE_CHANGED')
+    return raw
 
 
 def document(path):
@@ -187,6 +199,13 @@ def absolute(value, expected, *, directory_path=False):
         or directory_path and value == str(expected) + '/')
 
 
+def native_stamp_hash(value):
+    # Original hooks_runner MD5 bookkeeping reads its first native uint64.
+    # The pinned Linux/x64 Dart VM boxes the 64 raw bits as a signed int64.
+    # This is cache metadata only, never a replacement for input SHA256 checks.
+    return type(value) is int and -(2**63) <= value < 2**63
+
+
 def stamp(path, *, stage, sdk, dependency):
     value = document(path)
     check(type(value) is dict and set(value) == {'file_system', 'environment'}
@@ -195,8 +214,8 @@ def stamp(path, *, stage, sdk, dependency):
     seen = set()
     for row in value['file_system']:
         check(type(row) is dict and set(row) == {'path', 'hash'} and type(row['path']) is str
-            and len(row['path']) < 4096 and row['path'] not in seen and type(row['hash']) is int
-            and 0 <= row['hash'] < 2**64, 'P15_HOOK_STAMP_ENTRY')
+            and len(row['path']) < 4096 and row['path'] not in seen and native_stamp_hash(row['hash']),
+            'P15_HOOK_STAMP_ENTRY')
         seen.add(row['path'])
         target = Path(row['path'])
         check(target.is_absolute() and str(target) == os.path.normpath(row['path'])
@@ -205,11 +224,14 @@ def stamp(path, *, stage, sdk, dependency):
     keys = set()
     for row in value['environment']:
         check(type(row) is dict and set(row) == {'key', 'hash'} and row['key'] in ('HOME', 'PATH')
-            and row['key'] not in keys and type(row['hash']) is int and 0 <= row['hash'] < 2**64,
+            and row['key'] not in keys and native_stamp_hash(row['hash']),
             'P15_HOOK_STAMP_ENVIRONMENT')
         keys.add(row['key'])
     check((not seen and keys == {'HOME', 'PATH'}) if dependency else (not keys and bool(seen)),
           'P15_HOOK_STAMP_SCOPE')
+    if not dependency:
+        check({str(stage / '.dart_tool/package_config.json'), str(sdk / 'bin/cache/dart-sdk/version')} <= seen,
+              'P15_HOOK_STAMP_REQUIRED_INPUTS')
 
 
 class HookRun:
@@ -244,11 +266,11 @@ class HookRun:
         self._source_guard()
         expected = self.completed | {action}
         result = self._inspect(expected)
-        self.completed = expected
-        if action == 'test':
+        if 'test' in expected:
             manifest = document(self.stage / 'build/native_assets/linux/native_assets.json')
             check(same(manifest, {'format-version': [1, 0, 0], 'native-assets': {}}),
                   'P15_HOOK_NATIVE_ASSET_MANIFEST', self.owner, ENTRY)
+        self.completed = expected
         return result
 
     def _inspect(self, actions):
@@ -267,9 +289,14 @@ class HookRun:
         check({p.name for p in children(shared_owner, 2)} == {'.lock', 'build'}, 'P15_HOOK_SHARED_FILES', self.owner, ENTRY)
         regular(shared_owner / '.lock', 16384)
         shared_build = shared_owner / 'build'
-        check({p.name for p in children(shared_build, 2)} == {key[:10] for key in tasks},
+        # Both original HookInput constructors eagerly create outputDirectory:
+        # tool hooks 0.20.1 uses all 32 characters, app hooks 2.0.2 uses 10.
+        # Each remains bound to one of the exact authorized configurations.
+        shared_keys = {name for key in tasks for name in (key, key[:10])}
+        shared_paths = children(shared_build, 2 * len(tasks))
+        check({p.name for p in shared_paths} == shared_keys,
               'P15_HOOK_SHARED_CHECKSUMS', self.owner, ENTRY)
-        for path in children(shared_build, 2):
+        for path in shared_paths:
             check(not children(path, 1), 'P15_HOOK_NATIVE_OUTPUT', self.owner, ENTRY)
         for key, action in tasks.items():
             task = owner_dir / key
@@ -308,6 +335,7 @@ class HookRun:
             stamp(task / 'hook.dependencies_hash_file.json', stage=self.stage, sdk=self.sdk, dependency=False)
             stamp(task / 'dependencies.dependencies_hash_file.json', stage=self.stage, sdk=self.sdk, dependency=True)
         return dict(verified_profiles=sorted(PROFILES[action] for action in actions), tasks=len(tasks),
+            shared_directories=len(shared_keys),
             hook_package=PACKAGE, hook_version=VERSION, hook_source_sha256=HOOK_SHA,
             hook_record_sha256=RECORD_SHA, hook_kernel_and_protocol_authorized=True,
             native_asset_count=0, native_compilation_authorized=False, native_link_hook_allowed=False,

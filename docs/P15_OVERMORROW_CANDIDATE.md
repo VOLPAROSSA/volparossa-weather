@@ -1,5 +1,14 @@
 # P15 Overmorrow candidate, 2026-10-28
 
+**P15i preflight, 2026-10-31:** the complete hook-state contract is checked
+jointly against original producers for test and test-plus-web lifecycles. The
+shared-directory closure now requires both original 32- and 10-character names
+per profile. The audit also corrects native signed-64-bit stamp bookkeeping,
+requires both original compiler-stamp roles and strengthens generated-file and
+phase/manifest checks. All 310 relevant inert tests pass. This task prepares
+verification only: **no P15i hosted build, Flutter tests or web compilation is
+started**. The latest actual runtime evidence remains P15h run 41225196544.
+
 **P15h final result, 2026-10-31:** the corrected 32-character test task
 identity passes hosted, and all 24 real Flutter tests pass. The next existing
 check rejects `P15_HOOK_SHARED_CHECKSUMS`. The preflight missed the tool-side
@@ -30,6 +39,193 @@ packages and their file identities. Post-pub package/configuration/plugin
 binding also passes. The full source check then stops at
 `P15_UNKNOWN_GENERATED_SOURCE`, before hook authorization, Flutter tests or
 web compilation. All six cleanup flags pass. No automatic retry followed.
+
+## P15i: complete hook-state preflight for both profiles
+
+P15i resumes exact head `bb1892d43d72c9f1d78a3cbfed854a6494ae1139` in the
+existing isolated P15 worktree. The original failed reports, incomplete P15h
+preflight proof, corrective addendum and independently reviewed hosted result
+are preserved. The 224-archive/package policy, source/SDK pins, package versions,
+P13 Boundary, sandbox permissions, P14 and Core remain unchanged.
+
+### Exact shared-directory semantics
+
+Runner `hooks_runner 0.23.0` uses tool `hooks 0.20.1`. During
+`inputBuilder.build()`, the tool-side `HookInput` constructor eagerly evaluates
+`outputDirectory`, creating a child named with the full 32-character checksum.
+Executing original objective_c 9.5.0 uses app `hooks 2.0.2`, whose own constructor
+creates a child with the first ten characters. Both hash the same original
+compact UTF-8 configuration bytes. This is two producers sharing one parent,
+not a new hook, native output or alternate configuration authority.
+
+| Lifecycle | Task directories | Exact shared children |
+| --- | --- | --- |
+| test | `6b4ebf10e70ccf8d154076a186bfba3b` | `6b4ebf10e70ccf8d154076a186bfba3b`, `6b4ebf10e7` |
+| test then web | preceding task plus `6782ff62a082d25dd9788598e67912e5` | preceding two plus `6782ff62a082d25dd9788598e67912e5`, `6782ff62a0` |
+
+The relative shape is:
+
+```text
+.dart_tool/hooks_runner/
+  objective_c/<config32>/
+    .lock, input.json, output.json, hook.dill, hook.dill.d,
+    hook.dependencies_hash_file.json, dependencies.dependencies_hash_file.json,
+    stdout.txt, stderr.txt, out/
+  shared/objective_c/
+    .lock
+    build/<config32>/
+    build/<config10>/
+```
+
+The shared scan bound is exactly two children per authorized profile: two after
+test, four after both profiles. Exact set equality is required, followed by
+ownership/alias/permissions checks and emptiness of **every** short and long
+child. All task `out/` directories remain empty. No arbitrary hexadecimal name,
+other profile, unknown task, package version, native output or directory-wide
+exception is authorized.
+
+### Remaining protocol and state closure, audited together
+
+| Check family | Original producer and accepted contract |
+| --- | --- |
+| Freshness, phase order, root source | Fresh private state; original pubspec SHA256, no user-defines/workspace overrides; test precedes web. |
+| Owner/task names | Exact Objective-C owner plus shared root; exact original profile checksums; unknown/missing/extra tasks denied. |
+| Shared owner and lock | Exactly `.lock` and `build`; private bounded single-link lock retained until stage cleanup. |
+| Shared children | Both eager constructors; exact 32+10 names for every completed profile. |
+| Native output | All task `out/` and all shared children empty; original callback returns before Linux/native work or when web has no code assets. |
+| Task files | Exactly nine original runner files plus `out/`; missing or extra files denied. |
+| Ownership, paths, file identity | Owned non-writable-by-group/others directories, owned single-link regular mode-0600 files, no aliases/special files, bounded reads. |
+| Kernel and depfile | Original SDK compiler produces nonempty kernel and depfile; fixture payloads are inert structural representatives, never executed binaries. |
+| Input protocol | Exactly six fields: original `config`, empty `assets`, exact owner/root/output/shared-parent paths; no user-defines or extra fields. |
+| Output protocol | Exactly empty `assets_for_linking`, `status=success` and timestamp; no extra assets/dependencies/failure payload. |
+| Timestamp | Original app helper truncates to whole seconds before local DateTime serialization; bounded valid timestamp with zero microseconds. |
+| Logs | Private bounded stdout may include original runner command/environment metadata; stderr empty for these successful no-op profiles. |
+| Compiler stamp | Original runner retains app package-config and SDK version plus SDK compiler inputs; no environment rows, duplicates or external paths. |
+| Dependency stamp | No files for empty callback outputs; exactly HOME/PATH from the existing purged environment. |
+| Stamp integer type | Exact native signed-int64 representation of original MD5 bookkeeping; booleans and out-of-range integers denied. |
+| Linux manifest | Exact empty `format-version:[1,0,0]` / `native-assets:{}` after test and retained unchanged after web. |
+| Web build state | Original web target tree has no `InstallCodeAssets`; writes are under its existing web/build roots, not extra hook state. Separate source/output contracts remain authoritative. |
+| Cleanup | Original process/policy drain, descriptor closure, owned-root identity and enclosing-stage deletion; no assumption that hooks delete their lock files. |
+
+### Native stamp representation and bounded safety corrections
+
+The original runner's `_md5int64` reads the first eight MD5 bytes through a native
+Uint64 view. The pinned Linux/x64 Dart VM returns the raw 64 bits as a signed
+Dart integer. The old `0 <= hash < 2**64` predicate therefore rejected valid
+negative bookkeeping. The corrected predicate is exactly
+`-2**63 <= hash < 2**63`, with `type(value) is int`, for both stamp collections.
+It does not accept the union of signed and unsigned ranges.
+
+This is proven against the already pinned Dart revision
+`a0daa5004ec02c0638ba6e50791ba9338a87374c`: original revision/typed-data SDK bytes
+match the original SDK inventory; the immutable Git tree authenticates the
+relevant VM C++ blobs. The recognized Uint64 getter normalizes to
+`kUnboxedInt64`, defined as native `int64_t`; the x64 load and `BoxInt64` store
+those raw bits in a Mint. Public Uint64 API wording alone is insufficient to
+infer this pinned native JSON representation. No Dart or C++ code is executed,
+compiled or added to the build inputs.
+
+For fixture bytes `{"configVersion":2,"packages":[]}\n`, ordinary MD5 is
+`3d26e2b8da5af2d242d9600c84855151`; its first eight bytes in little-endian native
+representation become `-3246432485929507267`. The old predicate rejects that
+source-derived fixture; the corrected native predicate accepts it. MD5 remains
+cache bookkeeping only. Original SHA256/source/package/SDK checks retain all
+integrity and execution authority.
+
+The compiler stamp now explicitly requires both app
+`.dart_tool/package_config.json` and SDK `bin/cache/dart-sdk/version`, which the
+original compiler path unconditionally appends. Existing SDK-root restrictions,
+row bounds and duplicate rejection remain. A phase is committed as completed
+only after its full state and Linux manifest validate; the Linux manifest is
+checked again after web because the original web target preserves it.
+
+The hook controller's own generated-file reader additionally rejects ancestor
+aliases and compares device/inode/mode/owner/link/size/mtime/ctime before opening,
+on the nofollow descriptor, after reading and at the final pathname. Descriptors
+close even on identity failure. The shared input/runtime reader is unchanged.
+These checks tighten generated-state safety without adding filesystem rights.
+
+### Source-derived fixtures, tests and verification boundary
+
+The complete private source matrix authenticates six original archives and
+membermaps/notices, 28 original producer/VM/SDK files and all eighteen families
+above. Proof SHA256:
+`f2da8c725209a880497df907ec66655c6c23b2d0cbc39914ac14ce656f4db163`
+(`build/p15i-source/complete-state-source-proof.json`). Original VM source reads
+are targeted, immutable-revision source inspection, not dependency downloads or
+new SDK authorization. Original source hashes, records and notices are retained.
+
+Independent whole-tree fixture JSON SHA256:
+`88553580166352bcdfe998b592799b37bb8a08419486fe94866b0bb0b2c4a0ca`
+(`build/p15i-source/hook-state-fixtures.json`). These fixtures do not import
+production CONFIGS/TASK_FILES. They include both full trees, six-field inputs,
+three-field outputs, both shared producers, all file roles/modes and real signed
+bookkeeping vectors. Exact canonical tree hashes embedded in tracked tests are
+`9e7495951938b5eb2bc76dea2afdb35eb1226a51032996d66ad8deb3dcba0a75`
+after test and
+`ffdf0fe966a030447c0c2fe03c82c16ecab227c67d549560acf0ee0cee854122`
+after test plus web. Task lists in fixture metadata use lifecycle order; actual
+directory-set authority remains unordered exact equality.
+
+All 310 relevant inert tests pass, including 42 hook tests. Coverage includes
+both full before/after lifecycles and golden trees; missing/unknown/extra short
+or long shared children; native files in every task/shared location; missing
+nine-file roles; changed config/version/paths; malformed protocol/outputs;
+signed-int64 boundaries/booleans/unknown stamp paths/environment/missing required
+roles; manifests before and after web; symlinks/hardlinks/ancestor aliases;
+write permissions, ownership and byte bounds; inode replacement, failed-phase
+rollback and descriptor cleanup. Candidate cleanup/source/plugin/cache/dependency
+and unchanged workflow checks also pass. Temporary fixture directories are empty
+after the suites; original evidence remains private and preserved.
+
+No P15i hosted command, upstream SDK/package execution, actual Flutter test or
+web compilation is performed. Prior P15h evidence still establishes 24 passing
+actual Flutter tests and six passing cleanup flags but stops before successful
+hook protocol verification and any web build. Source-derived fixture acceptance
+is not actual hook/runtime acceptance, candidate success, cold-build
+reproducibility or production/consumer/release admission.
+
+### Independent review and one prepared verification
+
+Independent review repeats 116 affected tracked tests (42 hook, 43 candidate,
+31 dependency) and 63 separately constructed whole-state cases across both
+profiles. It independently authenticates the signed-native-int source chain,
+checks the full producer matrix/fixtures and the original web target's retention
+of the Linux manifest. All pass, with no remaining source-contract finding.
+The reviewed hook-controller SHA256 is
+`0e7639daf11ebc93e1b5106aaeea7c8e442aca1d8751ff0c17f8e0c5af2cfd09`;
+the tracked hook-test SHA256 is
+`ab23ab6a597594b810092becac26eb4fd73b998f38ad98647635355addd97a38`.
+Private final review is retained as
+`build/p15i-review/candidate-preflight-review.json` and binds the exact final
+source, tests, fixture proof and concrete prepared plan.
+
+**GO for one prepared bounded candidate verification**, limited to this source
+and the existing workflow/Boundary. This is source-contract readiness, not a
+successful application build or runtime acceptance. There is no claim that the
+unknown historical shared directories were inspected or admitted.
+
+The private plan `build/p15i-verification-plan/plan.json` binds the concrete PR
+commit, all fifteen reviewed controller-source hashes and three affected test
+hashes. It is marked prepared/report-first, `dispatch_performed=false`, with no
+execution authorization from this report. It specifies exactly one manual
+`workflow_dispatch`, attempt 1, `source-candidate-build` on the existing P15
+branch; unchanged 45-minute job and 2,400-second whole-command deadline with
+90-second TERM-to-KILL grace, original 180-second pub and 900-second test/web
+limits. No sandbox capability or network permission is added.
+
+The prepared order is original input/runtime guards and both offline pub steps;
+closed preparation/source/plugin metadata; 24 actual Flutter tests and complete
+one-task/two-shared-child state; web compilation only after all prior predicates
+pass; complete two-task/four-shared-child state with retained empty Linux
+manifest; original source/SDK/dependency rechecks; output/assets/font/notices;
+and mandatory process/policy drain, all six cleanup flags and descriptor closure.
+Any unknown state or new independent failure stops execution with no retry.
+
+**No dispatch is performed in P15i.** Report the GO/NO-GO first, as requested.
+P13/P14/Core, all original source pins and dependency versions remain unchanged.
+PR #35 stays draft; no merge, release, product admission or reproducibility
+claim follows this prepared plan.
 
 ## P15h: exact hook task identity from original source
 
