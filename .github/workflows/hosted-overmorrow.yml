@@ -8,7 +8,7 @@ on:
         description: Historical build, input data or installed environment inventory
         type: choice
         default: historical-v1
-        options: [historical-v1, source-input-inventory, installed-environment-inventory, runtime-boundary-verification]
+        options: [historical-v1, source-input-inventory, installed-environment-inventory, runtime-boundary-verification, source-candidate-build, source-pub-diagnostic]
   push:
     branches: [feature/hosted-overmorrow]
     paths:
@@ -291,3 +291,55 @@ jobs:
           test "$GITHUB_WORKSPACE" = "$(pwd -P)"
           test "$RUNNER_ENVIRONMENT" = github-hosted
           python3 -B scripts/prepare_hosted_client_inputs.py --profile overmorrow --mode cleanup-input-data
+
+  source-candidate:
+    name: P15 ${{ github.event.inputs.input_mode }}
+    if: github.event_name == 'workflow_dispatch' && (github.event.inputs.input_mode == 'source-candidate-build' || github.event.inputs.input_mode == 'source-pub-diagnostic')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check exact P15 source and inert input contracts
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --short --untracked-files=all)"
+          umask 077
+          mkdir -m 700 -p build/p15-inert-tests
+          export TMPDIR="$GITHUB_WORKSPACE/build/p15-inert-tests"
+          python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_hooks.py'
+          python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_plugins.py'
+          python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_sources.py'
+          python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_pub_metadata.py'
+          python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_pub_outputs.py'
+          python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_dependencies.py'
+          python3 -B -m unittest discover -s tests -p 'test_hosted_overmorrow_candidate.py'
+          python3 -B -m unittest discover -s integrations/overmorrow -p 'test_build.py'
+          python3 -B -m unittest discover -s integrations/overmorrow -p 'test_deploy.py'
+      - name: Retrieve the original pinned Browser policy helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: VOLPAROSSA/volparossa-browser
+          ref: 08bac388a0abfd06426bebe8f6fabd0157d2e709
+          path: build/hosted-browser-source
+          persist-credentials: false
+      - name: Run the bounded candidate or diagnostic-only pub prefix
+        run: |
+          set -euo pipefail
+          umask 077
+          timeout --signal=TERM --kill-after=90s 2400s python3 -B scripts/prepare_hosted_overmorrow_candidate.py
+      - name: Retain only closed P15 candidate metadata
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: p15-overmorrow-candidate-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/p15-overmorrow-candidate-public/result.json
+            build/p15-overmorrow-candidate-public/cleanup.json
