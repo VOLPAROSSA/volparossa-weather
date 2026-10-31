@@ -1,11 +1,13 @@
 # P15 Overmorrow candidate, 2026-10-28
 
-**P15h preflight, 2026-10-31:** the original source proves an incorrect test
-asset discriminator in the hook identity contract. Only `code_assets` in the
-`build_asset_types` list becomes `code_assets/code`; the extension namespace,
-web profile, package/source pins and all execution/output guards stay intact.
-295 relevant inert tests pass. Independent review approves exactly one bounded
-hosted candidate; no verified hook or web-build success is claimed before it.
+**P15h final result, 2026-10-31:** the corrected 32-character test task
+identity passes hosted, and all 24 real Flutter tests pass. The next existing
+check rejects `P15_HOOK_SHARED_CHECKSUMS`. The preflight missed the tool-side
+eager creation of a second, 32-character shared child beside the app's
+10-character child. This separate contract defect is recorded without another
+code correction, authorization change or hosted retry. No web compilation runs;
+all cleanup flags pass. P15 remains draft and has no successful full candidate,
+verified reproducibility or product admission.
 
 **P15g final result, 2026-10-29:** the cache correction is hosted-verified.
 All 73 cache entries and six metadata files pass; all 24 actual Flutter tests
@@ -82,7 +84,10 @@ configuration bytes but a ten-character prefix. Its `HookInput` constructor
 even for an empty-assets hook. The existing `out_dir_shared` input expectation
 is correctly the parent `shared/objective_c/build/`. The existing fresh-state,
 test-before-build ordering, one-task test set and two-task final union remain.
-No further identity-dependent protocol or path correction is required.
+The preflight concluded that no further identity-dependent path correction was
+required. That conclusion was incomplete: it missed the tool-side constructor
+side effect described in the P15h hosted result below. The original preflight
+proof is preserved; it is not evidence of successful shared-directory binding.
 
 Private proof `build/p15h-source/identity-source-proof.json`, SHA256
 `d6584356603b391088f7dc446f93573a5f12679b4752889e1e7c2c33f1eda254`,
@@ -131,6 +136,84 @@ base. All fifteen existing controller bindings are retained. Review SHA256:
 manual attempt 1, no retry, stop at any new independent failure. The purpose is
 complete hook/test/web candidate verification after a source-proven correction,
 not a full build solely to recover an unknown historical name.
+
+### P15h hosted result and explicit source-proof correction
+
+The one [P15h candidate run 41225196544](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/41225196544)
+uses implementation commit `fd714adc2aeef918c72f9d48838f6a18b1d955ed`, manual
+attempt 1. All 257 hosted inert tests pass. Both real offline pub commands and
+all ten harness commands return exit 0 and confirm process drain. All 224
+archive/package bindings, all 73 cache entries and six metadata files pass up
+to test entry, together with fifteen SDK Git controls and three plugin namespace
+proofs. Source sealing and original SHA256 controls are retained; no completed
+post-test source/SDK revalidation is claimed.
+
+All 24 actual Flutter tests pass again. `HookRun.after('test')` now passes the
+exact Objective-C task-set predicate, establishing the corrected 32-character
+identity by equality against its fixed source-derived expectation. It then
+fails closed with `HookContractError / P15_HOOK_SHARED_CHECKSUMS` for
+`objective_c 9.5.0/hook/build.dart`. The new task-set mismatch diagnostic is not
+emitted because that predicate passes. The observed shared child names and
+contents are not retained. No successful `hook_execution` receipt, task-file/
+protocol/native-manifest validation, later post-test source acceptance or web
+build follows. `compiled=false`, `flutter_tests=24`, `candidate_success=false`.
+
+Bounded reinspection of the same authenticated sources identifies a separate
+preflight omission. Tool `hooks 0.20.1`'s own `HookInput` constructor also eagerly
+evaluates `outputDirectory`; its getter creates the shared child using its
+**32-character** checksum. After `setupShared`, runner `inputBuilder.build()`
+constructs this tool-side input before protocol validation and package execution.
+App `hooks 2.0.2` subsequently creates its **10-character** shared child. The
+preflight and independent preflight review considered the app-side side effect
+but missed the tool-side one. Positive shared-state fixtures also modeled only
+the app-side child and did not cover that producer overlap. This was an
+incomplete source proof, not evidence
+of changed configuration, source pins or unauthorized native execution.
+
+For test, the source therefore predicts both
+`6b4ebf10e70ccf8d154076a186bfba3b` and `6b4ebf10e7`; the build profile would add
+`6782ff62a082d25dd9788598e67912e5` and `6782ff62a0`. That is two shared children
+for test and four after both profiles. The existing contract expects only the
+ten-character children and bounds the directory to two entries. These complete
+source-derived sets are recorded as a remaining contract correction, not newly
+authorized runtime state. Actual child names, their emptiness and the subsequent
+protocol predicates still require closed verification. No general alias or
+checksum whitelist is justified.
+
+The original private source proof and preflight approval remain intact. The
+separate source addendum `build/p15h-source/shared-checksum-proof-addendum.json`
+has SHA256
+`63d74f1ca95c6c8e432837908df2871ba7d676fc608e1be2bb912cf7385b6d7c`.
+It explicitly corrects the missed tool constructor path without modifying code,
+expanding accepted task/shared sets or starting another attempt.
+
+Artifact `13051113501` is 5,968 bytes, contains only `result.json` and
+`cleanup.json`, and has API-matching SHA256
+`eb8393a04cf70e2b2dcbdb2352a3b6435fdf9d50364792824dfe190069a12e90`.
+All fifteen source bindings match the immutable reviewed trial commit. All six
+cleanup flags and source-inventory descriptor closure pass, with both cleanup
+failure fields null. Public artifacts contain no raw logs, credentials, private paths,
+SDK/cache copies or compiled binaries. Private API, original job log, artifact,
+verification, source addendum and reviews are retained under `build/p15h-*`.
+Original archive/membermap/license notices remain unchanged; final built-output,
+font and notice checks were not reached.
+
+Independent final review verifies the artifact/API/source/preflight bindings,
+257 hosted inert tests, ten successful drained commands, fifteen Git checks,
+three plugin namespace proofs, all preparation metadata, 24 actual tests and
+cleanup. It independently identifies the missed tool-side shared-directory
+producer and explicitly corrects the preflight conclusion. Final-review SHA256:
+`be5faf7cbf41c479baad2b26cc00ee030eaa369be003ee1c65b872e754801fd1`
+(`build/p15h-review/candidate-result-review.json`). Decision:
+`STOP_NEW_SHARED_CHECKSUM_STATE_BLOCKER`.
+
+Technical decision: stop at the new shared-state contract failure, preserve the
+successful task correction and test results, and keep PR #35 draft. The single
+P15h hosted attempt is consumed. No executable changes follow this failure,
+no second hosted run is dispatched, and no P13/P14/Core, pin, dependency,
+sandbox, merge or release change is made. The first actual Overmorrow webbuild
+has **not** been produced; independently verified reproducibility and production/
+consumer admission remain separate unfulfilled gates.
 
 ## P15g: original Flutter filecache hash semantics
 
