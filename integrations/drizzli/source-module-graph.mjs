@@ -93,6 +93,10 @@ function pluginState(plugin) {
 /** @returns {VitePlugin} */
 export default function sourceModuleGraph() {
   let root = '';
+  /** A resolved serve configuration is used by pinned load-config/Svelte CSS
+   * preprocessing. It never installs producer wrappers or binds graph state.
+   * @type {'unconfigured'|'resolving'|'preprocessing'|'production-ready'} */
+  let configuration = 'unconfigured';
   /** @type {import('vite').RenderBuiltAssetUrl|undefined} */
   let renderBuiltUrlCallback;
   /** @type {Set<string>} */
@@ -120,6 +124,7 @@ export default function sourceModuleGraph() {
    * environment or admit an arbitrary observed callback as its authority.
    * @param {Environment} environment @returns {GraphEnvironment} */
   const contextOf = (environment) => {
+    if (configuration !== 'production-ready') throw new Error('P14_VIRTUAL_CONFIGURATION:production-required');
     const config = environment.config;
     return validateVirtualContext({ name: environment.name, command: config.command,
       mode: config.mode, isBundled: config.isBundled, isWorker: config.isWorker,
@@ -233,6 +238,8 @@ export default function sourceModuleGraph() {
     name: 'volparossa-source-module-graph-v2',
     enforce: 'post',
     configResolved(config) {
+      if (configuration !== 'unconfigured') throw new Error('P14_VIRTUAL_CONFIGURATION:repeated');
+      configuration = 'resolving';
       root = resolve(config.root);
       plugins = config.plugins.map((plugin) => plugin.name);
       for (const [member, sha256] of Object.entries(MEMBERS)) {
@@ -245,11 +252,28 @@ export default function sourceModuleGraph() {
             || metadata.name !== name || metadata.version !== version) throw new Error('P14_VIRTUAL_DEPENDENCY_VERSION');
       }
       const callback = config.experimental.renderBuiltUrl;
-      const source = typeof callback === 'function' ? digest(Function.prototype.toString.call(callback)) : null;
-      if (renderBuiltUrlCallback !== undefined || !source || source.bytes !== 1076
-          || source.sha256 !== KIT_RENDER_BUILT_URL) throw new Error('P14_VIRTUAL_CONTEXT:renderBuiltUrl:unreviewed-source');
+      // load-config 0.2.0 resolves serve/development before returning Svelte's
+      // preprocessors. Kit 2.70.1 supplies no renderBuiltUrl in that context.
+      // Successful vite-plugin-svelte configuration attaches this exact config
+      // to style.__resolvedConfig; CSS preprocessing does not run bundler hooks.
+      if (config.command === 'serve') {
+        if (config.mode !== 'development' || config.isWorker !== false || callback !== undefined) {
+          throw new Error('P14_VIRTUAL_CONFIGURATION:preprocessing-context');
+        }
+        configuration = 'preprocessing';
+        return;
+      }
+      if (config.command !== 'build' || config.mode !== 'production' || config.isWorker !== false) {
+        throw new Error('P14_VIRTUAL_CONFIGURATION:production-context');
+      }
+      if (callback === undefined) throw new Error('P14_VIRTUAL_CONTEXT:renderBuiltUrl:missing-binding');
+      if (typeof callback !== 'function') throw new Error('P14_VIRTUAL_CONTEXT:renderBuiltUrl:invalid-type');
+      const source = digest(Function.prototype.toString.call(callback));
+      if (source.bytes !== 1076) throw new Error('P14_VIRTUAL_CONTEXT:renderBuiltUrl:source-bytes');
+      if (source.sha256 !== KIT_RENDER_BUILT_URL) throw new Error('P14_VIRTUAL_CONTEXT:renderBuiltUrl:source-hash');
       renderBuiltUrlCallback = callback;
       for (const plugin of config.plugins) preparePlugin(plugin);
+      configuration = 'production-ready';
     },
     options: {
       order: 'post',

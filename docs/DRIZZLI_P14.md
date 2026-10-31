@@ -272,3 +272,44 @@ Node, native/upstream imports, host installation or compiler execution. The same
 fixtures also run through the existing approved Node/Boundary gate before the
 application compiler. One reviewed hosted candidate may then exercise the full
 typecheck, Vite and output/notice closure; it grants no admission or reproduction.
+
+## P14h: configuration-only preprocessing lifecycle
+
+[P14g run 40796652126](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/40796652126)
+stopped before production: twelve CSS diagnostics shared the grouped callback
+authentication error. The original log did not record its individual branch.
+The unchanged approved sources reconstruct the cause: svelte-check 4.7.3 uses
+load-config 0.2.0, whose initial Vite resolution explicitly selects `serve`.
+The controlled harness initially omits NODE_ENV, so Vite sets it to development.
+Kit's serve configuration does not create its production renderBuiltUrl method.
+The observer rejected that missing callback even for configuration-only use.
+The loader catches that failure and falls back to svelte.config; subsequent
+createCssTransform then selects serve again and repeats the failure. This is a
+source reconstruction, not a retroactive claim of a logged runtime value.
+
+The observer now accepts the exact serve/development, non-worker configuration
+with an absent renderBuiltUrl only after the existing member/version checks.
+That instance returns before any producer wrapping or callback capture. Its
+production options/buildStart and graph hooks remain closed. Successful pinned
+vite-plugin-svelte configuration attaches the resolved configuration to
+style.__resolvedConfig; createCssTransform reuses that exact object. The fallback
+nested-resolution path and standalone build-mode preprocessing are also covered
+by lifecycle fixtures. A standalone build-mode configuration still requires the
+full original production callback contract; configuration alone creates no
+module receipt or output graph.
+
+Each observer instance permits one configuration attempt, including failed
+attempts: a preprocessing instance cannot later become a production instance.
+Separate production instances retain the original exact Kit callback fingerprint,
+identity, SSR/client contexts, producer identities and module bytes. Callback
+diagnostics now distinguish missing binding, invalid type, source byte count and
+source hash; duplicate configuration has its own fixed error. No arbitrary
+callback, observed hash, dependency version, source pin or sandbox right is added.
+
+The staged lifecycle fixture exercises the actual first-party observer factory
+and hooks with explicit inert IO/hash/native seams. These fixtures test lifecycle
+ordering and denials; their simulated external seams are not dependency execution
+or proof of actual compiler output. Shared guard/context code is exercised too.
+The same fixture runs with the approved Node inside the existing Boundary before
+application compilation. Full hosted typecheck, production, actual module and
+output/notice closure, and independent cold reproduction remain distinct gates.
