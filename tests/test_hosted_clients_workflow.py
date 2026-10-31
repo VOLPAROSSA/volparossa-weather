@@ -20,7 +20,7 @@ class HostedClientWorkflowTests(unittest.TestCase):
         self.assertTrue(actions)
         for action in actions:
             self.assertRegex(action, r"^[\w/-]+@[0-9a-f]{40}$")
-        self.assertEqual(self.source.count("persist-credentials: false"), 2)
+        self.assertEqual(self.source.count("persist-credentials: false"), 4)
         self.assertIn("repository: VOLPAROSSA/volparossa-browser", self.source)
         self.assertIn("ref: 08bac388a0abfd06426bebe8f6fabd0157d2e709", self.source)
         self.assertIn("permissions:\n  contents: read\n", self.source)
@@ -94,7 +94,7 @@ class HostedClientWorkflowTests(unittest.TestCase):
 
     def test_embedded_shell_syntax(self):
         blocks = re.findall(r"(?m)^        run: \|\n((?:          .*\n|\n)+)", self.source)
-        self.assertEqual(len(blocks), 6)
+        self.assertEqual(len(blocks), 11)
         for block in blocks:
             script = "\n".join(line[10:] for line in block.splitlines())
             result = subprocess.run(["bash", "-n"], input=script, text=True,

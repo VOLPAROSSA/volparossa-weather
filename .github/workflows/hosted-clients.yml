@@ -8,7 +8,7 @@ on:
         description: Historical build, input data or installed environment inventory
         type: choice
         default: historical-v1
-        options: [historical-v1, source-input-inventory, installed-environment-inventory]
+        options: [historical-v1, source-input-inventory, installed-environment-inventory, drizzli-candidate-build]
   push:
     branches: [feature/hosted-weather-clients]
     paths:
@@ -45,6 +45,65 @@ defaults:
     shell: bash
 
 jobs:
+  drizzli-candidate:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.input_mode == 'drizzli-candidate-build'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact source and inert P14 preparation contracts
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --short --untracked-files=all)"
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(id -u)" != 0
+          umask 077
+          mkdir -m 700 -p build
+          python3 -B -m unittest discover -s tests -p 'test_hosted_drizzli_*.py'
+      - name: Retrieve only the pinned public Browser boundary helper sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: VOLPAROSSA/volparossa-browser
+          ref: 08bac388a0abfd06426bebe8f6fabd0157d2e709
+          path: build/hosted-browser-source
+          persist-credentials: false
+      - name: Perform one bounded Drizz.li candidate with the mandatory Boundary API
+        run: |
+          set -euo pipefail
+          umask 077
+          timeout --signal=TERM --kill-after=60s 2400s python3 -B scripts/prepare_hosted_drizzli_candidate.py --mode build
+      - name: Project closed candidate diagnostics and original notices
+        if: always()
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 -B scripts/prepare_hosted_drizzli_candidate.py --mode project
+      - name: Preserve bounded metadata without compiled application assets
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: p14-drizzli-candidate-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: build/hosted-drizzli-input-candidate-public
+      - name: Remove private candidate inputs and generated files only after confirmed drain
+        if: always()
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 -B scripts/prepare_hosted_drizzli_candidate.py --mode cleanup
+      - name: State candidate scope
+        if: always()
+        run: |
+          printf '%s\n' \
+            'One Drizz.li candidate; inspect exact compilation, integrity, module and cleanup receipts.' \
+            'No independent reproduction, product/consumer admission, release, merge or application asset publication.' \
+            >> "$GITHUB_STEP_SUMMARY"
+
   drizzli:
     if: github.event.inputs.input_mode == '' || github.event.inputs.input_mode == 'historical-v1'
     runs-on: ubuntu-24.04
