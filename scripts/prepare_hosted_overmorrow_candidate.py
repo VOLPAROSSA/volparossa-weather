@@ -718,6 +718,8 @@ def execute(*, mode=MODE):
             failure['sdk_git'] = error.sdk_git_failure
         if metadata_validator is not None and isinstance(error, metadata_validator.CacheHashFailure):
             details['cache_hash_failure'] = error.cache_observation()
+        if 'hooks' in locals() and isinstance(error, hooks.TaskSetError):
+            details['hook_task_identity'] = error.task_observation()
         if isinstance(error, SourceAdmissionFailure):
             details['source_rejection'] = error.source_rejection
         if 'plugins' in locals() and isinstance(error, plugins.PluginFailure):

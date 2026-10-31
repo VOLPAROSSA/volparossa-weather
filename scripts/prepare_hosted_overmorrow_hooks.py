@@ -27,7 +27,10 @@ ARCHIVE_SHA = 'b7fb95a6d9a4f009edd63dc5ac69f07420b23a16161c6dd8660290b59c602e8e'
 HOOK_SHA = 'aa8cd26a22f3d5f7cb1e769f6de647bae2b485db4576a43743c20f9a34301f7e'
 PROFILES = {'test': 'linux-x64-tests-no-native-output', 'build': 'web-js-empty-code-assets'}
 CONFIGS = {
-    'test': dict(build_asset_types=['code_assets'], extensions=dict(code_assets=dict(
+    # code_assets 0.19.7 uses the asset discriminator code_assets/code.
+    # The extension namespace is separately named code_assets. The original
+    # runner hashes the complete sorted config, including this discriminator.
+    'test': dict(build_asset_types=['code_assets/code'], extensions=dict(code_assets=dict(
         link_mode_preference='dynamic', target_architecture='x64', target_os='linux')),
         linking_enabled=False),
     'build': dict(build_asset_types=[], linking_enabled=True),
@@ -53,6 +56,26 @@ class HookContractError(ValueError):
         self.observation = dict(code=code, package=owner.get('package', 'unknown') if owner else 'unknown',
             version=owner.get('version', '') if owner else '',
             hook=hook if hook in ('hook/build.dart', 'hook/link.dart') else 'unknown')
+
+
+class TaskSetError(HookContractError):
+    """Bounded names are diagnostics only; never derive authority from them."""
+    def __init__(self, tasks, observed, owner):
+        super().__init__('P15_HOOK_TASK_SET', owner, ENTRY)
+        self._expected = tuple(sorted((action, key) for key, action in tasks.items()))
+        self._observed = tuple(sorted(observed))
+
+    def task_observation(self):
+        rows = []
+        for name in self._observed:
+            if re.fullmatch(r'[0-9a-f]{32}', name):
+                rows.append(dict(checksum=name))
+            else:
+                raw = os.fsencode(name)
+                rows.append(dict(kind='unrecognized-name', bytes=len(raw), sha256=I.sha(raw)))
+        return dict(kind='p15-hook-task-identity', expected=[
+            dict(action=action, checksum=key) for action, key in self._expected],
+            observed=rows, observed_names_authorize_execution=False)
 
 
 def check(ok, code, owner=None, hook=None):
@@ -111,8 +134,9 @@ def authorize_inventory(archive_sha256, files):
 
 
 def checksum(config):
-    # Exact upstream hooks checksum, metadata naming only, never cryptographic
-    # execution authority: sorted compact JSON configuration, SHA256 prefix.
+    # Original constructors/setters sort these two closed configurations before
+    # hooks 0.20.1 encodes compact UTF-8 JSON and takes this SHA256 prefix.
+    # Naming only: package/source/config checks still supply execution authority.
     return hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest()[:32]
 
 
@@ -234,7 +258,9 @@ class HookRun:
         check({p.name for p in children(self.root, 2)} == {PACKAGE, 'shared'}, 'P15_HOOK_OWNER_SET', self.owner, ENTRY)
         tasks = {checksum(CONFIGS[action]): action for action in actions}
         owner_dir = self.root / PACKAGE
-        check({p.name for p in children(owner_dir, 2)} == set(tasks), 'P15_HOOK_TASK_SET', self.owner, ENTRY)
+        observed = {p.name for p in children(owner_dir, 2)}
+        if observed != set(tasks):
+            raise TaskSetError(tasks, observed, self.owner)
         shared = self.root / 'shared'
         check({p.name for p in children(shared, 1)} == {PACKAGE}, 'P15_HOOK_SHARED_OWNER', self.owner, ENTRY)
         shared_owner = shared / PACKAGE

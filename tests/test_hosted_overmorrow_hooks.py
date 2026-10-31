@@ -14,6 +14,17 @@ ROOT = Path(__file__).resolve().parents[1]
 W = runpy.run_path(str(ROOT / 'scripts/prepare_hosted_overmorrow_hooks.py'))
 I = W['I']
 G = W['load_record'].__globals__
+# Source-derived wire fixtures, independent of the controller's CONFIGS and
+# checksum implementation. See P15h's original-source provenance in the report.
+WIRE_CONFIGS = {
+    'test': {'build_asset_types': ['code_assets/code'], 'extensions': {'code_assets': {
+        'link_mode_preference': 'dynamic', 'target_architecture': 'x64', 'target_os': 'linux'}},
+        'linking_enabled': False},
+    'build': {'build_asset_types': [], 'linking_enabled': True},
+}
+TASK_KEYS = {'test': '6b4ebf10e70ccf8d154076a186bfba3b',
+             'build': '6782ff62a082d25dd9788598e67912e5'}
+OLD_TEST_KEY = '1af93f274159ce57893667012f2e9aca'
 
 
 class HookTests(unittest.TestCase):
@@ -35,7 +46,7 @@ class HookTests(unittest.TestCase):
         return path
 
     def task(self, action):
-        key = W['checksum'](W['CONFIGS'][action])
+        key = TASK_KEYS[action]
         root = self.run.root
         task = root / W['PACKAGE'] / key
         (task/'out').mkdir(mode=0o700, parents=True)
@@ -48,7 +59,7 @@ class HookTests(unittest.TestCase):
         self.write(task/'hook.dill.d', b'inert depfile fixture')
         self.write(task/'stdout.txt', b'Running `private command/env/cwd`.\n')
         self.write(task/'stderr.txt', b'')
-        value = dict(config=copy.deepcopy(W['CONFIGS'][action]), out_dir_shared=str(shared)+'/',
+        value = dict(config=copy.deepcopy(WIRE_CONFIGS[action]), out_dir_shared=str(shared)+'/',
             out_file=str(task/'output.json'), package_name=W['PACKAGE'],
             package_root='/state/pub-cache/hosted/pub.dev/objective_c-9.5.0/', assets={})
         self.write(task/'input.json', value)
@@ -138,6 +149,99 @@ class HookTests(unittest.TestCase):
         self.assertNotIn('private command',raw)
         self.assertFalse(final['private_contents_exported'])
         self.assertEqual(final['native_asset_count'],0)
+
+    def test_original_wire_configs_and_both_checksum_widths(self):
+        for action, config in WIRE_CONFIGS.items():
+            self.assertEqual(W['CONFIGS'][action], config)
+            wire = json.dumps(config, sort_keys=True, separators=(',', ':')).encode()
+            self.assertEqual(hashlib.sha256(wire).hexdigest()[:32], TASK_KEYS[action])
+            self.assertEqual(W['checksum'](config), TASK_KEYS[action])
+            self.assertEqual(hashlib.sha256(wire).hexdigest()[:10], TASK_KEYS[action][:10])
+        old = copy.deepcopy(WIRE_CONFIGS['test']); old['build_asset_types'] = ['code_assets']
+        self.assertEqual(W['checksum'](old), OLD_TEST_KEY)
+        self.assertNotEqual(OLD_TEST_KEY, TASK_KEYS['test'])
+
+    def test_old_contract_rejects_original_test_fixture(self):
+        self.task('test')
+        old = copy.deepcopy(WIRE_CONFIGS['test']); old['build_asset_types'] = ['code_assets']
+        with patch.dict(W['CONFIGS'], test=old), self.assertRaisesRegex(ValueError, 'P15_HOOK_TASK_SET'):
+            self.run.after('test')
+
+    def test_legacy_unknown_missing_and_extra_tasks_are_rejected(self):
+        task = self.task('test')
+        for name in (OLD_TEST_KEY, TASK_KEYS['build'], '0'*32, 'private-secret-name'):
+            changed = task.with_name(name); task.rename(changed)
+            with self.assertRaises(W['TaskSetError']) as rejected:
+                self.run.after('test')
+            evidence = rejected.exception.task_observation()
+            self.assertEqual(evidence['expected'], [dict(action='test', checksum=TASK_KEYS['test'])])
+            self.assertFalse(evidence['observed_names_authorize_execution'])
+            self.assertNotIn('private-secret-name', json.dumps(evidence))
+            changed.rename(task)
+        extra = task.with_name(TASK_KEYS['build']); extra.mkdir(mode=0o700)
+        with self.assertRaisesRegex(ValueError, 'P15_HOOK_TASK_SET'): self.run.after('test')
+        extra.rmdir()
+        task.rename(self.base/'saved-task')
+        with self.assertRaisesRegex(ValueError, 'P15_HOOK_TASK_SET'): self.run.after('test')
+        self.assertEqual(self.run.completed, set())
+
+    def test_both_completed_profiles_require_exact_task_union(self):
+        task = self.task('test'); self.run.after('test'); self.task('build')
+        changed = task.with_name(OLD_TEST_KEY); task.rename(changed)
+        with self.assertRaisesRegex(ValueError, 'P15_HOOK_TASK_SET'): self.run.after('build')
+        changed.rename(task)
+        self.assertEqual(self.run.after('build')['tasks'], 2)
+
+    def test_shared_checksum_must_match_the_same_config_not_legacy_prefix(self):
+        self.task('test')
+        shared = self.run.root/'shared'/W['PACKAGE']/'build'
+        (shared/TASK_KEYS['test'][:10]).rename(shared/OLD_TEST_KEY[:10])
+        with self.assertRaisesRegex(ValueError, 'P15_HOOK_SHARED_CHECKSUMS'): self.run.after('test')
+
+    def test_correct_task_name_cannot_authorize_altered_config_for_either_profile(self):
+        for action in ('test', 'build'):
+            task = self.task(action)
+            value = json.loads((task/'input.json').read_text())
+            variants = [dict(value['config'], linking_enabled=not value['config']['linking_enabled']),
+                        dict(value['config'], build_asset_types=['code_assets']),
+                        dict(value['config'], extra_field={})]
+            if action == 'test':
+                variant = copy.deepcopy(value['config'])
+                variant['extensions']['code_assets']['target_os'] = 'macos'
+                variants.append(variant)
+            for config in variants:
+                self.write(task/'input.json', dict(value, config=config))
+                with self.assertRaisesRegex(ValueError, 'P15_HOOK_PROTOCOL_INPUT'):
+                    self.run.after(action)
+            self.write(task/'input.json', value)
+            self.run.after(action)
+
+    def test_each_profile_still_rejects_native_task_or_shared_outputs(self):
+        for action in ('test', 'build'):
+            task = self.task(action)
+            shared = self.run.root/'shared'/W['PACKAGE']/'build'/TASK_KEYS[action][:10]
+            for directory in (task/'out', shared):
+                output = self.write(directory/'native.so', b'not authorized')
+                with self.assertRaisesRegex(ValueError, 'P15_HOOK_NATIVE_OUTPUT'): self.run.after(action)
+                output.unlink()
+            self.run.after(action)
+
+    def test_task_diagnostics_are_bounded_and_never_export_unknown_names(self):
+        self.task('test')
+        owner = self.run.root/W['PACKAGE']
+        (owner/('private-' + '\udcff')).mkdir(mode=0o700)
+        with self.assertRaises(W['TaskSetError']) as rejected: self.run.after('test')
+        value = rejected.exception.task_observation()
+        self.assertEqual(len(value['observed']), 2)
+        raw = json.dumps(value)
+        self.assertNotIn('private', raw); self.assertNotIn(str(self.base), raw)
+        row = next(row for row in value['observed'] if 'kind' in row)
+        self.assertEqual(row, dict(kind='unrecognized-name', bytes=9,
+            sha256=I.sha(b'private-\xff')))
+        value['observed'].clear()
+        self.assertEqual(len(rejected.exception.task_observation()['observed']), 2)
+        (owner/'third').mkdir(mode=0o700)
+        with self.assertRaisesRegex(ValueError, 'P15_HOOK_ENTRY_BOUND'): self.run.after('test')
 
     def test_unknown_owner_or_task_cannot_be_admitted(self):
         self.task('test');(self.run.root/'unknown').mkdir()

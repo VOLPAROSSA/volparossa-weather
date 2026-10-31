@@ -1,5 +1,12 @@
 # P15 Overmorrow candidate, 2026-10-28
 
+**P15h preflight, 2026-10-31:** the original source proves an incorrect test
+asset discriminator in the hook identity contract. Only `code_assets` in the
+`build_asset_types` list becomes `code_assets/code`; the extension namespace,
+web profile, package/source pins and all execution/output guards stay intact.
+295 relevant inert tests pass. Independent review approves exactly one bounded
+hosted candidate; no verified hook or web-build success is claimed before it.
+
 **P15g final result, 2026-10-29:** the cache correction is hosted-verified.
 All 73 cache entries and six metadata files pass; all 24 actual Flutter tests
 also pass. The existing post-test hook-state validation then stops at
@@ -21,6 +28,109 @@ packages and their file identities. Post-pub package/configuration/plugin
 binding also passes. The full source check then stops at
 `P15_UNKNOWN_GENERATED_SOURCE`, before hook authorization, Flutter tests or
 web compilation. All six cleanup flags pass. No automatic retry followed.
+
+## P15h: exact hook task identity from original source
+
+The retained P15g artifact/run 40797200583 establishes 24 successful Flutter
+tests, followed by `HookRun.after('test')` rejecting the Objective-C task set.
+It contains no actual task-directory names or input JSON. The historical actual
+set remains unknown; no retrospective hook execution or harmlessness is inferred.
+A full hosted diagnostic build merely to discover a name is unnecessary: the
+original producers prove a concrete wrong expected value.
+
+Tool `code_assets 0.19.7`, `lib/src/code_assets/extension.dart:66–68`, adds
+`CodeAssetType.type` to the build-asset list. `code_asset.dart:132–136` binds it
+to `NativeCodeAssetNewSyntax.typeValue`, `syntax.g.dart:824–826`, which is
+`code_assets/code`. The extension map is separately named `code_assets`.
+The previous controller confused the discriminator and extension namespace.
+Linux/x64 test configuration has no compiler configuration, dynamic link mode
+preference and linking disabled. Web release has no code extension, default
+data-assets disabled, empty build-asset types and linking enabled. No upstream
+version or hook input authority changes.
+
+The exact test configuration before hashing is:
+
+```json
+{"build_asset_types":["code_assets/code"],"extensions":{"code_assets":{"link_mode_preference":"dynamic","target_architecture":"x64","target_os":"linux"}},"linking_enabled":false}
+```
+
+The web configuration remains:
+
+```json
+{"build_asset_types":[],"linking_enabled":true}
+```
+
+`hooks_runner 0.23.0/lib/src/build_runner/build_runner.dart:379–411` invokes
+tool `hooks 0.20.1`'s `computeChecksum()` before `setupShared`. That method
+(`lib/src/config.dart:177–201`) hashes only the current configuration using
+compact UTF-8 JSON and SHA256, retaining 32 hex characters. The checksum method
+itself does not sort; the original generated constructors, extension setters
+and config construction sort the relevant nested maps and omit absent optional
+fields first. For these two fixed ASCII configurations, the controller's
+existing sorted compact JSON is byte-equivalent. No paths, timestamps,
+package-root fields or hook outputs enter the checksum.
+
+| Profile | Task name (32 hex) | Shared child (10 hex) |
+| --- | --- | --- |
+| corrected test | `6b4ebf10e70ccf8d154076a186bfba3b` | `6b4ebf10e7` |
+| old incorrect test expectation | `1af93f274159ce57893667012f2e9aca` | `1af93f2741` |
+| unchanged web build | `6782ff62a082d25dd9788598e67912e5` | `6782ff62a0` |
+
+The shared child uses app `hooks 2.0.2/lib/src/config.dart:48–60` with the same
+configuration bytes but a ten-character prefix. Its `HookInput` constructor
+(`:96–100`) evaluates `outputDirectory` unconditionally, creating that child
+even for an empty-assets hook. The existing `out_dir_shared` input expectation
+is correctly the parent `shared/objective_c/build/`. The existing fresh-state,
+test-before-build ordering, one-task test set and two-task final union remain.
+No further identity-dependent protocol or path correction is required.
+
+Private proof `build/p15h-source/identity-source-proof.json`, SHA256
+`d6584356603b391088f7dc446f93573a5f12679b4752889e1e7c2c33f1eda254`,
+reauthenticates five existing original archives and complete membermaps/notices:
+tool hooks_runner 0.23.0, hooks 0.20.1 and code_assets 0.19.7; app hooks 2.0.2
+and code_assets 1.2.1. Thirteen relevant producer files are checked against those
+archives or the unchanged original 17,240-file Flutter SDK inventory. Relevant
+original file SHA256 values include:
+
+- tool runner: `a2709baea77022c2e8dd2f99e0e55057925f518b11bdabc0c85d867697c6d70f`;
+- tool hook config: `78d475f41c4ef78bd7142b7b882e36e9e0943327cd4bd784e65b7be8b45af6cc`;
+- tool code-assets extension: `8493cf6e68ad0930687640367c4c84bc17afcdb2ef2555bde8f86e9184a3bfc6`;
+- tool code-assets syntax: `b69249308104240071d261362a587d9f0af8f40cf49f40a65d92cdb87846752d`;
+- app hook config: `5d0b2f4c9cdac23fd4d843956651bdb12585409d5354dba50f10f841515feae0`.
+
+Only the wrong test discriminator is corrected. Full exact config equality,
+original package/hook SHA256 and all 224 archive/membermap bindings remain.
+Unknown/extra/missing tasks, extra hooks, old test names, altered profiles,
+unsafe paths, unknown files and native outputs still fail closed. On task-set
+failure the controller now retains at most two observed 32-lowercase-hex names;
+other names become only bytecount and SHA256. Expected action/digest pairs are
+fixed by the contract. No private directory, raw malformed label, environment,
+command, kernel or stdout is published. Observed names never authorize anything;
+the existing entry bound still stops excess tasks before further enumeration.
+
+27 hook tests use independent literal wire fixtures and fixed source-derived
+identities, including both profiles, their final union, legacy/unknown/missing/
+extra tasks, mismatched shared prefixes, correct names with altered configs,
+unauthorized native outputs in both task/shared directories, aliases and bounded
+privacy-safe diagnostics. The old test contract rejects the new original-wire
+fixture; the corrected one accepts it. All 295 relevant inert tests pass,
+including the existing source, cache, dependency, plugin and candidate controls.
+The existing workflow's `umask 077` is used; an initial local test invocation
+under default `0002` correctly rejected writable fixture directories. No guard
+was changed to accommodate that test harness condition. All private fixtures
+are cleaned up; no SDK, Dart, Flutter or package code ran locally.
+
+Independent preflight review reauthenticates the five original archive/membermap/
+notice bindings and thirteen producer files, reproduces both wire hashes, repeats
+101 affected tests (27 hook, 43 candidate, 31 dependency), checks the full 295-test
+receipt and confirms eleven protected helpers byte-identical to their original
+base. All fifteen existing controller bindings are retained. Review SHA256:
+`863e97e99778c02429da36abb5351c0d190f460515a8e96806045c59a84bfb1c`
+(`build/p15h-review/candidate-preflight-review.json`). Decision:
+`GO_EXACTLY_ONE_BOUNDED_SOURCE_CANDIDATE_ATTEMPT`, unchanged workflow and Boundary,
+manual attempt 1, no retry, stop at any new independent failure. The purpose is
+complete hook/test/web candidate verification after a source-proven correction,
+not a full build solely to recover an unknown historical name.
 
 ## P15g: original Flutter filecache hash semantics
 
