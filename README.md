@@ -563,6 +563,30 @@ error of 3 °C. Predictions 7 and 1 on those same observations give 0 °C and
 illustrate the calculation. Claims about forecast skill require representative,
 independently held-out real observations across stations and model runs.
 
+### Archived example at Berlin-Tempelhof
+
+For 11 October 2026 at 12:00 UTC, Berlin-Tempelhof reported 11.6 °C. The
+24-hour IFS forecast gave 10.73 °C and AIFS Single gave 12.07 °C at the
+same grid point, 7.55 km from the station. Forecast minus observation was
+−0.87 °C for IFS and +0.47 °C for AIFS Single. DWD marks this observation
+as provisionally checked (`QN_9=1`, formal control only). This single
+station-hour cannot establish model skill.
+
+The [retrospective evidence](third_party/ecmwf-dwd-temperature-comparison.json)
+records the original station row, data licenses, exact ECMWF byte ranges and
+hashes. To reproduce, verify each index hash, select its `2t` range and
+retrieve that range only. Require HTTP 206 and the recorded `Content-Range`
+and SHA-256. For each resulting field, check `gdalinfo -json field.grib2` for
+the 2 m temperature, forecast run and valid hour, then read the Celsius value
+with `gdallocationinfo -wgs84 -valonly field.grib2 13.4020 52.4676`.
+For DWD, look up station 00433 at `MESS_DATUM=2026101112` in the recorded ZIP
+member. DWD updates its recent files and may revise values.
+
+Both ECMWF archive objects predate the observation. The source check on
+18 November retrieved them retrospectively and used GDAL. The offline
+verification CLI requires a forecast already captured for the station before
+the observation. The earlier Berlin capture selected a different location.
+
 ## Shared forecasting and learning, next
 
 The intended next integration is one permitted acquisition per requested public
