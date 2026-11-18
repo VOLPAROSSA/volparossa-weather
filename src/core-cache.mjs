@@ -121,6 +121,7 @@ async function fetchCachedProduct({ mode, executable, controlSocket, cache, scra
     'CORE_EXECUTABLE_INVALID');
   const socket = await lstat(controlSocket);
   requireThat(socket.isSocket() && !socket.isSymbolicLink(), 'CONTROL_SOCKET_INVALID');
+  const reopen = cacheOnly || reuseCache;
   const work = await mkdtemp(join(scratchParent, 'forecast-'));
   const output = join(work, 'forecast.json');
   let cleanupUnconfirmed, result, processResult;
@@ -129,7 +130,7 @@ async function fetchCachedProduct({ mode, executable, controlSocket, cache, scra
       '--publisher-key', publisherKey, '--name', name, '--min-revision', String(minRevision),
       '--cache', cache, '--local-output', output, '--quota-bytes', String(product.maxBytes),
       '--max-entries', '16', '--min-free-bytes', '67108864'];
-    if (reuseCache || cacheOnly) args.push('--reuse-cache');
+    if (reopen) args.push('--reuse-cache');
     if (cacheOnly) args.push('--cache-only');
     processResult = await runOwnedReceiptProcess(executable, args, work, signal);
     const receipt = processResult.value;
@@ -193,7 +194,7 @@ async function fetchCachedProduct({ mode, executable, controlSocket, cache, scra
   if (observeReceipt) {
     requireThat(!signal?.aborted && performance.now() < deadline, 'CANCELLED');
     await observeReceipt(Object.freeze({ product: product.kind, stdout: Buffer.from(processResult.stdout),
-      startedAt: processResult.startedAt, completedAt: processResult.completedAt, reuseCache }), { signal, deadline });
+      startedAt: processResult.startedAt, completedAt: processResult.completedAt, reuseCache: reopen }), { signal, deadline });
     requireThat(!signal?.aborted && performance.now() < deadline, 'CANCELLED');
   }
   return result;

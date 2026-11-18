@@ -161,6 +161,12 @@ test('offline GET reopens only populated caches, preserves product deadlines and
   const online = await f.start();
   for (const path of [WEATHER, AQ]) assert.equal((await get(online.origin, path)).status, 200);
   await online.close();
+  const { cacheMode, ...options } = config.core;
+  assert.equal(cacheMode, 'cache-only');
+  let observed;
+  await fetchCachedProvider({ ...options, cacheOnly: true }, { variables: config.variables,
+    observeReceipt: event => { observed = event; } });
+  assert.equal(observed.reuseCache, true);
   const expiry = Math.floor(Date.now() / 1000) + 5;
   await f.setPlan({ weather: { expiry } });
   const prior = await get(offline.origin);
@@ -178,7 +184,7 @@ test('offline GET reopens only populated caches, preserves product deadlines and
     assert.equal((await get(offline.origin)).status, 503);
   }
   const calls = await f.calls();
-  assert.equal(calls.length, 13);
+  assert.equal(calls.length, 14);
   assert.deepEqual(calls.filter(call => !call.offline).map(call => call.kind), ['weather', 'air_quality']);
   assert.ok(calls.filter(call => call.offline).every(call => call.reuse));
   assert.equal((await readdir(f.root)).some(name => name.startsWith('forecast-')), false);

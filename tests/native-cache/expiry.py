@@ -38,7 +38,7 @@ def child(args, env=None):
             proc.wait()
             raise
         proc.stdout.close()
-        if proc.returncode not in (0, -signal.SIGTERM):
+        if proc.returncode not in (0, -signal.SIGTERM) and sys.exc_info()[0] is None:
             raise RuntimeError(f"child exited with status {proc.returncode}")
 
 
@@ -77,11 +77,12 @@ def run(root, source):
     subprocess.run([cli, "init", "--identity", identity, "--passphrase-file", password],
                    check=True, stdout=subprocess.DEVNULL, timeout=30)
     config = root / "config.yaml"
-    config.write_text("roles:\n  client: true\n  relay: false\n  exit: false\n"
-                      "network:\n  listen_addresses: [/ip4/127.0.0.1/udp/0/quic-v1]\n  bootstrap_peers: []\n"
+    config.write_text("runtime_mode: development\nroles:\n  client: true\n  relay: false\n  exit: false\n"
+                      "network:\n  uplink: local_only\n  listen_addresses: [/ip4/127.0.0.1/udp/0/quic-v1]\n  bootstrap_peers: []\n"
                       "privacy:\n  metrics_enabled: false\ncontent_contribution:\n  enabled: false\n"
                       "dns_cache:\n  enabled: false\nsharing:\n  enabled: false\ndownload_sharing:\n  enabled: false\n"
                       "wifi_mesh:\n  enabled: false\n")
+    subprocess.run([cli, "--config", config, "config", "validate"], check=True, stdout=subprocess.DEVNULL, timeout=10)
     control = root / "control/agent.sock"
     env = dict(os.environ, VOLPAROSSA_CONFIG=str(config), VOLPAROSSA_STATE_DIRECTORY=str(root/"state"),
                VOLPAROSSA_CONTROL_SOCKET=str(control), CREDENTIALS_DIRECTORY=str(root/"credentials"),
@@ -90,7 +91,11 @@ def run(root, source):
     with child([BIN/"volparossa-agent"], env=env) as agent:
         deadline = time.monotonic() + 20
         while not control.is_socket():
-            assert time.monotonic() < deadline and agent.poll() is None, "agent readiness"
+            if agent.poll() is not None:
+                codes = [json.loads(line).get("fields", {}).get("diagnostic_code")
+                         for line in agent.stdout.read(16384).splitlines() if line.startswith(b"{")]
+                raise RuntimeError(f"agent startup stopped: {codes}")
+            assert time.monotonic() < deadline, "agent readiness"
             time.sleep(0.1)
         cache, manifest = root / "cache", root / "manifest"
         pub = json.loads(subprocess.check_output([cli, "content", "publish", "--input", source, "--cache", cache,
