@@ -61,19 +61,29 @@ class HostedOvermorrowWorkflowTests(unittest.TestCase):
         for forbidden in ("curl |", "sysctl -w", "flutter upgrade", "sudo flutter", "npm run build"):
             self.assertNotIn(forbidden, SOURCE)
 
-    def test_success_export_is_an_exact_public_allowlist(self):
-        name = "Retain only successful public assets and original notices"
+    def test_success_export_is_an_exact_source_recipe_allowlist(self):
+        name = "Retain only the successful source recipe"
         self.assertIn("if: success()", step(name))
-        self.assertEqual(artifacts(name), [
-            "build/overmorrow-hosted-web-ci",
-            "build/overmorrow-hosted-ci/LICENSE",
-            "build/overmorrow-hosted-ci/LICENSE.VOLPAROSSA",
-            "build/overmorrow-hosted-ci/pubspec.lock",
-            "build/hosted-browser-source/build/firefox-hosted-ci",
-            "build/hosted-client-runtime/node/bin/node",
-            "build/hosted-client-runtime/node/LICENSE",
-            "build/hosted-client-runtime/licenses/firefox-copyright",
-        ])
+        self.assertEqual(artifacts(name), ["build/hosted-overmorrow-source-recipe"])
+        self.assertIn("name: hosted-overmorrow-source-recipe-${{ github.sha }}", step(name))
+        self.assertIn("include-hidden-files: true", step(name))
+        self.assertEqual(SOURCE.count("include-hidden-files: true"), 1)
+        for forbidden in ("overmorrow-hosted-web-ci", "firefox-hosted-ci", "hosted-client-runtime",
+                          "LICENSE", "pubspec.lock", "assets-unadmitted", "**", ".git/", "profile/"):
+            self.assertNotIn(forbidden, step(name))
+
+    def test_recipe_is_bound_to_source_after_build_before_export(self):
+        recipe = step("Prepare the successful source recipe")
+        self.assertIn("if: success()", recipe)
+        self.assertIn("scripts/prepare_hosted_source_recipe.py --profile overmorrow", recipe)
+        self.assertIn('--expected-commit "$GITHUB_SHA"', recipe)
+        self.assertIn('--output "$GITHUB_WORKSPACE/build/hosted-overmorrow-source-recipe"', recipe)
+        self.assertLess(SOURCE.index("python3 -B scripts/prepare_hosted_overmorrow_ci.py\n"),
+                        SOURCE.index("- name: Prepare the successful source recipe"))
+        self.assertLess(SOURCE.index("- name: Prepare the successful source recipe"),
+                        SOURCE.index("- name: Retain only the successful source recipe"))
+        for path in ("scripts/prepare_hosted_source_recipe.py", "tests/test_hosted_source_recipe.py"):
+            self.assertIn("      - " + path + "\n", SOURCE)
 
     def test_always_export_excludes_sdk_cache_profiles_and_generated_inputs(self):
         name = "Retain bounded build and browser diagnostics"
@@ -88,7 +98,7 @@ class HostedOvermorrowWorkflowTests(unittest.TestCase):
         ])
         self.assertNotRegex(SOURCE, r"(?m)^\s+build/?\s*$")
         self.assertIn("No live Weather source request, core delivery, private bundle upload or native mobile proof.", SOURCE)
-        self.assertIn("core input profile before joined execution", SOURCE)
+        self.assertIn("not full upstream/dependency source or runtime acceptance", SOURCE)
 
     def test_build_and_firefox_packages_are_installed_and_recorded(self):
         commands = step("Install dependencies only on this disposable runner").replace("\\\n", " ")
@@ -107,7 +117,7 @@ class HostedOvermorrowWorkflowTests(unittest.TestCase):
             self.assertIn("test -f tests/" + name, block)
         self.assertIn("python3 -B -m unittest discover -s tests -p 'test_hosted_*.py'", block)
         blocks = re.findall(r"(?m)^        run: \|\n((?:          .*\n|\n)+)", SOURCE)
-        self.assertEqual(len(blocks), 6)
+        self.assertEqual(len(blocks), 7)
         for block in blocks:
             script = "\n".join(line[10:] for line in block.splitlines())
             result = subprocess.run(["bash", "-n"], input=script, text=True,
