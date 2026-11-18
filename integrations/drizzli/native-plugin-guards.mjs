@@ -454,7 +454,7 @@ export function createNativePluginGuard(prototype, digest, snapshot, isProxy) {
       register(found[0]);
       values.set(expected.id, found[0]);
     },
-    /** @param {string} environment @param {Plugin[]} plugins */
+    /** @param {string} environment @param {readonly Plugin[]} plugins */
     environment(environment, plugins) {
       requireNative((environment === 'ssr' || environment === 'client') && safePluginArray(plugins), 'environment');
       checkRecords();
@@ -472,7 +472,7 @@ export function createNativePluginGuard(prototype, digest, snapshot, isProxy) {
     /** This method runs before every original options hook and on its result.
      * The first call validates Vite's source-derived clone relation; later calls
      * require those exact captured objects, preventing same-name replacements.
-     * @param {string} environment @param {Plugin[]} environmentPlugins @param {unknown} pluginOptions */
+     * @param {string} environment @param {readonly Plugin[]} environmentPlugins @param {unknown} pluginOptions */
     inputs(environment, environmentPlugins, pluginOptions) {
       this.environment(environment, environmentPlugins);
       requireNative(safePluginArray(pluginOptions) && pluginOptions.length === environmentPlugins.length, 'input-list');
@@ -579,7 +579,7 @@ export function createNativePluginGuard(prototype, digest, snapshot, isProxy) {
      * exact dispatch data, then record only these deliberate freeze changes.
      * Actual JS-clone hook/name/parallel authority fields become read-only, while
      * their API/cache fields and all original user plugins stay mutable.
-     * @param {string} environment @param {Plugin[]} environmentPlugins @param {unknown} pluginOptions */
+     * @param {string} environment @param {readonly Plugin[]} environmentPlugins @param {unknown} pluginOptions */
     finalizeInputs(environment, environmentPlugins, pluginOptions) {
       this.inputs(environment, environmentPlugins, pluginOptions);
       checkRecords();
