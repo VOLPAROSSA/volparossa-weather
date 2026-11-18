@@ -1,0 +1,36 @@
+WEBVTT
+
+NOTE Descriptive captions for silent footage; no narration.
+Editorial boundaries are not exact input timestamps.
+
+00:00:00.000 --> 00:00:03.000
+Recorded preview; excerpt replayed later.
+
+00:00:03.000 --> 00:00:10.000
+Earlier footage; loading is abbreviated.
+Core runs externally to Android.
+
+00:00:10.000 --> 00:00:15.000
+Real Android app footage at normal speed.
+
+00:00:15.000 --> 00:00:18.500
+Editorial cut; 13 seconds omitted.
+
+00:00:18.500 --> 00:00:21.266
+Temperature, then air-quality forecasts.
+
+00:00:21.266 --> 00:00:35.966
+First refresh loads; forecasts return.
+Reports verify cached product reuse.
+
+00:00:35.966 --> 00:00:48.800
+Second refresh starts.
+Reports verify both cached refreshes.
+
+00:00:48.800 --> 00:00:55.579
+HOME, then a brief return animation.
+Reports verify background and resume.
+
+00:00:55.579 --> 00:01:00.566
+VOLPAROSSA Weather Demo 0.
+Development preview with external Core.
