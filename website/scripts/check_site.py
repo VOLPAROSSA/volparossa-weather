@@ -35,6 +35,9 @@ def check(output, production):
         page = Page(html)
         assert '{{' not in html and page.select('html') == [{'lang':'en'}]
         assert len(page.select('h1')) == 1
+        toggles = [button for button in page.select('button') if button.get('class') == 'applications-toggle']
+        assert len(toggles) == 2, f'Missing desktop or mobile application chooser on {sub or "main page"}'
+        assert any(a.get('href') == 'https://volparossa.org/volparossa-studio/' for a in page.select('a'))
         assert {'name':'robots','content':'index,follow' if production else 'noindex,nofollow'} in page.select('meta')
         assert {'property':'og:locale','content':'en_GB'} in page.select('meta')
         assert {'rel':'canonical','href':CANONICAL+sub} in page.select('link')
