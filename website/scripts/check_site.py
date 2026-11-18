@@ -61,7 +61,7 @@ def check(output, production):
     page = Page((output/'index.html').read_text())
     assert [s['id'] for s in page.select('section')] == ['intro','demo','forecast-source','shared-forecast','forecast-fields','apps','research','evidence','contribute']
     assert len(page.select('h2')) == 8
-    assert [a['datetime'] for a in page.select('time')] == [SOURCES['berlin'][k] for k in ('model_run_at','valid_at')]
+    assert [a['datetime'] for a in page.select('time')] == [SOURCES['berlin'][k] for k in ('model_run_at','valid_at')]*2
     record = json.loads((ROOT.parent/'third_party/ecmwf-smoke.json').read_text())
     for k in ['model','model_run_at','lead_hours','valid_at','parameter','input_unit','decoded_temperature_kelvin','normalized_temperature_celsius','public_test_point','nearest_model_grid_point']:
         assert record[k] == SOURCES['berlin'][k], k

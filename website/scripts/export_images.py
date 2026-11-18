@@ -6,12 +6,12 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 sizes = {'storm': [640, 1000, 1440], 'fox': [240, 480], 'film': [480, 800, 1200],
-         'cloud': [240, 480], 'margin': [320, 640]}
+         'cloud': [240, 480], 'margin': [400, 800, 1200]}
 variants = {}
 for name, widths in sizes.items():
     image = Image.open(ROOT / 'masters' / (name + '.png')).convert('RGB')
     # Lift the scanned paper to white so multiply blending prints only the engraving.
-    white = {'storm': (252,234,209), 'fox': (247,238,224), 'margin': (252,247,237)}
+    white = {'storm': (252,234,209), 'fox': (252,252,252), 'margin': (252,252,252)}
     if name in white:
         image = Image.merge('RGB', tuple(band.point(lambda n: min(255, round(n * 255 / level)))
                                           for band, level in zip(image.split(), white[name])))

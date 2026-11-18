@@ -1,5 +1,5 @@
 """Typeset the key, two source-specified peer layouts and the Berlin coordinate inset."""
-from math import cos, radians
+from math import cos, hypot, radians
 
 NAVY = '#203a56'
 RED = '#9c3827'
@@ -17,27 +17,60 @@ def legend():
 
 
 def mesh(network, layout):
+    """Draw the supplied topology as a print diagram; direction follows the forecast."""
     data = network['layouts'][layout]
-    width, height, points = data['width'], data['height'], data['points']
-    horizontal = layout == 'desktop'
-    hatch = 'hatch-' + layout
-    parts = [f'<svg class="mesh-{layout}" role="img" aria-label="Six cooperating peers. One possible route follows A, B, C, F. Another follows A, D, E, F." viewBox="0 0 {width} {height}">',
-             f'<defs><pattern id="{hatch}" patternUnits="userSpaceOnUse" width="5" height="5"><path d="m-1 2 3-3m-1 6 5-5m-1 6 2-2" stroke="#546b79" stroke-width=".7"/></pattern></defs>']
+    width, height = data['width'], data['height']
+    desktop = layout == 'desktop'
+    # The wide plate follows the staggered composition of the printed reference.
+    points = dict(A=(82,106), B=(229,42), C=(420,70), D=(150,186), E=(318,151), F=(453,166)) if desktop else data['points']
+    radius = 18 if desktop else 16
     routes = [{tuple(edge) for edge in zip(route, route[1:])} for route in network['routes']]
+    bends = {('A','B'):-23, ('B','C'):-16, ('A','D'):18, ('D','E'):23,
+             ('E','F'):10, ('C','F'):-12, ('B','E'):22, ('B','F'):-6}
+    positions = {
+        'desktop': [('in', (1,115)), ('out1',(width-4,53)), ('out2',(width-4,173))],
+        'mobile': [('in',(65,2)), ('out1',(78,height-4)), ('out2',(223,height-4))]
+    }
+    coordinates = {**points, **dict(positions[layout])}
+    arrow = 'arrow-' + layout
+    globe = 'peer-' + layout
+    parts = [f'<svg class="mesh-{layout}" role="img" aria-label="Six cooperating peers. A public forecast can travel from A to F via B and C, or via D and E. F can deliver it to either app." viewBox="0 0 {width} {height}">',
+             f"""<defs>
+               <marker id="{arrow}" markerWidth="9" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 9 4 0 8 2.3 4Z" fill="{NAVY}"/></marker>
+               <radialGradient id="{globe}-ink" cx=".34" cy=".26" r=".79"><stop stop-color="#faf4e8"/><stop offset=".53" stop-color="#e1dac8"/><stop offset="1" stop-color="#85949a"/></radialGradient>
+               <pattern id="{globe}-lines" width="5" height="4.5" patternUnits="userSpaceOnUse" patternTransform="rotate(12)"><path d="M-.5 2q2 -1 6 0" fill="none" stroke="#475e6d" stroke-width=".8"/></pattern>
+             </defs>"""]
+
+    def connection(a, b, bend, style, graph_edge=False):
+        x1, y1 = coordinates[a]
+        x2, y2 = coordinates[b]
+        dx, dy = x2-x1, y2-y1
+        length = hypot(dx, dy)
+        cx = (x1+x2)/2 - dy/length*bend
+        cy = (y1+y2)/2 + dx/length*bend
+        # Stop before the discs so the arrowheads remain visible at all sizes.
+        if a in points:
+            start = (radius+4)/hypot(cx-x1, cy-y1)
+            x1, y1 = x1+start*(cx-x1), y1+start*(cy-y1)
+        if b in points:
+            end = (radius+4)/hypot(cx-x2, cy-y2)
+            x2, y2 = x2+end*(cx-x2), y2+end*(cy-y2)
+        attr = f' data-edge="{a}-{b}"' if graph_edge else ''
+        parts.append(f'<path class="mesh-path {style}"{attr} d="M{x1:.1f} {y1:.1f} Q{cx:.1f} {cy:.1f} {x2:.1f} {y2:.1f}" marker-end="url(#{arrow})"/>')
+
     for a, b in network['edges']:
-        start, end = points[a], points[b]
-        first, second = (a,b) in routes[0], (a,b) in routes[1]
-        colour = NAVY if first else RED if second else '#84796d'
-        dash = '' if first else '6 5' if second else '2 6'
-        mx, my = (start[0]+end[0])/2, (start[1]+end[1])/2
-        mx += 10 if not horizontal else 0
-        my -= 17 if horizontal else 0
-        parts.append(f'<path data-edge="{a}-{b}" d="M{start[0]} {start[1]}Q{mx} {my} {end[0]} {end[1]}" fill="none" stroke="{colour}" stroke-width="2" stroke-dasharray="{dash}"/>')
-    io = ('M0 110Q32 104 70 55 M520 170Q564 161 600 65 M520 170Q565 151 600 183' if horizontal else
-          'M150 0Q105 7 60 55 M230 295Q198 327 80 360 M230 295Q244 331 222 360')
-    parts.append(f'<path d="{io}" fill="none" stroke="{NAVY}" stroke-width="1.5" stroke-dasharray="4 3"/>')
-    for node, (x,y) in points.items():
-        parts.append(f'<g data-peer="{node}"><circle cx="{x}" cy="{y}" r="16" fill="#f6edda" stroke="{NAVY}" stroke-width="2"/><circle cx="{x}" cy="{y}" r="13" fill="url(#{hatch})"/><text x="{x}" y="{y+5}" text-anchor="middle" font-family="Georgia, serif" font-size="15" stroke="#f8f0df" stroke-width="3" paint-order="stroke" fill="{NAVY}">{node}</text></g>')
+        style = 'route-one' if (a,b) in routes[0] else 'route-two' if (a,b) in routes[1] else 'alternate'
+        connection(a, b, bends[a,b] if desktop else -bends[a,b]*.7, style, graph_edge=True)
+    connection('in','A',0 if desktop else 4,'terminal')
+    connection('F','out1',-43 if desktop else -7,'terminal')
+    connection('F','out2',-24 if desktop else -15,'terminal')
+    for node in network['nodes']:
+        x, y = points[node]
+        parts.append(f"""<g data-peer="{node}" transform="translate({x} {y})">
+            <circle r="{radius}" fill="url(#{globe}-ink)" stroke="{NAVY}" stroke-width="2.2"/>
+            <circle r="{radius-1.5}" fill="url(#{globe}-lines)"/>
+            <path d="M{-radius*.73} {-radius*.42} Q{-radius*.35} {-radius*.89} {radius*.22} {-radius*.72}" fill="none" stroke="#fff9e9" stroke-width="1.5"/>
+            <text text-anchor="middle" y="5" font-family="Georgia,serif" font-size="16" font-weight="bold" stroke="#f6efdf" stroke-width="2.5" paint-order="stroke" fill="{NAVY}">{node}</text></g>""")
     return ''.join(parts)+'</svg>'
 
 

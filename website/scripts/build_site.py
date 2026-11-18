@@ -40,7 +40,7 @@ def verify_sources():
 
 def art(name, variants):
     sizes = {'storm':'(max-width:800px) 100vw, min(65vw, 885px)', 'fox':'(max-width:600px) 37vw, 220px',
-             'film':'(max-width:600px) 95vw, min(44vw, 600px)', 'cloud':'min(17vw, 230px)', 'margin':'(max-width:600px) 60vw, 200px'}
+             'film':'(max-width:600px) 95vw, min(44vw, 600px)', 'cloud':'min(17vw, 230px)', 'margin':'(max-width:600px) 95vw, (max-width:950px) 50vw, min(30vw, 430px)'}
     files = variants[name]
     srcset = ', '.join(f'assets/atlas/{name}-{f["width"]}.webp {f["width"]}w' for f in files)
     fallback = files[0 if name in ('fox','cloud','margin') else 1]

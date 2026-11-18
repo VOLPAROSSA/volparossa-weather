@@ -72,9 +72,37 @@ def front(control, kind, marks):
     return ''.join(parts)+'</g>'
 
 
+def continental_high():
+    """Vermilion plate under the key-line geography, centred on the continental high."""
+    return """<defs>
+      <radialGradient id="high-density" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1"
+        gradientTransform="matrix(390 -138 103 290 863 498)">
+        <stop offset="0" stop-color="white"/><stop offset=".5" stop-color="#eee"/>
+        <stop offset=".78" stop-color="#9e9e9e"/><stop offset="1" stop-color="black"/>
+      </radialGradient>
+      <mask id="high-field"><rect width="1000" height="660" fill="url(#high-density)"/></mask>
+      <pattern id="vermilion-hatch" patternUnits="userSpaceOnUse" width="26" height="17" patternTransform="rotate(-20)">
+        <path d="M-2 1q7 -1 16 0m3 0h12M0 5q5 -1 12 0m2 0q5 .8 12 0M-1 9h7m2 0q9 -1 20 0M0 13q10 .6 18 -.2m3 0h7" fill="none" stroke="#b34531" stroke-width="1.05"/>
+        <path d="m4 0 4 16m9 -16 3 15" fill="none" stroke="#c45f48" stroke-width=".6" opacity=".5"/>
+      </pattern>
+    </defs><g mask="url(#high-field)">
+      <rect width="1000" height="660" fill="#ec9c7e" opacity=".48"/>
+      <rect width="1000" height="660" fill="url(#vermilion-hatch)" opacity=".8"/>
+    </g>"""
+
+
+def high_contours():
+    # Two nested high-pressure isobars, separated from the Atlantic depression.
+    return """<g fill="none" stroke="#34547a" stroke-width="1.4" stroke-linejoin="round">
+      <path d="M690 675C701 619 687 580 712 540S734 472 771 440S820 394 875 384S939 352 986 367Q999 370 1012 364"/>
+      <path d="M807 559C774 552 754 524 760 497S768 455 795 441S839 415 870 421S920 445 923 478S908 534 890 552S845 571 807 559Z"/>
+    </g>"""
+
+
 def synoptic():
     w,h=1000,660
     art=[f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}"><title>Illustrative synoptic chart of the North Atlantic and Europe</title>',
+         continental_high(),
          geography(w,h,(-16,54),1060,(532,328)),
          '<g fill="none" stroke="#234d7b" stroke-linejoin="round">']
     eye=(372,271)
@@ -90,6 +118,7 @@ def synoptic():
         if i in (1,3,5,7):
             lx,ly=points[57];labels.append((lx,ly,982+i*4))
     art.append('</g>')
+    art.append(high_contours())
     art.append(front([(456,96),(583,117),(734,321),(900,255)],'warm',[.09,.21,.34,.48,.62,.76,.91]))
     art.append(front([(501,243),(560,361),(336,521),(173,616)],'cold',[.16,.3,.44,.58,.72,.87]))
     art.append('<g text-anchor="middle" font-family="Georgia,serif" font-weight="bold" fill="#163858" stroke="#f5eddf" stroke-width="4" paint-order="stroke">')

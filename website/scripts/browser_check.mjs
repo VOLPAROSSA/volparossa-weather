@@ -45,9 +45,12 @@ for (const engine of (process.env.QA_ENGINES || 'chromium,firefox').split(',')) 
       const dimensions = await page.evaluate(()=>{
         const svg=[...document.querySelectorAll('.peer-drawing svg')].find(s=>s.clientWidth);
         const origin=document.querySelector('.source-slip').getBoundingClientRect(), readers=document.querySelector('.readers').getBoundingClientRect();
-        return {pageWidth:document.documentElement.scrollWidth, mesh:svg.getAttribute('class'), peers:svg.querySelectorAll('[data-peer]').length, edges:svg.querySelectorAll('[data-edge]').length, stacked:readers.y>origin.bottom};
+        const cloud=document.querySelector('.margin-cloud img').getBoundingClientRect();
+        const evidence=document.querySelector('#evidence').getBoundingClientRect();
+        return {pageWidth:document.documentElement.scrollWidth, mesh:svg.getAttribute('class'), peers:svg.querySelectorAll('[data-peer]').length, edges:svg.querySelectorAll('[data-edge]').length, cloudWidth:Math.round(cloud.width), evidenceWidth:Math.round(evidence.width), stacked:readers.y>origin.bottom};
       });
       assert(dimensions.pageWidth<=width+1, JSON.stringify({width,mode,dimensions}));
+      assert(dimensions.cloudWidth>=dimensions.evidenceWidth*.25,'Cloud illustration must remain legible across layouts');
       assert.equal(dimensions.peers,6);assert.equal(dimensions.edges,8);
       assert.equal(dimensions.mesh,width<=600?'mesh-mobile':'mesh-desktop');
       if(width<=600)assert(dimensions.stacked);
