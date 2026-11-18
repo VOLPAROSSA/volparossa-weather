@@ -1,0 +1,90 @@
+name: Offline Weather publication expiry
+on:
+  workflow_dispatch:
+  push:
+    branches: [development/weather-cache-only-expiry-20261119]
+    paths:
+      - .github/workflows/weather-cache-expiry.yml
+      - tests/native-cache/**
+      - src/core-cache.mjs
+      - src/provider-http.mjs
+
+permissions:
+  contents: read
+concurrency:
+  group: weather-cache-expiry-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  CORE_SOURCE: 3cccff9190126e1b4bb76504aa2932735f523ea3
+  CARGO_BUILD_JOBS: '2'
+  CARGO_TERM_COLOR: never
+
+jobs:
+  native-cache:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: VOLPAROSSA/volparossa
+          ref: ${{ env.CORE_SOURCE }}
+          path: build/core
+          persist-credentials: false
+      - name: Install the authenticated Core compiler and ecCodes distribution
+        run: |
+          set -eu
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(git -C build/core rev-parse HEAD)" = "$CORE_SOURCE"
+          python3 -B build/core/scripts/provision-rust189.py runner
+          sudo -n apt-get update -o APT::Update::Error-Mode=any
+          sudo -n apt-get install --no-install-recommends -y libeccodes-tools
+          dpkg-query -W libeccodes-tools libeccodes0 libeccodes-data
+      - name: Compile the pinned CLI, daemon and local cache setup
+        working-directory: build/core
+        run: |
+          set -eu
+          cargo fetch --locked
+          install -D -m 0644 ../../tests/native-cache/remember_weather_manifest.rs crates/volparossa/examples/remember_weather_manifest.rs
+          cargo build --locked --offline -p volparossa --bin volparossa --example remember_weather_manifest
+          cargo build --locked --offline -p volparossa-agent --bin volparossa-agent
+          git diff --exit-code HEAD
+      - name: Acquire one current public-community temperature forecast
+        run: |
+          set -euo pipefail
+          umask 077
+          trial="$RUNNER_TEMP/weather-offline-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -m 0700 "$trial" "$trial/acquisition"
+          echo "WEATHER_TRIAL=$trial" >> "$GITHUB_ENV"
+          run=$(node -e 'console.log(new Date(Math.floor(Date.now()/43200000)*43200000-43200000).toISOString())')
+          decoder=$(realpath /usr/bin/grib_ls)
+          digest=$(sha256sum < "$decoder" | cut -d' ' -f1)
+          node scripts/forecast.mjs origin --latitude 52.52 --longitude 13.41 \
+            --community-area --run "$run" --steps 24 --execute --accept-data-license \
+            --decoder "$decoder" --decoder-sha256 "$digest" --scratch-parent "$trial/acquisition" > "$trial/forecast.json"
+          test -s "$trial/forecast.json"
+          rmdir "$trial/acquisition"
+      - name: Observe the original signed expiry with only loopback connectivity
+        run: |
+          set -euo pipefail
+          umask 077
+          host_network=$(readlink /proc/self/ns/net)
+          sudo -n unshare --net --pid --fork --kill-child=KILL -- bash -ceu '
+            test "$(readlink /proc/self/ns/net)" != "$1"
+            ip link set lo up
+            exec setpriv --reuid="$2" --regid="$3" --clear-groups --inh-caps=-all --ambient-caps=-all --bounding-set=-all --no-new-privs -- \
+              env -i PATH="$4" GITHUB_SHA="$5" CORE_SOURCE="$6" python3 -B "$7" "$8"
+          ' cache-expiry "$host_network" "$(id -u)" "$(id -g)" "$PATH" "$GITHUB_SHA" "$CORE_SOURCE" \
+            "$GITHUB_WORKSPACE/tests/native-cache/expiry.py" "$WEATHER_TRIAL/forecast.json" | tee "$WEATHER_TRIAL/result.json"
+          test "$(readlink /proc/self/ns/net)" = "$host_network"
+          test ! -e "$WEATHER_TRIAL/forecast.json"
+          jq -e '.http_after_expiry == 503 and .processes_joined and .private_directory_removed' "$WEATHER_TRIAL/result.json"
+      - name: Preserve the public source and lifecycle receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: weather-offline-expiry-${{ github.sha }}
+          path: ${{ env.WEATHER_TRIAL }}/result.json
+          if-no-files-found: error
+          retention-days: 30

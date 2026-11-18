@@ -309,6 +309,15 @@ does not make cache markers, adopt foreign directories or erase incomplete
 caches. Each request makes at most one core call. A failed or cancelled fetch
 may leave a valid cache for the next request; invalid caches and unreadable paths
 remain errors, without an automatic repair or fallback.
+To read a previously completed named download offline, set `cacheMode: "cache-only"`
+for that product, or pass `--cache-only` to its `core-cache` CLI command.
+Core reopens the existing cache and checks the publisher, name, minimum revision,
+original signed expiry and object integrity. Weather also checks the forecast's
+original acquisition and model age. A valid response includes
+`delivery.cache_only: true`. When the publication expires, or if the cache is
+absent or incomplete, the HTTP endpoint returns 503. Offline requests make no
+peer or origin requests and never create a replacement cache.
+
 The two products must describe the same public area, but may use different
 publishers, models, runs and lead times. Requests are sequential and share one
 retrieval slot; a timed-out request finishes cancellation before releasing its

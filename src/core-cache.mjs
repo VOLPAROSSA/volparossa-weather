@@ -99,7 +99,7 @@ export async function fetchCachedAirQuality(options, { signal, observeReceipt, r
 }
 
 async function fetchCachedProduct({ mode, executable, controlSocket, cache, scratchParent,
-  publisherKey, name, minRevision, query, reuseCache = false }, product, signal, observeReceipt, receiptDeadline) {
+  publisherKey, name, minRevision, query, reuseCache = false, cacheOnly = false }, product, signal, observeReceipt, receiptDeadline) {
   requireThat(observeReceipt === undefined || typeof observeReceipt === 'function', 'RECEIPT_OBSERVER_INVALID');
   const deadline = receiptDeadline ?? performance.now() + 180000;
   requireThat(Number.isFinite(deadline), 'RECEIPT_OBSERVER_INVALID');
@@ -111,7 +111,7 @@ async function fetchCachedProduct({ mode, executable, controlSocket, cache, scra
   requireThat(typeof name === 'string' && Buffer.byteLength(name) > 0 && Buffer.byteLength(name) <= 128
     && !/[\x00-\x1f\x7f]/.test(name), 'NAME_INVALID');
   requireThat(Number.isSafeInteger(minRevision) && minRevision >= 1, 'REVISION_INVALID');
-  requireThat(typeof reuseCache === 'boolean', 'REUSE_INVALID');
+  requireThat(typeof reuseCache === 'boolean' && typeof cacheOnly === 'boolean', 'REUSE_INVALID');
   for (const path of [executable, controlSocket, cache, scratchParent]) absolute(path);
   const parent = await lstat(scratchParent);
   requireThat(parent.isDirectory() && !parent.isSymbolicLink() && parent.uid === process.getuid()
@@ -129,17 +129,23 @@ async function fetchCachedProduct({ mode, executable, controlSocket, cache, scra
       '--publisher-key', publisherKey, '--name', name, '--min-revision', String(minRevision),
       '--cache', cache, '--local-output', output, '--quota-bytes', String(product.maxBytes),
       '--max-entries', '16', '--min-free-bytes', '67108864'];
-    if (reuseCache) args.push('--reuse-cache');
+    if (reuseCache || cacheOnly) args.push('--reuse-cache');
+    if (cacheOnly) args.push('--cache-only');
     processResult = await runOwnedReceiptProcess(executable, args, work, signal);
     const receipt = processResult.value;
     requireThat(receipt && receipt.operation === 'named_content_download' && receipt.publisher_key === publisherKey
       && receipt.name === name && Number.isSafeInteger(receipt.revision) && receipt.revision >= minRevision
       && receipt.local_delivery === true && receipt.output_mode === '0600' && receipt.ownership_changed === false
-      && receipt.origin_authenticated === false && receipt.globally_latest === false && receipt.cache_only === false
+      && receipt.origin_authenticated === false && receipt.globally_latest === false && receipt.cache_only === cacheOnly
       && receipt.local_output === output && receipt.cache === cache && HEX.test(receipt.manifest_id)
       && HEX.test(receipt.sha256) && Number.isSafeInteger(receipt.bytes) && receipt.bytes > 0
       && receipt.bytes <= product.maxBytes && Number.isSafeInteger(receipt.publication_expires_unix_seconds)
       && receipt.publication_expires_unix_seconds > 0, 'CORE_RECEIPT_INVALID');
+    if (cacheOnly) {
+      requireThat(receipt.peer_bytes === 0 && receipt.providers_used === 0 && receipt.origin_body_bytes === 0
+        && receipt.origin_range_requests === 0 && Array.isArray(receipt.provider_peer_ids)
+        && receipt.provider_peer_ids.length === 0 && receipt.control_relay_peer_id === '', 'CORE_RECEIPT_INVALID');
+    }
     const file = await open(output, constants.O_RDONLY | constants.O_NOFOLLOW);
     let bytes;
     try {
@@ -165,7 +171,7 @@ async function fetchCachedProduct({ mode, executable, controlSocket, cache, scra
     requireThat(!signal?.aborted, 'CANCELLED');
     result = { forecast, delivery: { mode: 'core-cache', publisher_key: publisherKey, name,
       revision: receipt.revision, manifest_id: receipt.manifest_id, sha256: receipt.sha256,
-      publication_expires_at: expiry.toISOString(), freshness: age,
+      publication_expires_at: expiry.toISOString(), freshness: age, ...(cacheOnly ? { cache_only: true } : {}),
       upstream_origin_attested: false, manifest_media_type_checked: false } };
   } catch (failure) {
     if (failure?.code === 'CORE_CLEANUP_UNCONFIRMED') cleanupUnconfirmed = failure;
