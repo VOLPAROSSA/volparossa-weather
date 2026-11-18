@@ -1,0 +1,44 @@
+VOLPAROSSA Weather Demo 0. Silent descriptive transcript; no spoken audio.
+
+Genuine Android emulator recording; Core runs externally in a Debian test environment.
+
+Edit: source 28.4–31.4 is a three-second forecast preview, replayed later, not another retrieval. Source 0–12 follows at output 3–15. The explicit cut at output 15 skips source 12–25 (13 seconds). Source 25–65.578911 continues at output 15–55.578911. A five-second editorial closing card follows. Moving app footage remains at 1x; 30fps resampling can repeat or omit frames. The abbreviated loading is not a measured latency.
+
+Original runtime 39998753810 failed its media duration gate. Separate scoped media validation 40017379373 passed at source 5c7c5470cef31c37d0cb4f961f221529bda080fb; neither result is relabelled. Artifact 12529072030; raw SHA-256 bca54a8f677238f26daff6921bb3af0c661e1b39d0aada5ce3f161fda380d5c8.
+
+00:00:00.000 --> 00:00:03.000
+Recorded preview; excerpt replayed later.
+
+00:00:03.000 --> 00:00:10.000
+Earlier footage; loading is abbreviated. Core runs externally to Android.
+
+00:00:10.000 --> 00:00:15.000
+Real Android app footage at normal speed.
+
+00:00:15.000 --> 00:00:18.500
+Editorial cut; 13 seconds omitted.
+
+00:00:18.500 --> 00:00:21.266
+Temperature, then air-quality forecasts.
+
+00:00:21.266 --> 00:00:35.966
+First refresh loads; forecasts return. Reports verify cached product reuse.
+
+00:00:35.966 --> 00:00:48.800
+Second refresh starts. Reports verify both cached refreshes.
+
+00:00:48.800 --> 00:00:55.579
+HOME, then a brief return animation. Reports verify background and resume.
+
+00:00:55.579 --> 00:01:00.566
+VOLPAROSSA Weather Demo 0. Development preview with external Core.
+
+Pixels show temperature at source 28.536533 (output 18.536533), air quality at source 29.068/30.551 (output 19.068/20.551), first refresh starting at source 31.266356 (output 21.266356) and completing near source 45.391 (output 35.391), second refresh starting at source 45.965578 (output 35.965578), HOME near source 58.799733 (output 48.799733), and a return animation near source 65.39 (output 55.39). No visible second-refresh completion or settled return view is claimed.
+
+Retained acceptance reports verify real weather and air-quality products retrieved through peers, two cache-backed refreshes per product, and background/resume behavior. Pixels alone do not prove networking. Complete wind, precipitation and PM10 columns are not claimed. Native source times and units matter; forecasts are not observations.
+
+Development preview only: no standalone Android Core, physical-device compatibility or production readiness is established. Thumbnail topology is conceptual, not packet evidence.
+
+Data: ECMWF and NOAA. App: Overmorrow. Font: DejaVu. See unchanged NOTICES.md. No product builds or network trials were rerun. Publication remains subject to approval.
+
+Encoded duration: 60.566667 seconds at 30 fps. Ideal edit bounds above precede final frame-grid rounding. The final caption ends at 60.566 seconds, within the encoded video; the original render captions remain hash-bound in the preserved CI artifact.
