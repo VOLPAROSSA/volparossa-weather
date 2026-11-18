@@ -65,8 +65,9 @@ separate real temperature/wind delivery proof and synthetic rain/particulate
 interaction tests. An installed Overmorrow Android debug app also passes actual
 app-triggered core delivery, refresh and background/resume with real products in
 an isolated emulator. Expiry behavior has only been demonstrated with synthetic
-products. Physical devices, iOS support, observations, trained corrections, model
-comparison and automatic shared acquisition remain unfinished. Rain accumulation
+products. Physical devices, iOS support, observation acquisition, trained corrections and
+automatic shared acquisition remain unfinished. The local verification command
+compares archived IFS and AIFS temperatures using supplied station observations. Rain accumulation
 must not be presented as hourly rainfall; unsupported values are not invented.
 
 The [real IFS origin-to-native-decoder smoke](third_party/ecmwf-smoke.json) passes:
@@ -501,6 +502,66 @@ attribution to [ECMWF](https://www.ecmwf.int/en/forecasts/datasets/open-data), r
 the license and identify nearest-point selection/unit conversion. Respect source
 capacity; no retry storm, quota rotation or bulk ingestion is implemented.
 [Official index/range documentation](https://confluence.ecmwf.int/spaces/DAC/pages/272310539/ECMWF+open+data+real-time+forecasts+from+IFS+and+AIFS).
+
+## Compare forecasts with public station observations
+
+Use the pinned decoder and license opt-in from [Try a deliberately chosen
+model run](#try-a-deliberately-chosen-model-run). Save the `forecast` output
+from two `origin --community-area --execute` commands, one for IFS and one
+for AIFS Single. Select the same initialization
+and request the exact coordinates of the public station. The verifier reads
+these local files and the station measurements offline.
+
+```sh
+node scripts/verify-forecast.mjs ifs.json aifs-single.json observations.json
+```
+
+Supply instantaneous 2 m air temperatures in degrees Celsius for one station.
+The following input illustrates the format using **synthetic** data. For actual
+verification, identify the source dataset or provider and station, retain its
+license and attribution, and use quality flags derived from that source.
+Supplying the file declares permission for public evaluation and that the
+cases were held out. The verifier cannot authenticate those declarations.
+
+```json
+{
+  "schema": "volparossa.weather.observations.v1",
+  "source": "Synthetic example",
+  "license": "CC0-1.0",
+  "station": { "id": "synthetic", "latitude": 52.52, "longitude": 13.41 },
+  "sharing": "public",
+  "purpose": "held-out-evaluation",
+  "variable": "temperature_2m",
+  "unit": "degC",
+  "statistic": "instant",
+  "samples": [
+    { "observed_at": "2026-10-01T00:00:00.000Z", "temperature_2m": 8, "quality": "accepted" },
+    { "observed_at": "2026-10-01T06:00:00.000Z", "temperature_2m": null, "quality": "accepted" },
+    { "observed_at": "2026-10-01T12:00:00.000Z", "temperature_2m": 0, "quality": "accepted" }
+  ]
+}
+```
+
+The report accounts for every distinct timestamp in the three inputs. A paired
+case requires an accepted measurement, both forecast values at that exact UTC
+instant, and acquisition of both forecasts before that instant. Both models
+must have selected the same native grid point for the station. The verifier
+calculates its great-circle distance from the station coordinates and excludes
+points beyond the forecast contract's 50 km bound. Grid coordinates and distance
+accompany each scored case. Historical forecasts
+are eligible after their delivery expiry. Use `null` for missing values and
+`"rejected"` for measurements that failed source quality checks. Duplicate
+observation times are ambiguous and cause an error. Each file is limited to
+128 KiB, each forecast to 16 lead times, and observations to 32 timestamps.
+
+Signed error is forecast minus observation. Mean error and mean absolute error
+use the same pairs and are `null` when there are none. With observed values
+8 and 0, predictions 10 and −4 give a mean error of −1 °C and a mean absolute
+error of 3 °C. Predictions 7 and 1 on those same observations give 0 °C and
+1 °C. Run the example and its CLI checks with
+`node --test tests/forecast-verification.test.mjs`. These synthetic values
+illustrate the calculation. Claims about forecast skill require representative,
+independently held-out real observations across stations and model runs.
 
 ## Shared forecasting and learning, next
 
