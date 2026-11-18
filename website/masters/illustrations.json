@@ -1,0 +1,27 @@
+[
+  {
+    "master": "storm.png",
+    "reference": "design-reference.png (cyclone)",
+    "prompt": "Create only the soft cloud engraving / meteorological vortex underlay for the attached atlas concept. Antique Prussian-blue ink copperplate on clean unmarked warm ivory paper. The tight, beautifully drawn, counterclockwise spiral of an Atlantic low near 40% from the left and 44% from the top with a small clear eye. Atmospheric engraving of billowing clouds, linear curls, fine flowing hatching, not satellite photography. Excellent detail and open ivory light. Concentrate the engraving on upper left through middle, taper the spiral toward bottom left, diffuse all four edges to plain paper, rightmost third mostly unprinted. Wide landscape 1.65:1. ELIMINATE ALL map linework (coastline, fronts, isobars), ALL numbers, map letters, labels, typography and frames. Only the cloud vortex will be used underneath a separate real geographic vector map. Strong engraved contrast, same style as reference."
+  },
+  {
+    "master": "fox.png",
+    "reference": "design-reference.png (fox)",
+    "prompt": "Reconstruct this exact old naturalist side-profile engraving of a standing fox looking to the left, long bushy tail down to its right, ears alert. Entire four-legged animal with visible feet, believable anatomy, full body. On a slim tuft of grass. Rich fine copperplate crosshatching in a single dark navy ink on PLAIN very light paper. Wide 2.1:1 landscape vignette similar to the reference, fairly tight crop but leave breathing room. No text, ornament, horizontal rules, shadows, frame or cartouche. Delicate authentic vintage pen and ink."
+  },
+  {
+    "master": "film.png",
+    "reference": "design-reference.png (cover)",
+    "prompt": "A flat dark Prussian blue cyanotype engraved film title card matching this rectangular print. Reconstruct only the ink artwork, meticulously removing the typesetting and play button. Beautiful cumulus billowing upward from lower left and lower right and a small band of clouds along the bottom; large QUIET DARK BLUE central and upper centre field for separate movie title and control. Engraved white cloud edges, pale powder-blue stippling on navy #193957, unbroken very fine double rectangular pale printed border, engraved decorative corners. Landscape 2.55:1, edge to edge, single flat plate. No lettering, icons, play symbols or numerals ANYWHERE."
+  },
+  {
+    "master": "cloud.png",
+    "reference": "design-reference.png (study)",
+    "prompt": "Reconstruct this square plate of a tall summer cumulus towering over a faint low horizon, rising white engraved cumulus clouds against a deep Prussian blue sky. Finely detailed pale engraved hatching, little stippling, authentic restrained printmaking on warm ivory paper; elegant flat Victorian weather atlas woodcut. Square aspect ratio, edge-to-edge blue ink, no writing, labels or borders outside the square. Preserve the firm silhouette of the tall cloud and its pale bright edges."
+  },
+  {
+    "master": "margin.png",
+    "reference": null,
+    "prompt": "An extremely wide low horizontal bank of cumulus clouds, fine single dark Prussian-blue copperplate engraving on clean plain ivory unprinted paper, cloud bank resting above one thin horizon stroke with lots of unprinted paper surrounding the curls. Side profile. From a nineteenth century scientific weather atlas. The printable fine blue ink marks are the only content; white background, no dark rectangular sky, no lettering or borders. Landscape 3:1. Elegant, airy marginal vignette suited to a small evidence row."
+  }
+]
