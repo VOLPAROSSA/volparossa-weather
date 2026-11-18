@@ -10,6 +10,7 @@ import secrets
 import selectors
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -63,7 +64,8 @@ def get(origin):
 
 
 def run(root, source):
-    assert os.getuid() and sorted(p.name for p in Path("/sys/class/net").iterdir()) == ["lo"]
+    interfaces = sorted(name for _, name in socket.if_nameindex())
+    assert os.getuid() and interfaces == ["lo"], "only the loopback interface may be present"
     forecast = json.loads(source.read_bytes())
     for name in ("state", "control", "credentials", "scratch", "www"):
         (root / name).mkdir(mode=0o700)
@@ -138,7 +140,7 @@ def run(root, source):
                 acquired_at=forecast["source"]["acquired_at"], valid_at=forecast["samples"][0]["valid_at"],
                 temperature_c=forecast["samples"][0]["temperature_2m"], cache_seed="original signed local publication",
                 cache_only=True, reads_before_expiry=2, bridge_restarted=True, http_after_expiry=503,
-                network_interfaces=["lo"], original_plaintext_removed=True, scratch_empty=True)
+                network_interfaces=interfaces, original_plaintext_removed=True, scratch_empty=True)
 
 
 if __name__ == "__main__":

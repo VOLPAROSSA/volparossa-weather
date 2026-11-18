@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Prime the trial with the original envelope produced by the normal content
-// publish CLI, using the same store method as a completed named download.
+//! Prime the trial with the original envelope produced by the normal content
+//! publish CLI, using the same store method as a completed named download.
 use std::{
     env,
     error::Error,
