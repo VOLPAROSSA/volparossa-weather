@@ -584,8 +584,56 @@ member. DWD updates its recent files and may revise values.
 
 Both ECMWF archive objects predate the observation. The source check on
 18 November retrieved them retrospectively and used GDAL. The offline
-verification CLI requires a forecast already captured for the station before
+prospective verification command requires a forecast captured for the station before
 the observation. The earlier Berlin capture selected a different location.
+
+### Score cached archive fields with the verification CLI
+
+Use `archive` when model records were downloaded after their valid hour.
+It reads two cached GRIB fields, their indexes and a local evaluation file.
+The [Berlin/Potsdam input](third_party/ecmwf-dwd-archive-input.json) contains
+the observation series and source rows for four stations. The [earlier field
+receipt](third_party/ecmwf-dwd-temperature-comparison.json) lists the public
+archive URLs, exact byte ranges and SHA-256 digests. In one directory, save
+the two indexes as `ifs.index` and `aifs-single.index` and the corresponding
+individual `2t` field ranges as `ifs.grib2` and `aifs-single.grib2`. On Linux
+the command uses the existing GDAL GRIB tools and `prlimit` under `/usr/bin`.
+
+```sh
+node scripts/verify-forecast.mjs archive third_party/ecmwf-dwd-archive-input.json /path/to/cached-fields
+```
+
+The CLI checks each field and index digest, the native lead and valid time,
+ECMWF parameter and level, units, dimensions and grid. It decodes each
+occupied cell once per model. For retrospective eligibility it uses the
+archive object's supplied Last-Modified time and reports the later retrieval
+date. The caller supplies normalized, publicly usable station series and
+their provenance. The CLI reads those series locally. For the published
+example, the original rows, units, sensor heights, timestamps and coordinates
+were separately checked against the four DWD ZIPs and their recorded hashes.
+
+For 11 October 2026 at 12:00 UTC the run paired all four station observations
+with 24-hour forecasts from both models. DWD supplied SYNOP-derived nominal
+hourly values; `QN_9=1` denotes formal quality control only. Marzahn and
+Tempelhof share one model cell. Four nearby stations in one hour are a
+reproduction example and cannot establish relative model skill.
+
+| DWD station | Grid distance | Observation | IFS | AIFS Single |
+| --- | ---: | ---: | ---: | ---: |
+| Berlin-Dahlem (FU) | 6.23 km | 11.7 °C | 11.92 °C | 12.10 °C |
+| Berlin-Marzahn | 6.41 km | 11.5 °C | 10.73 °C | 12.07 °C |
+| Berlin-Tempelhof | 7.55 km | 11.6 °C | 10.73 °C | 12.07 °C |
+| Potsdam | 13.87 km | 11.6 °C | 12.86 °C | 12.13 °C |
+
+The [CLI report](third_party/ecmwf-dwd-archive-report.json) retains the exact
+temperatures, signed errors, quality flags, archive availability, file hashes
+and per-station coverage. One invocation supports one native model run and
+lead at up to eight distinct stations. Station series use the observation
+contract above with `purpose: "retrospective-evaluation"`; use
+`statistic: "nominal-synoptic-hour"` for nominal SYNOP readings and
+`quality: "provisional"` for a preliminarily checked value. Unknown or
+incompatible units and statistics fail validation. Missing, rejected,
+unmatched or late-available pairs have no score.
 
 ## Shared forecasting and learning, next
 

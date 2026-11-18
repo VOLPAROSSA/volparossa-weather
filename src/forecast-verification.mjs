@@ -8,11 +8,11 @@ function fields(value, names) {
   'OBSERVATION_FORMAT_INVALID');
 }
 
-function observationIndex(data) {
+export function observationIndex(data, archive = false) {
   fields(data, ['schema', 'source', 'license', 'station', 'sharing', 'purpose', 'variable', 'unit', 'statistic', 'samples']);
   requireThat(data.schema === 'volparossa.weather.observations.v1' && data.sharing === 'public'
-    && data.purpose === 'held-out-evaluation' && data.variable === 'temperature_2m'
-    && data.unit === UNITS.temperature_2m && data.statistic === 'instant', 'OBSERVATION_CONTRACT_INVALID');
+    && data.purpose === (archive ? 'retrospective-evaluation' : 'held-out-evaluation') && data.variable === 'temperature_2m'
+    && data.unit === UNITS.temperature_2m && (data.statistic === 'instant' || archive && data.statistic === 'nominal-synoptic-hour'), 'OBSERVATION_CONTRACT_INVALID');
   fields(data.station, ['id', 'latitude', 'longitude']);
   for (const label of [data.source, data.license, data.station.id]) {
     requireThat(typeof label === 'string' && label.trim().length > 0 && label.length <= 200
@@ -27,7 +27,7 @@ function observationIndex(data) {
     fields(sample, ['observed_at', 'temperature_2m', 'quality']);
     utc(sample.observed_at);
     requireThat(!byTime.has(sample.observed_at), 'DUPLICATE_OBSERVATION');
-    requireThat(['accepted', 'rejected'].includes(sample.quality), 'OBSERVATION_QUALITY_INVALID');
+    requireThat((['accepted', 'rejected'].includes(sample.quality) || archive && sample.quality === 'provisional'), 'OBSERVATION_QUALITY_INVALID');
     if (sample.temperature_2m !== null) number(sample.temperature_2m, -273.15, Infinity, 'VALUE_INVALID');
     byTime.set(sample.observed_at, sample);
   }
@@ -67,6 +67,13 @@ export function verifyTemperature(ifs, aifs, observations) {
   const forecasts = [ifs, aifs];
   const samples = [indexForecast(ifs, 'ifs', observations.station), indexForecast(aifs, 'aifs-single', observations.station)];
   requireThat(ifs.source.model_run_at === aifs.source.model_run_at, 'VERIFICATION_RUN_MISMATCH');
+  return { schema: 'volparossa.weather.temperature-verification.v1', model_run_at: ifs.source.model_run_at,
+    forecast_sources: forecasts.map(({ source }) => ({ model: source.model, acquired_at: source.acquired_at,
+      attribution: source.attribution, license: source.license, license_url: source.license_url })),
+    ...compareTemperatureCases(forecasts.map(f => f.source), samples, observations, observed, false) };
+}
+
+export function compareTemperatureCases(sources, samples, observations, observed, archive) {
   const times = new Set([...observed.keys(), ...samples[0].keys(), ...samples[1].keys()]);
   const errors = [[], []];
   const cases = [];
@@ -77,9 +84,10 @@ export function verifyTemperature(ifs, aifs, observations) {
     if (!observation || observation.temperature_2m === null) reasons.push('missing_observation');
     if (observation?.quality === 'rejected') reasons.push('rejected_observation');
     for (const [i, sample] of pair.entries()) {
-      const { model, acquired_at } = forecasts[i].source;
+      const { model, acquired_at, last_modified_at } = sources[i];
       if (!sample || sample.temperature_2m === null) reasons.push(model + '_missing_forecast');
-      if (sample && acquired_at >= valid_at) reasons.push(model + '_not_acquired_in_advance');
+      if (sample && archive && last_modified_at >= valid_at) reasons.push(model + '_archive_not_available_in_advance');
+      if (sample && !archive && acquired_at >= valid_at) reasons.push(model + '_not_acquired_in_advance');
     }
     let stationDistance;
     if (pair.every(Boolean)) {
@@ -102,12 +110,11 @@ export function verifyTemperature(ifs, aifs, observations) {
     });
     const { latitude, longitude } = pair[0].grid;
     cases.push({ valid_at, lead_hours: pair[0].lead_hours, grid: { latitude, longitude, distance_km: stationDistance },
+      ...(archive ? { observation_quality: observation.quality, observation_statistic: observations.statistic,
+        ifs_degC: pair[0].temperature_2m, aifs_single_degC: pair[1].temperature_2m } : {}),
       observed_degC: observation.temperature_2m, ifs_error_degC: differences[0], aifs_single_error_degC: differences[1] });
   }
-  return { schema: 'volparossa.weather.temperature-verification.v1', model_run_at: ifs.source.model_run_at,
-    forecast_sources: forecasts.map(({ source }) => ({ model: source.model, acquired_at: source.acquired_at,
-      attribution: source.attribution, license: source.license, license_url: source.license_url })),
-    observations: { source: observations.source, license: observations.license, station: { ...observations.station },
+  return { observations: { source: observations.source, license: observations.license, station: { ...observations.station },
       declared_sharing: observations.sharing, declared_purpose: observations.purpose, source_authenticated: false },
     coverage: { candidate_times: times.size, paired: errors[0].length, excluded: times.size - errors[0].length },
     models: { ifs: score(errors[0]), 'aifs-single': score(errors[1]) }, cases };
