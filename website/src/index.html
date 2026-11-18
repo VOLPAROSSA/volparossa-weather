@@ -9,7 +9,7 @@
     <p class="develop"><span aria-hidden="true">●</span> Integration in development</p>
   </div>
   <figure class="chart-plate">
-    <div class="chart-composition">{{storm_picture}}<img class="cartography" src="assets/atlas/synoptic.svg" width="1000" height="660" alt="Illustrative synoptic chart of an Atlantic low west of Europe, with isobars, warm and cold fronts, and a continental high."></div>
+    <div class="chart-composition">{{storm_picture}}<img class="cartography" src="assets/atlas/synoptic.svg" width="1000" height="660" alt="Illustrative synoptic chart with an Atlantic low, warm and cold fronts, and a red-hatched high over continental Europe."></div>
     <figcaption>An illustrated synoptic chart of the North Atlantic and Europe.</figcaption>
   </figure>
   <div class="hero-key"><div class="key-box"><p class="plate-label">Synoptic map legend</p><ul>{{legend}}</ul></div>
@@ -40,11 +40,23 @@
 </section>
 
 <section id="shared-forecast" aria-labelledby="mesh-title" class="plate mesh-row">
-  <div><h2 id="mesh-title">One forecast, several readers.</h2><p>A publisher can share a forecast for a chosen public area. Peers can deliver the same product to other readers. The model run, units and valid times stay with the data.</p></div>
-  <figure class="network"><p class="plate-label flanked">Cooperating peers</p>
-    <div class="network-line"><div class="source-slip">Published<br>forecast</div><div class="peer-drawing">{{desktop_mesh}}{{mobile_mesh}}</div><div class="readers"><div><i class="web-icon" aria-hidden="true"></i>Drizz.li</div><div><i class="phone-icon" aria-hidden="true"></i>Overmorrow</div></div></div>
-    <figcaption><p class="path-key"><span><i></i>A–B–C–F</span><span><i></i>A–D–E–F</span><span>Source → peers → apps</span></p>Possible delivery routes for one public forecast. The diagram illustrates the network.</figcaption></figure>
-  <details class="atlas-detail"><summary>How readers check a forecast</summary><p>The reader checks the trusted publisher, file integrity and expiry. Reading a cached copy keeps the original forecast age. Point selection uses model fields locally. The owner explicitly chooses a public area to publish.</p></details>
+  <div class="mesh-intro"><h2 id="mesh-title">One forecast, several readers.</h2><p>A publisher can share a forecast for a chosen public area. Peers can deliver the same product to other readers. The model run, units and valid times stay with the data.</p>
+    <details class="atlas-detail"><summary>How readers check a forecast</summary><p>The reader checks the trusted publisher, file integrity and expiry. Reading a cached copy keeps the original forecast age. Point selection uses model fields locally. The owner explicitly chooses a public area to publish.</p></details></div>
+  <figure class="network"><p class="plate-label flanked">Decentralised mesh · Peer to peer</p>
+    <div class="network-line">
+      <div class="forecast-source"><div class="source-slip">
+        <svg viewBox="0 0 165 82" aria-hidden="true" preserveAspectRatio="none"><path d="M8 7Q20 3 43 6T86 6T130 5Q148 8 157 5Q164 12 160 29T159 54Q163 69 157 75Q137 72 115 76T69 74T30 74L7 77Q3 70 6 55T5 28Q3 14 8 7Z"/><path class="paper-fold" d="M13 58q31 3 57 1m14 1q34 3 64 -2M12 65q23 -2 46 1t48 0 44 -1M9 14q3 16 1 24m146 11q-1 11 1 18"/></svg>
+        <strong>Published<br>forecast</strong></div>
+        <div class="record-origin"><p>Origin: ECMWF IFS</p><p>Run: <time datetime="{{run_iso}}">{{run_text}}</time></p><p>Valid: <time datetime="{{valid_iso}}">{{valid_text}}</time></p></div>
+      </div>
+      <div class="peer-drawing">{{desktop_mesh}}{{mobile_mesh}}</div>
+      <div class="readers">
+        <div><svg viewBox="0 0 50 38" aria-hidden="true"><rect x="2" y="3" width="45" height="32" rx="3"/><path d="M3 10h43M6 7h2m2 0h2m2 0h2m4 0h21"/></svg><span>Drizz.li<small>(web)</small></span></div>
+        <div><svg viewBox="0 0 50 44" aria-hidden="true"><rect x="13" y="2" width="24" height="40" rx="3"/><path d="M17 5h16M14 36h22m-13 3h3"/></svg><span>Overmorrow<small>(Android)</small></span></div>
+      </div>
+    </div>
+    <figcaption><p class="network-caption">Model run and valid time stay with the forecast</p>
+      <p class="path-key"><span>Cooperating peers</span><span><i></i>A–B–C–F</span><span><i></i>A–D–E–F</span></p>Possible delivery routes for one public forecast. The diagram illustrates the network.</figcaption></figure>
 </section>
 
 <section id="forecast-fields" aria-labelledby="fields-title" class="plate fields-row">

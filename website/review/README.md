@@ -2,7 +2,7 @@
 
 [Desktop, 1440 px](desktop.webp) · [Mobile, 390 px](mobile.webp) · [Side-by-side with concept 02](concept-comparison.webp) · [Browser results](browser-results.json)
 
-The renders show the actual noindex preview at `/volparossa-weather/`. The composition keeps the engraved Atlantic chart, separate key and fox, cyanotype film cover, red archive figure, horizontal registers and the paired app illustrations. On a narrow screen the chart follows the hero text, and the six-peer diagram runs from top to bottom. The generated site also carries accessible source notes and the shared footer.
+The renders show the actual noindex preview at `/volparossa-weather/`. The composition keeps the engraved Atlantic chart, separate key and fox, cyanotype film cover, red archive figure, horizontal registers and the paired app illustrations. The continental high has a vermilion hatch and two distinct isobars. The fox and the closing cumulus bank have new engraving masters. The forecast record, two directional delivery routes and both reader devices follow the peer-to-peer plate. On a narrow screen the chart follows the hero text, the peer diagram runs from top to bottom and the cloud bank fills the foot of the page. The generated site also carries accessible source notes and the shared footer.
 
 | Check | Result |
 | --- | --- |

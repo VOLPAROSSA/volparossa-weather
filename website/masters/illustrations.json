@@ -6,8 +6,8 @@
   },
   {
     "master": "fox.png",
-    "reference": "design-reference.png (fox)",
-    "prompt": "Reconstruct this exact old naturalist side-profile engraving of a standing fox looking to the left, long bushy tail down to its right, ears alert. Entire four-legged animal with visible feet, believable anatomy, full body. On a slim tuft of grass. Rich fine copperplate crosshatching in a single dark navy ink on PLAIN very light paper. Wide 2.1:1 landscape vignette similar to the reference, fairly tight crop but leave breathing room. No text, ornament, horizontal rules, shadows, frame or cartouche. Delicate authentic vintage pen and ink."
+    "reference": "design-reference.png (fox vignette), previous fox.png at 65fdfd55",
+    "prompt": "Create a revised, standalone finely engraved red fox vignette for a 19th-century weather atlas. The FIRST small reference is the required pose and head attitude, the second is the previous edition whose head reads like a dog. Faithfully redraw the little animal in the first reference with convincingly vulpine facial anatomy. Adult European red fox (Vulpes vulpes), standing lightly in profile, body and long full brush to the right, nose pointing LEFT and head turned a little toward the reader in three-quarter view. Elegant narrow tapered triangular muzzle, small sharp dark nose, closed mouth WITHOUT smile, one fully readable almond eye with a dark eyelid and a glimpse of the far eye, cheek ruff, fine whiskers, two distinct triangular ears. Head anatomically joined to a slender neck and long slim body. Exactly four anatomically coherent legs and ONE tail. Engraved scientific field-guide treatment: delicate royal navy copperplate lines with short dense hatching, paper highlights and readable white cheek patch. Full silhouette and paws visible on a small tuft of grasses. Wide about 1.9:1, fill the available frame. Plain clean white paper, absolutely no writing, label, lines, borders or colour blocks. Clean unlettered art for printing as a small illustration."
   },
   {
     "master": "film.png",
@@ -21,7 +21,7 @@
   },
   {
     "master": "margin.png",
-    "reference": null,
-    "prompt": "An extremely wide low horizontal bank of cumulus clouds, fine single dark Prussian-blue copperplate engraving on clean plain ivory unprinted paper, cloud bank resting above one thin horizon stroke with lots of unprinted paper surrounding the curls. Side profile. From a nineteenth century scientific weather atlas. The printable fine blue ink marks are the only content; white background, no dark rectangular sky, no lettering or borders. Landscape 3:1. Elegant, airy marginal vignette suited to a small evidence row."
+    "reference": "design-reference.png (cloud bank above closing band)",
+    "prompt": "Recreate the attached antique weather-atlas cloud bank as a clean isolated copperplate illustration in rich deep Prussian blue ink on pure white paper. Match THIS asymmetrical right-corner composition: the low taper begins at the very bottom LEFT, the medium lobed tower rises in the middle-left, a dark saddle dips between it and the much taller richly billowing cluster at the far RIGHT, with the right side cut off by the edge. Strong warm white highlights in each lobe, short curved crosshatching, crisp deep navy shadows and a little fine sparse stippling. A monumental close up of soaring cumulus, cloud only. The cloud fills the full height on the right and most of the width; compose to the bottom and right edges. This is a wide horizontal 2.6:1 marginal illustration at the FOOT of a printed page. No sky rectangle, no horizon line, no shadows below, no trees or mountains, NO LETTERS (remove the accidental text at far left), no borders, no technical labels. Keep everything outside the bank plain white for transparent ink separation. Rich punchy engraved texture, confident irregular contour as in the supplied print."
   }
 ]

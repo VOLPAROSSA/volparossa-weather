@@ -7,6 +7,8 @@
     "mesh": "mesh-desktop",
     "peers": 6,
     "edges": 8,
+    "cloudWidth": 392,
+    "evidenceWidth": 1301,
     "stacked": false,
     "initialVideoRequests": 0,
     "accessibility": [],
@@ -26,6 +28,8 @@
     "mesh": "mesh-mobile",
     "peers": 6,
     "edges": 8,
+    "cloudWidth": 372,
+    "evidenceWidth": 353,
     "stacked": true,
     "initialVideoRequests": 0,
     "playback": {
@@ -44,6 +48,8 @@
     "mesh": "mesh-mobile",
     "peers": 6,
     "edges": 8,
+    "cloudWidth": 302,
+    "evidenceWidth": 283,
     "stacked": true,
     "initialVideoRequests": 0
   },
@@ -55,6 +61,8 @@
     "mesh": "mesh-desktop",
     "peers": 6,
     "edges": 8,
+    "cloudWidth": 359,
+    "evidenceWidth": 718,
     "stacked": false,
     "initialVideoRequests": 0
   },
@@ -66,6 +74,8 @@
     "mesh": "mesh-desktop",
     "peers": 6,
     "edges": 8,
+    "cloudWidth": 393,
+    "evidenceWidth": 1294,
     "stacked": false,
     "initialVideoRequests": 0
   },
@@ -77,6 +87,8 @@
     "mesh": "mesh-desktop",
     "peers": 6,
     "edges": 8,
+    "cloudWidth": 388,
+    "evidenceWidth": 1301,
     "stacked": false,
     "initialVideoRequests": 0
   },
@@ -88,6 +100,8 @@
     "mesh": "mesh-mobile",
     "peers": 6,
     "edges": 8,
+    "cloudWidth": 283,
+    "evidenceWidth": 246,
     "stacked": true,
     "initialVideoRequests": 0
   },
@@ -99,6 +113,8 @@
     "mesh": "mesh-mobile",
     "peers": 6,
     "edges": 8,
+    "cloudWidth": 372,
+    "evidenceWidth": 353,
     "stacked": true,
     "initialVideoRequests": 0,
     "playback": {
@@ -117,6 +133,8 @@
     "mesh": "mesh-mobile",
     "peers": 6,
     "edges": 8,
+    "cloudWidth": 372,
+    "evidenceWidth": 353,
     "stacked": true,
     "initialVideoRequests": 0,
     "playback": {
@@ -135,6 +153,8 @@
     "mesh": "mesh-desktop",
     "peers": 6,
     "edges": 8,
+    "cloudWidth": 392,
+    "evidenceWidth": 1301,
     "stacked": false,
     "initialVideoRequests": 0,
     "playback": {
@@ -153,6 +173,8 @@
     "mesh": "mesh-mobile",
     "peers": 6,
     "edges": 8,
+    "cloudWidth": 372,
+    "evidenceWidth": 353,
     "stacked": true,
     "initialVideoRequests": 0,
     "playback": {
@@ -171,6 +193,8 @@
     "mesh": "mesh-desktop",
     "peers": 6,
     "edges": 8,
+    "cloudWidth": 392,
+    "evidenceWidth": 1301,
     "stacked": false,
     "initialVideoRequests": 0,
     "playback": {
