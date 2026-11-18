@@ -94,7 +94,7 @@ class HostedClientWorkflowTests(unittest.TestCase):
 
     def test_embedded_shell_syntax(self):
         blocks = re.findall(r"(?m)^        run: \|\n((?:          .*\n|\n)+)", self.source)
-        self.assertEqual(len(blocks), 11)
+        self.assertEqual(len(blocks), 12)
         for block in blocks:
             script = "\n".join(line[10:] for line in block.splitlines())
             result = subprocess.run(["bash", "-n"], input=script, text=True,

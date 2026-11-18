@@ -341,8 +341,27 @@ def subset(packages, profile, inputs):
     return result
 
 
+class PackageObjects:
+    """Private regular files from authenticated deb data, addressed only by SHA-256."""
+
+    def __init__(self, root):
+        root.mkdir(mode=0o700)
+        self.root = root
+        self.digests = set()
+        self.bytes = 0
+
+    def keep(self, name, digest, data):
+        if not selected(name) or digest in self.digests:
+            return
+        require(self.bytes + len(data) <= MAX_VIEW and re.fullmatch(r'[0-9a-f]{64}', digest),
+            'BOUNDARY_PACKAGE_OBJECT')
+        put(self.root / digest, data)
+        self.digests.add(digest)
+        self.bytes += len(data)
+
+
 class View:
-    def __init__(self, root, packages, profile, *, host=Path('/')):
+    def __init__(self, root, packages, profile, *, host=Path('/'), objects=None):
         # Constructor authority is fixed too; future source-mode callers cannot
         # turn an observed package/member map into a new expected-value record.
         packages = subset(packages, profile, module('prepare_hosted_client_inputs'))
@@ -386,8 +405,11 @@ class View:
                 continue
             # Canonical /usr paths have no inherited usrmerge alias. Every
             # intermediate host directory must itself be a real directory.
-            parts = source.split('/')
-            fd = os.open(host, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            # The candidate may source its private /usr directly from signed .debs.
+            # The pinned package record supplies the leaf hash for hardlinks as well.
+            parts = [expected['sha256']] if objects is not None else source.split('/')
+            fd = os.open(objects.root if objects is not None else host,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
                 for part in parts[:-1]:
                     child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)

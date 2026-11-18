@@ -30,7 +30,7 @@ P13_SOURCE = 'e774912e292f339d42ff23f00b4d8fc5d69e5b47'
 MAX_PUBLIC = 96 * 1024**2
 RESULT_NAMES = frozenset(('p14-started.json', 'p14-result.json', 'p14-steps.json',
     'p14-output.json', 'p14-module-graphs.json', 'p14-dependencies.json',
-    'p14-source-stage.json', 'p14-runtime.json', 'p14-source-inputs.json'))
+    'p14-source-stage.json', 'p14-runtime.json', 'p14-source-inputs.json', 'p14-package-root.json'))
 # Paraglide 2.25.0 -> @inlang/sdk 3.0.3 saveProjectToDirectory(skipExporting).
 # These fixed metadata literals are not code or a new source/dependency pin.
 # No prior .meta.json may contribute another highestSdkVersion.
@@ -323,9 +323,12 @@ def build():
         source=os.environ['GITHUB_SHA'], p13_source=P13_SOURCE, maximum_candidate_rounds=1)))
     try:
         pins = inputs.load_package_inputs('drizzli')
-        apt.installed_inventory('drizzli', OUTPUT, pins)
-        candidate = inputs.document(inputs.read(OUTPUT / 'apt-candidate.json'))
+        objects = boundary_api.PackageObjects(private / 'package-objects')
+        candidate = apt.candidate(pins['apt']['profile'], OUTPUT, keep_file=objects.keep)
         apt.bind_package_candidate(candidate, pins)
+        inputs.write(OUTPUT / 'p14-package-root.json', encoded(receipt('p14-private-package-root',
+            snapshot=candidate['snapshot'], packages=len(candidate['packages']), regular_objects=len(objects.digests),
+            object_bytes=objects.bytes, archive_data_only=True, snapshot_packages_installed_on_runner=False)))
         phase = 'runtime-materialization'
         resolver.capture()
         runtime_preparer = module('prepare_hosted_runtime')
@@ -358,7 +361,7 @@ def build():
         base = private / 'drizzli'
         safe_directory(base, create=True)
         safe_directory(PROOF, create=True)
-        view = boundary_api.View(base / 'view', candidate['packages'], 'drizzli')
+        view = boundary_api.View(base / 'view', candidate['packages'], 'drizzli', objects=objects)
         boundary = boundary_api.Boundary(view, h, h.BROWSER, resolver=resolver)
         boundary.stage_firefox()
         h.BOUNDARY = boundary
@@ -373,7 +376,7 @@ def build():
         h.write(h.PRIVATE / 'global.npmrc', b'')
         libc = next(package['files']['usr/lib/x86_64-linux-gnu/libc.so.6'] for package in candidate['packages']
             if 'usr/lib/x86_64-linux-gnu/libc.so.6' in package['files'])
-        libc_bytes = boundary_api.regular(Path('/usr/lib/x86_64-linux-gnu/libc.so.6'))
+        libc_bytes = boundary_api.regular(view.root / 'usr/lib/x86_64-linux-gnu/libc.so.6')
         require(sha(libc_bytes) == libc['sha256'], 'P14_WITNESS_INPUT')
         boundary_api.put(boundary.witness, libc_bytes)
         h.preflight('compile')

@@ -64,6 +64,7 @@ jobs:
           umask 077
           mkdir -m 700 -p build
           python3 -B -m unittest discover -s tests -p 'test_hosted_drizzli_*.py'
+          python3 -B -m unittest discover -s tests -p 'test_hosted_client*.py'
       - name: Retrieve only the pinned public Browser boundary helper sources
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -71,6 +72,16 @@ jobs:
           ref: 08bac388a0abfd06426bebe8f6fabd0157d2e709
           path: build/hosted-browser-source
           persist-credentials: false
+      - name: Ensure the packaged sandbox tools are available
+        run: |
+          set -euo pipefail
+          if test -x /usr/bin/bwrap && test -x /usr/sbin/apparmor_parser; then exit 0; fi
+          sudo -n apt-get update
+          # Keep every preinstalled package at its existing version. Build inputs
+          # come separately from the signed snapshot inside the private root.
+          apt-get -s --no-remove --no-upgrade --no-install-recommends install apparmor bubblewrap > "$RUNNER_TEMP/p14-sandbox-plan"
+          if grep -Eq '^Remv |^Inst [^ ]+ \[' "$RUNNER_TEMP/p14-sandbox-plan"; then exit 1; fi
+          sudo -n apt-get install --yes --no-remove --no-upgrade --no-install-recommends apparmor bubblewrap
       - name: Perform one bounded Drizz.li candidate with the mandatory Boundary API
         run: |
           set -euo pipefail
