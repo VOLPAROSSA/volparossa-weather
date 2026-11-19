@@ -17,6 +17,8 @@ def exchange(stream, phase, origin, get):
         if status == 200:
             assert body['delivery']['cache_only'] is True
             assert body['delivery']['revision'] == (2 if phase == 'recovered' and expected == 'weather' else 1)
+        else:
+            assert body == {'error': 'FORECAST_UNAVAILABLE'}
         raw = json.dumps([status, body], separators=(',', ':')).encode() + b'\n'
         assert len(raw) < 262144
         stream.write(raw)

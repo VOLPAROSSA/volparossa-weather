@@ -190,7 +190,8 @@ def run(root, source, publication):
                 distinct_weather_owner=True, cache_only=True, reads_before_expiry=3, bridge_restarted=True, http_after_expiry=503,
                 drizzli_rejected_expired=True, drizzli_recovered=True, revision_after_recovery=2,
                 replacement_manifest_id=recovered["manifest"], drizzli_displayed_temperature_c=recovered["display"],
-                android_requests=mobile_responses, network_interfaces=interfaces, core_refused_expired=True, original_plaintext_removed=True, scratch_empty=True)
+                network_interfaces=interfaces, core_refused_expired=True, original_plaintext_removed=True, scratch_empty=True,
+                **({'android_requests': mobile_responses} if mobile else {}))
 
 
 if __name__ == "__main__":

@@ -21,6 +21,8 @@ class SignedAppRequests(unittest.TestCase):
             def read(origin, path):
                 routes.append(path)
                 weather = path == ROUTES['weather']
+                if weather and weather_status == 503:
+                    return 503, {'error': 'FORECAST_UNAVAILABLE'}
                 return (weather_status if weather else 200,
                         {'delivery': {'cache_only': True, 'revision': revision if weather else 1}})
             port = Port(f'weather\nair\n{phase}-observed\n'.encode())

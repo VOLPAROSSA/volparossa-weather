@@ -34,7 +34,8 @@ function productTable(view, kind, body) {
   const [sample] = body.forecast.samples;
   const [row] = table.rows;
   if (table.rows.length !== 1 || row[0] !== sample.valid_at) return false;
-  if (kind === 'air_quality') return numberEqual(row[1], sample.pm2_5) && numberEqual(row[2], sample.pm10);
+  if (kind === 'air_quality') return Number.isFinite(sample.pm2_5) && Number.isFinite(sample.pm10)
+    && numberEqual(row[1], sample.pm2_5) && numberEqual(row[2], sample.pm10);
   return numberEqual(row[1], sample.temperature_2m) && row.slice(2).every(cell => cell === 'Not available');
 }
 
