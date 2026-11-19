@@ -34,6 +34,14 @@ deployment and private inputs, and preserved the inventory in artifact
 `79e53c8ab23a9fb318371ce330c63675d66373ee1bffad492c954f1712eb18e6`.
 [Complete build](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44438611156).
 
+A second fresh runner rebuilt the protected merge offline. Both runs emitted
+the same 64 paths with identical byte counts, file modes and SHA-256 hashes.
+The 24 Flutter tests and all 15 steps passed on both runners. Comparing the
+deployment with the October Core manifest found 59 unchanged files, the full
+Material Icons font, a changed compiled JavaScript file and three added font
+notices. [Independent build](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44444440984)
+and [file-by-file comparison](overmorrow-cold-comparison.json).
+
 **P15i preflight, 2026-10-31:** the complete hook-state contract is checked
 jointly against original producers for test and test-plus-web lifecycles. The
 shared-directory closure now requires both original 32- and 10-character names

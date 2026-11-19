@@ -1,5 +1,19 @@
 {
   "declared_app_assets_verified": 35,
+  "independent_cold_comparison": {
+    "added": [],
+    "changed": {},
+    "compared_fields": [
+      "path",
+      "bytes",
+      "mode",
+      "sha256"
+    ],
+    "first_inventory_sha256": "281641bfe76504a0eee9a5f80c8b0831749ea6827b7a6a5991dd646543bd9435",
+    "removed": [],
+    "same_files": 64,
+    "second_inventory_sha256": "281641bfe76504a0eee9a5f80c8b0831749ea6827b7a6a5991dd646543bd9435"
+  },
   "kind": "p15-overmorrow-build-comparison",
   "october_comparison": {
     "added": [
@@ -365,6 +379,16 @@
       "receipt_sha256": "4654d6f0eaa4e6744676da3daff30146a9c3f07e313440c58a9dd76a0ffcd963",
       "run": 44438611156,
       "source": "19bd528a2576ab40849785354f4342608a71b0cc",
+      "steps": 15
+    },
+    {
+      "archive_sha256": "b9e625ab3fcf02502ef6ba8cd959e0790d7962f3842984e5ecc3166c86a15c9c",
+      "artifact": 14493665334,
+      "compiled": true,
+      "flutter_tests": 24,
+      "receipt_sha256": "1b333ab3006227ee3367456cc7018769b2a2e3b2a37ef8f2712087d97dbc039b",
+      "run": 44444440984,
+      "source": "826184e6f21d5f900238ba9b337adf96f78e8005",
       "steps": 15
     }
   ],
