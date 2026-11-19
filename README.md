@@ -318,6 +318,11 @@ original acquisition and model age. A valid response includes
 absent or incomplete, the HTTP endpoint returns 503. Offline requests make no
 peer or origin requests and never create a replacement cache.
 
+An isolated Debian guest tested a genuine ECMWF temperature publication across
+its signed expiry. The Drizz.li loader received HTTP 503 after expiry, then read
+and displayed 9.0 °C from the replacement signed revision through the same local
+bridge. The guest had no network card. [Native cache-recovery run](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44445914018)
+
 The two products must describe the same public area, but may use different
 publishers, models, runs and lead times. Requests are sequential and share one
 retrieval slot; a timed-out request finishes cancellation before releasing its
@@ -351,9 +356,9 @@ precipitation delivery or simultaneous two-subflow bulk throughput.
 
 The complete topology run still exits unsuccessfully at a later, separate
 15 MiB adaptive-provider fetch (`CONTENT_UNAVAILABLE`). The successful Weather
-phase is not an all-green topology result. Interactive location selection,
-Drizz.li precipitation/particulate peer delivery and live mobile core integration
-remain required; this is not yet a complete cross-platform weather app.
+phase is not an all-green topology result. The later joined Drizz.li trial above
+covers precipitation and particulate peer delivery. Interactive location
+selection and a deployable mobile core remain open.
 
 ### Overmorrow client integration
 
