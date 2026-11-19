@@ -68,11 +68,13 @@ class SourceRecipeTests(unittest.TestCase):
 
     def test_fixed_profiles_and_self_inclusion(self):
         self.assertEqual(set(RECIPE.PROFILES), {"drizzli", "overmorrow"})
-        self.assertEqual(len(RECIPE.source_paths("drizzli")), 45)
-        self.assertEqual(len(RECIPE.source_paths("overmorrow")), 54)
-        self.assertEqual(len(set().union(*RECIPE.PROFILES.values())), 68)
+        self.assertEqual(len(RECIPE.source_paths("drizzli")), 46)
+        self.assertEqual(len(RECIPE.source_paths("overmorrow")), 55)
+        self.assertEqual(len(set().union(*RECIPE.PROFILES.values())), 69)
         for profile in RECIPE.PROFILES:
             self.assertIn(RECIPE.HELPER, RECIPE.source_paths(profile))
+            self.assertIn("scripts/prepare_hosted_decoder_environment.py", RECIPE.source_paths(profile))
+            self.assertFalse(any("environment-v1.json" in name for name in RECIPE.source_paths(profile)))
 
     def test_both_profiles_copy_exact_bytes_modes_hidden_workflows_and_licenses(self):
         for profile in RECIPE.PROFILES:
