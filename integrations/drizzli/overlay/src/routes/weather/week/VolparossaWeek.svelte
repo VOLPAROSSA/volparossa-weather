@@ -16,6 +16,8 @@
   let controller: AbortController | null = null;
   let expiryTimer: ReturnType<typeof setTimeout> | undefined;
   let airQualityExpiryTimer: ReturnType<typeof setTimeout> | undefined;
+  let weatherExpires = 0;
+  let airQualityExpires = 0;
   let requestVersion = 0;
   reportPageReady(() => !loading);
 
@@ -27,11 +29,12 @@
       const result = await fetchProvider(fetch, active.signal);
       if (current !== requestVersion) return;
       forecast = result;
+      weatherExpires = Date.parse(result.freshness.expires_at);
       expiryTimer = setTimeout(() => {
         if (current !== requestVersion) return;
         forecast = null;
         error = 'This forecast has expired. Refresh to request a valid publication.';
-      }, Math.max(0, Date.parse(result.freshness.expires_at) - Date.now()));
+      }, Math.max(0, weatherExpires - Date.now()));
     } catch {
       if (current !== requestVersion) return;
       error = 'VOLPAROSSA forecast unavailable. No other weather service was contacted.';
@@ -53,11 +56,12 @@
         throw new Error('AIR_QUALITY_AREA_MISMATCH');
       }
       airQuality = result;
+      airQualityExpires = Date.parse(result.freshness.expires_at);
       airQualityExpiryTimer = setTimeout(() => {
         if (current !== requestVersion) return;
         airQuality = null;
         airQualityError = 'This air-quality forecast has expired. Refresh to request a valid publication.';
-      }, Math.max(0, Date.parse(result.freshness.expires_at) - Date.now()));
+      }, Math.max(0, airQualityExpires - Date.now()));
     } catch {
       if (current !== requestVersion) return;
       airQualityError = 'VOLPAROSSA air-quality forecast unavailable or not configured. No other air-quality service was contacted.';
@@ -83,8 +87,17 @@
   }
 
   onMount(() => {
+    function refreshOnReturn() {
+      const now = Date.now();
+      if (document.visibilityState === 'visible' && !loading && !airQualityLoading
+          && ((weatherExpires > 0 && now >= weatherExpires) || (airQualityExpires > 0 && now >= airQualityExpires))) {
+        void refresh();
+      }
+    }
+    document.addEventListener('visibilitychange', refreshOnReturn);
     void refresh();
     return () => {
+      document.removeEventListener('visibilitychange', refreshOnReturn);
       ++requestVersion;
       controller?.abort();
       clearTimeout(expiryTimer);

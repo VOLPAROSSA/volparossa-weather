@@ -330,6 +330,66 @@ def refresh_idle(client):
     ''') is True
 
 
+def verify_foreground_refresh(client, fixture, click_refresh):
+    original = client.command('WebDriver:GetWindowHandle', {})['value']
+    other = client.command('WebDriver:NewWindow', {'type': 'tab', 'focus': True})['handle']
+
+    def switch(handle):
+        client.command('WebDriver:SwitchToWindow', {'handle': handle, 'focus': True})
+        wait_for(lambda: client.script("return document.visibilityState === 'visible';"))
+
+    def counts():
+        status = fixture_command(fixture, 'status')
+        return status['calls'], status['airQualityCalls']
+
+    switch(original)
+    client.script("""
+      document.documentElement.dataset.trialVisibility = '';
+      document.addEventListener('visibilitychange', () => {
+        document.documentElement.dataset.trialVisibility += document.hidden ? 'H' : 'V';
+      });
+    """)
+    before = counts()
+    switch(other)
+    time.sleep(0.3)
+    switch(original)
+    wait_for(lambda: client.script("return document.documentElement.dataset.trialVisibility === 'HV';"))
+    wait_for(lambda: refresh_idle(client))
+    require(counts() == before)
+    def both_products():
+        return client.script("""return [...document.querySelectorAll('section[aria-label^="VOLPAROSSA"]')]
+          .filter(section => section.querySelector('tbody tr')).length === 2;""")
+
+    def return_after(mode, delay):
+        before = counts()
+        switch(other)
+        time.sleep(delay)
+        fixture_command(fixture, mode)
+        require(counts() == before)
+        switch(original)
+        expected = (before[0] + 1, before[1] + 1)
+        wait_for(lambda: counts() == expected)
+        wait_for(lambda: refresh_idle(client))
+        require(counts() == expected)
+
+    for mode, restore in (('short-lived', 'valid'), ('aq-short-lived', 'aq-valid')):
+        click_refresh(mode)
+        require(both_products())
+        # Each fixture publication lasts 2.5 seconds. The background tab must stay quiet.
+        if mode == 'short-lived':
+            return_after('unavailable', 3)
+            require(client.script("""return !!document.querySelector('section[aria-label="VOLPAROSSA forecast"] [role="alert"]')
+              && !!document.querySelector('section[aria-label="VOLPAROSSA air quality"] tbody tr');"""))
+            return_after(restore, 0.3)
+        else:
+            return_after(restore, 3)
+        require(both_products())
+    wait_for(lambda: client.script("return document.documentElement.dataset.trialVisibility === 'HVHVHVHV';"))
+    switch(other)
+    client.command('WebDriver:CloseWindow', {})
+    switch(original)
+
+
 def precipitation_rows(valid_at, missing=False):
     """Independent expected display for the fixed synthetic 3/9/24-hour query."""
     require(type(valid_at) is list and len(valid_at) == 3 and all(type(value) is str for value in valid_at))
@@ -619,6 +679,10 @@ def inside(args, stage, work, node, browser_stage, metadata, source):
             wait_air_quality(client, ready['air_quality_valid_at'], 1)
         require(client.script('return location.pathname === "/en/weather/week/" && !document.querySelector("h1").textContent.includes("Amsterdam");'))
         report["checks"]["located_route_redirects"] = True
+        if args.foreground_refresh:
+            report['phase'] = 'foreground_refresh'
+            verify_foreground_refresh(client, fixture, click_refresh)
+            report['checks']['foreground_refresh_after_independent_expiry'] = True
         report["phase"] = "unsupported_maps"
         before = fixture_command(fixture, "status")
         navigate("/en/weather/maps/")
@@ -682,10 +746,13 @@ def main():
     parser.add_argument("--browser-root", type=Path, help="explicit canonical Browser checkout for helper imports")
     parser.add_argument("--precipitation", action="store_true", help="separate synthetic accumulated-precipitation scenario")
     parser.add_argument('--air-quality', action='store_true', help='separate synthetic native NOAA particulate forecast scenario')
+    parser.add_argument('--foreground-refresh', action='store_true', help='switch real Firefox tabs across independent publication expiry')
     parser.add_argument("--inside", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--fixture-only", action="store_true", help="test only child stop/EOF/signal, without Firefox")
     parser.add_argument("--host-netns", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.foreground_refresh and (not args.air_quality or args.fixture_only):
+        parser.error('--foreground-refresh requires --air-quality and a browser trial')
     stage, work, node, browser_stage = (path.resolve(strict=flag) for path, flag in
         ((args.stage, True), (args.output, False), (args.node, True), (args.browser_stage, True)))
     require(stage.parent == ROOT / "build" and work.parent == ROOT / "build" and stage != work)
