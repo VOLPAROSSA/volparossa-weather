@@ -485,8 +485,8 @@ export async function waitForObservation(check, deadline, remaining, millisecond
   throw new ObserverFailure('observation_deadline');
 }
 
-export async function tapNativeRefresh({ diagnostic, waitFor, snapshot, swipe, adb, remaining }) {
-  let previous = null, attempts = 0;
+async function findNativeRefreshTarget({ diagnostic, waitFor, snapshot, swipe }, previous = null) {
+  let attempts = 0;
   diagnostic.waitingFor = 'refresh_wait';
   const target = await waitFor(async () => {
     attempts++;
@@ -509,8 +509,14 @@ export async function tapNativeRefresh({ diagnostic, waitFor, snapshot, swipe, a
     return null;
   });
   diagnostic.waitingFor = null;
-  remaining();
-  await diagnostic.at('tap', () => adb(['shell', 'input', 'tap', String(Math.round(target.x)), String(Math.round(target.y))]));
+  return target;
+}
+
+export async function tapNativeRefresh(context, previous = null) {
+  const target = await findNativeRefreshTarget(context, previous);
+  context.remaining();
+  const args = ['shell', 'input', 'tap', String(Math.round(target.x)), String(Math.round(target.y))];
+  await context.diagnostic.at('tap', () => context.adb(args));
 }
 
 export async function observeVm({ adb, waitFor, pid, diagnostic, ownForward, ownVm, Socket = WebSocket }) {
@@ -749,9 +755,7 @@ export async function exerciseNativeProducts({ report, diagnostic, control, wait
     diagnostic.subphase = 'products_unobserved';
     throw new Error('mounted native products not observed');
   }
-  async function tapRefresh() {
-    await tapNativeRefresh({ diagnostic, waitFor, snapshot, swipe, adb, remaining });
-  }
+  const refreshControl = { diagnostic, waitFor, snapshot, swipe, adb, remaining };
   async function products(count, prepared) {
     diagnostic.waitingFor = 'product_count_wait';
     const result = await waitFor(async () => {
@@ -778,7 +782,7 @@ export async function exerciseNativeProducts({ report, diagnostic, control, wait
   const initial = await products(1, initialPrepared); report.observations.initial = await collect(initial);
   report.checks.initial_exact_native_rows = true;
   report.phase = 'actual-refresh'; diagnostic.beginProducts(2);
-  const refreshPrepared = await prepareNativePhase(phaseContext, 'refresh'); await tapRefresh();
+  const refreshPrepared = await prepareNativePhase(phaseContext, 'refresh'); await tapNativeRefresh(refreshControl);
   const refreshed = await products(2, refreshPrepared); report.observations.refresh = await collect(refreshed);
   await diagnostic.at('missing_values', () => {
     assert.equal(refreshed.products.weather.forecast.samples[0].temperature_2m, null);
@@ -786,8 +790,11 @@ export async function exerciseNativeProducts({ report, diagnostic, control, wait
   });
   report.checks.actual_tap_refresh_and_missing_values = true;
   report.phase = 'background-resume-expiry'; diagnostic.beginProducts(3);
+  // Scroll and settle before the 4.5-second publication exists. Recheck the
+  // same physical target after acquisition and before injecting the actual tap.
+  const readyTarget = await findNativeRefreshTarget(refreshControl);
   const shortPrepared = await diagnostic.timed('phase_prepare_ms', () => prepareNativePhase(phaseContext, 'short-lived'));
-  await diagnostic.timed('target_tap_ms', tapRefresh);
+  await diagnostic.timed('target_tap_ms', () => tapNativeRefresh(refreshControl, readyTarget));
   const short = await diagnostic.timed('products_ready_ms', () => products(3, shortPrepared));
   // App is at the footer after a real tap; the same native product widgets
   // must consume the response before Android takes the app to background.
