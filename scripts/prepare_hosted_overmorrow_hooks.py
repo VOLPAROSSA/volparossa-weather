@@ -310,9 +310,11 @@ class HookRun:
             check((task / 'hook.dill').stat().st_size > 0 and (task / 'hook.dill.d').stat().st_size > 0,
                   'P15_HOOK_KERNEL_MISSING', self.owner, ENTRY)
             value = document(task / 'input.json')
+            # Flutter passes the workspace pubspec to hooks_runner. With no
+            # package-specific defines, hooks serializes an empty envelope.
             check(type(value) is dict and set(value) == {
-                'config', 'out_dir_shared', 'out_file', 'package_name', 'package_root', 'assets'}
-                and same(value['config'], CONFIGS[action]) and same(value['assets'], {})
+                'config', 'out_dir_shared', 'out_file', 'package_name', 'package_root', 'assets', 'user_defines'}
+                and same(value['config'], CONFIGS[action]) and same(value['assets'], {}) and same(value['user_defines'], {})
                 and value['package_name'] == PACKAGE
                 and absolute(value['out_dir_shared'], shared_build, directory_path=True)
                 and absolute(value['out_file'], task / 'output.json')

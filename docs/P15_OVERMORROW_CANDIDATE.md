@@ -4,7 +4,16 @@ The November 19 integration uses protected Weather revision
 `2a38b8707428ddc35548b64cd26aa6b8eac89703` as its source-review base.
 The candidate constructs the offline Flutter package root from the signed
 Ubuntu snapshot and checks the packages against the existing Overmorrow lock.
-The latest recorded hosted trial below completed all 24 Flutter tests.
+The [November hosted trial](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44433873133)
+verified 235 signed packages and 4,946 regular file objects and completed all
+24 Flutter tests. It passed the shared-directory check and stopped at hook input
+validation. Flutter 3.38.5 passes its workspace pubspec to the runner.
+For a package with no configured defines, hooks_runner 0.23.0 constructs a
+`PackageUserDefines` with a null workspace entry and hooks 0.20.1 serializes
+`user_defines` as an empty object. The input check now requires this exact
+seventh field alongside the six fields in the October report. The public input
+contract rejects missing, null and populated envelopes.
+[Flutter producer](https://github.com/flutter/flutter/blob/f6ff1529fd6d8af5f706051d9251ac9231c83407/packages/flutter_tools/lib/src/isolated/native_assets/native_assets.dart#L218).
 
 **P15i preflight, 2026-10-31:** the complete hook-state contract is checked
 jointly against original producers for test and test-plus-web lifecycles. The

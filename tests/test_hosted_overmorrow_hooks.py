@@ -65,7 +65,7 @@ class HookTests(unittest.TestCase):
         self.write(task/'stderr.txt', b'')
         value = dict(config=copy.deepcopy(WIRE_CONFIGS[action]), out_dir_shared=str(shared)+'/',
             out_file=str(task/'output.json'), package_name=W['PACKAGE'],
-            package_root='/state/pub-cache/hosted/pub.dev/objective_c-9.5.0/', assets={})
+            package_root='/state/pub-cache/hosted/pub.dev/objective_c-9.5.0/', assets={}, user_defines={})
         self.write(task/'input.json', value)
         self.write(task/'output.json', dict(assets_for_linking={}, status='success', timestamp='2026-10-31 12:00:00.000'))
         self.write(self.stage/'.dart_tool/package_config.json', b'{"configVersion":2,"packages":[]}\n')
@@ -273,6 +273,9 @@ class HookTests(unittest.TestCase):
                         'hook.dependencies_hash_file.json', 'dependencies.dependencies_hash_file.json',
                         'native_assets.json') else 'utf8'
                     value = json.loads(path.read_text()) if kind == 'json' else path.read_text()
+                    if path.name == 'input.json':
+                        # Check Flutter's empty envelope separately from the October tree hashes.
+                        self.assertEqual(value.pop('user_defines'), {})
                     files[symbolic(str(path))] = dict(kind=kind, mode=path.stat().st_mode & 0o777, value=symbolic(value))
             fixture = dict(actions=actions, directory_mode=0o700, files=files,
                 hook_directories=sorted(symbolic(str(p)) for p in [self.run.root, *self.run.root.rglob('*')] if p.is_dir()),
@@ -471,9 +474,15 @@ class HookTests(unittest.TestCase):
         value['config']['extensions']['code_assets']['target_os']='macos'
         self.write(task/'input.json',value)
         with self.assertRaisesRegex(ValueError,'P15_HOOK_PROTOCOL_INPUT'):self.run.after('test')
-        value['config']=W['CONFIGS']['test'];value['user_defines']={}
-        self.write(task/'input.json',value)
-        with self.assertRaisesRegex(ValueError,'P15_HOOK_PROTOCOL_INPUT'):self.run.after('test')
+        value['config'] = W['CONFIGS']['test']
+        for replacement in (None, [], {'workspace_pubspec': {}}, {'arbitrary': True}):
+            self.write(task / 'input.json', dict(value, user_defines=replacement))
+            with self.assertRaisesRegex(ValueError, 'P15_HOOK_PROTOCOL_INPUT'):
+                self.run.after('test')
+        del value['user_defines']
+        self.write(task / 'input.json', value)
+        with self.assertRaisesRegex(ValueError, 'P15_HOOK_PROTOCOL_INPUT'):
+            self.run.after('test')
 
     def test_boolean_field_cannot_be_replaced_with_equal_integer(self):
         task=self.task('test');value=json.loads((task/'input.json').read_text())
