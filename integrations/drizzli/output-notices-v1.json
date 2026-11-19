@@ -1,0 +1,75 @@
+{
+  "admitted": false,
+  "kind": "p14-drizzli-supplemental-notices",
+  "notices": [
+    {
+      "archive": {
+        "bytes": 586488,
+        "expanded_bytes": 2375009,
+        "files_sha256": "253f21ce48f02b2dd47fd5e2836ec4bb305e9880e9c097454c3d93c8802c7f39",
+        "npm_root": "package",
+        "sha256": "d1e2250c6eb956e84df6b5d4f8127d420efa9142f393652c77a06906e79d69c3"
+      },
+      "bytes": 112425,
+      "integrity": "sha512-/bvH9E9tmCXRGp2uXY3WbOldqpTwFkbha/8ANaEQ6VkxhH60KyqLwgZq6lG2y+4uT55x9+9eUHMpQ7uGnOCKjA==",
+      "member": "LICENSE.md",
+      "output": "VOLPAROSSA-NOTICES/vite-LICENSE.md",
+      "package": "vite",
+      "sha256": "387dd7baa307083401a27c58c362c30832f5ba1dba84f10cc22c33401523f45c",
+      "source": "third_party/client-notices/p14-drizzli/vite-LICENSE.md",
+      "version": "8.3.1"
+    },
+    {
+      "archive": {
+        "bytes": 198125,
+        "expanded_bytes": 852997,
+        "files_sha256": "b92ef09ab5739b2bc3278d3309262715810c0f291f52449f0f6f2c07362fe6c7",
+        "npm_root": "package",
+        "sha256": "3acd96aab699f4936c223ebe60a52882a22aaa7dba22393f97b30729dd26516b"
+      },
+      "bytes": 1302,
+      "integrity": "sha512-qpSwIyz0jHQq5qXBTNxFmE6664rJ7O+4TvPFOiOaBSrz8IOHc1koKKSqTM2H6u1UG1+TveuC6vaDHKXFOvb1Kw==",
+      "member": "LICENSE",
+      "output": "VOLPAROSSA-NOTICES/rolldown-LICENSE",
+      "package": "rolldown",
+      "sha256": "23ecfff35a5a2e80d92142f75228912c3b1abc4b5a8337a821ff4397e2f9f734",
+      "source": "third_party/client-notices/p14-drizzli/rolldown-LICENSE",
+      "version": "1.2.11"
+    },
+    {
+      "archive": {
+        "bytes": 198125,
+        "expanded_bytes": 852997,
+        "files_sha256": "b92ef09ab5739b2bc3278d3309262715810c0f291f52449f0f6f2c07362fe6c7",
+        "npm_root": "package",
+        "sha256": "3acd96aab699f4936c223ebe60a52882a22aaa7dba22393f97b30729dd26516b"
+      },
+      "bytes": 2209,
+      "integrity": "sha512-qpSwIyz0jHQq5qXBTNxFmE6664rJ7O+4TvPFOiOaBSrz8IOHc1koKKSqTM2H6u1UG1+TveuC6vaDHKXFOvb1Kw==",
+      "member": "THIRD-PARTY-LICENSE",
+      "output": "VOLPAROSSA-NOTICES/rolldown-THIRD-PARTY-LICENSE",
+      "package": "rolldown",
+      "sha256": "a877291d800ed43692f3f9ae09d8e01cc6f7293ad39d43896059c188ffbb8b7c",
+      "source": "third_party/client-notices/p14-drizzli/rolldown-THIRD-PARTY-LICENSE",
+      "version": "1.2.11"
+    },
+    {
+      "archive": {
+        "bytes": 13023,
+        "expanded_bytes": 52699,
+        "files_sha256": "30fe689f4a997da9ae4194286c3a08c8c236cee895c590c6330912529ae7b915",
+        "npm_root": "package",
+        "sha256": "501dc52bd98e42fe86831a84b805d4555d2f725405a7a27c9d6ef4ebef5b8750"
+      },
+      "bytes": 1074,
+      "integrity": "sha512-IGjKp/o0NL3Bso1PymYURCJxMPNAf/ILOpendP9f5B6e1rTJgdgiOvgfoT8VxCAdY+Wisb9uhGaJJf3yZ2V9nw==",
+      "member": "LICENSE",
+      "output": "VOLPAROSSA-NOTICES/urlpattern-polyfill-LICENSE",
+      "package": "urlpattern-polyfill",
+      "sha256": "c7b9df332d06b323d491f98324dba24ed5b325161b081fab46e538dcb89bde81",
+      "source": "third_party/client-notices/p14-drizzli/urlpattern-polyfill-LICENSE",
+      "version": "10.1.0"
+    }
+  ],
+  "schema": 1
+}
