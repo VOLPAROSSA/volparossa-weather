@@ -688,6 +688,30 @@ class RuntimeBoundary(unittest.TestCase):
             self.assertIn('scripts/prepare_hosted_client_runtime.py',
                 runpy.run_path(str(ROOT / 'scripts/prepare_hosted_source_recipe.py'))['PROFILES'][profile])
 
+    def test_existing_android_workflows_have_only_their_original_inputless_entry_points(self):
+        event = self.root / 'android-event.json'
+        for repository, workflow, branch in (
+                ('VOLPAROSSA/volparossa-weather', 'Build hosted Android client', 'overmorrow-native-android'),
+                ('VOLPAROSSA/volparossa', 'Weather Android protected core delivery', 'weather-android-core')):
+            ref = 'refs/heads/feature/' + branch
+            for name, actual_ref, inputs, actual_repo, allowed in (
+                    ('workflow_dispatch', 'refs/heads/main', {}, repository, True),
+                    ('push', ref, {}, repository, True),
+                    ('pull_request', ref, {}, repository, False),
+                    ('push', 'refs/heads/main', {}, repository, False),
+                    ('workflow_dispatch', ref, {}, 'unrelated/repository', False),
+                    ('workflow_dispatch', ref, {'input_mode': 'drizzli-candidate-build'}, repository, False)):
+                with self.subTest(workflow=workflow, event=name, ref=actual_ref, repository=actual_repo, inputs=inputs):
+                    event.write_text(json.dumps({'inputs': inputs}))
+                    with patch.dict(os.environ, GITHUB_ACTIONS='true', GITHUB_EVENT_PATH=str(event),
+                                    GITHUB_EVENT_NAME=name, GITHUB_REF=actual_ref,
+                                    GITHUB_WORKFLOW=workflow, GITHUB_REPOSITORY=actual_repo):
+                        if allowed:
+                            H['require_runtime_boundary']()
+                        else:
+                            with self.assertRaisesRegex(ValueError, 'RUNTIME_BOUNDARY_REQUIRED'):
+                                H['require_runtime_boundary']()
+
     def test_actual_source_mode_cannot_fall_back_to_host_usr(self):
         event = self.root / 'source-event.json'
         event.write_text(json.dumps(dict(inputs=dict(input_mode='runtime-boundary-verification'))))

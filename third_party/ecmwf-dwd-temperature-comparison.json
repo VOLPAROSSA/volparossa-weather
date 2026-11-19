@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "kind": "retrospective-ecmwf-temperature-comparison-with-public-station",
+  "retrieved_utc_date": "2026-11-18",
+  "paired_station_hours": 1,
+  "normal_cli_prospective_capture_proven": false,
+  "model_run_utc": "2026-10-10T12:00:00.000Z",
+  "lead_hours": 24,
+  "nominal_valid_utc": "2026-10-11T12:00:00.000Z",
+  "forecast_source": {
+    "attribution": "ECMWF Open Data",
+    "license": "CC-BY-4.0",
+    "license_url": "https://creativecommons.org/licenses/by/4.0/",
+    "dataset_url": "https://www.ecmwf.int/en/forecasts/datasets/open-data",
+    "archive": "ECMWF Open Data on AWS",
+    "index_comparison": "third_party/ecmwf-precipitation-smoke.json",
+    "recorded_berlin_request": {
+      "latitude": 52.52,
+      "longitude": 13.41
+    }
+  },
+  "station": {
+    "id": "00433",
+    "name": "Berlin-Tempelhof",
+    "latitude": 52.4676,
+    "longitude": 13.402,
+    "height_above_ground_m": 2,
+    "nominal_time_basis": "UTC",
+    "variable": "TT_TU",
+    "observed_degC": 11.6,
+    "quality_code_QN_9": 1,
+    "quality_meaning": "Formal control only; the recent observation is provisional.",
+    "attribution": "Deutscher Wetterdienst, CDC hourly station observations of 2 m air temperature and humidity for Germany, v24.03",
+    "license": "CC-BY-4.0",
+    "terms_url": "https://opendata.dwd.de/climate_environment/CDC/Terms_of_use.pdf",
+    "dataset_description_url": "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/hourly/air_temperature/DESCRIPTION_obsgermany_climate_hourly_air_temperature_en.pdf",
+    "zip_url": "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/hourly/air_temperature/recent/stundenwerte_TU_00433_akt.zip",
+    "zip_sha256_at_retrieval": "54543fed98a4763cccd99464fa15424ce1414a4a3688fb648b4d7ce871e51225",
+    "zip_last_modified": "Wed, 18 Nov 2026 08:45:08 GMT",
+    "member_name": "produkt_tu_stunde_20250517_20261117_00433.txt",
+    "member_columns": [
+      "STATIONS_ID",
+      "MESS_DATUM",
+      "QN_9",
+      "TT_TU",
+      "RF_TU",
+      "eor"
+    ],
+    "original_row": "        433;2026101112;    1;  11.6;  77.0;eor"
+  },
+  "decoder": {
+    "name": "GDAL",
+    "version": "3.10.3",
+    "driver": "GRIB",
+    "parameter": "TMP",
+    "level": "2-HTGL",
+    "decoded_unit": "degC",
+    "raster_size": [
+      1440,
+      721
+    ],
+    "resolution_degrees": 0.25,
+    "column": 774,
+    "row": 150,
+    "grid_center": {
+      "latitude": 52.5,
+      "longitude": 13.5
+    },
+    "distance_to_station_km": 7.551065387954855,
+    "method": "Read one cell at the station with gdallocationinfo -wgs84; no interpolation."
+  },
+  "models": {
+    "ifs": {
+      "temperature_degC": 10.730126953125,
+      "error_degC": -0.869873046875,
+      "field_sha256": "5abb88c7343f1dd075dfee50c6fb6e0cdcbd53f8e503c5a79737eedcd924b909",
+      "content_range": "bytes 22824671-23487801/144945540",
+      "grib_source_last_modified": "Sat, 10 Oct 2026 19:34:06 GMT",
+      "grib_url": "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/20261010/12z/ifs/0p25/oper/20261010120000-24h-oper-fc.grib2",
+      "index_sha256": "3a6f96b346b9f230314ffe502d29f216933a6a3367c1cec932705617c62db8ed",
+      "index_url": "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/20261010/12z/ifs/0p25/oper/20261010120000-24h-oper-fc.index"
+    },
+    "aifs-single": {
+      "temperature_degC": 12.0708251953125,
+      "error_degC": 0.4708251953125,
+      "field_sha256": "ec7949d00698ba8d9ff4b8a0e7dfd1f63ed09fad0a8036a99684740211d64ef1",
+      "content_range": "bytes 85497735-86049895/87887942",
+      "grib_source_last_modified": "Sat, 10 Oct 2026 17:34:03 GMT",
+      "grib_url": "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/20261010/12z/aifs-single/0p25/oper/20261010120000-24h-oper-fc.grib2",
+      "index_sha256": "525035d702fa28fa218950d468a8d66cdb279e960679eceea807d629efdef159",
+      "index_url": "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/20261010/12z/aifs-single/0p25/oper/20261010120000-24h-oper-fc.index"
+    }
+  },
+  "error_definition": "forecast minus station, in degrees Celsius",
+  "scope": "One nominal station-hour. The ECMWF objects have archive Last-Modified values before forecast validity. Retrieval and decoding for this station occurred on 2026-11-18. The historical Berlin smoke used a different request location. The station measurement has formal quality control only. This case does not establish model skill."
+}

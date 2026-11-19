@@ -1,0 +1,208 @@
+[
+  {
+    "engine": "chromium",
+    "width": 1440,
+    "mode": "default",
+    "pageWidth": 1440,
+    "mesh": "mesh-desktop",
+    "peers": 6,
+    "edges": 8,
+    "cloudWidth": 392,
+    "evidenceWidth": 1301,
+    "stacked": false,
+    "initialVideoRequests": 0,
+    "accessibility": [],
+    "playback": {
+      "width": 1280,
+      "height": 1440,
+      "duration": 60.566667,
+      "captions": "showing",
+      "cues": 9
+    }
+  },
+  {
+    "engine": "chromium",
+    "width": 390,
+    "mode": "default",
+    "pageWidth": 390,
+    "mesh": "mesh-mobile",
+    "peers": 6,
+    "edges": 8,
+    "cloudWidth": 372,
+    "evidenceWidth": 353,
+    "stacked": true,
+    "initialVideoRequests": 0,
+    "playback": {
+      "width": 1280,
+      "height": 1440,
+      "duration": 60.566667,
+      "captions": "showing",
+      "cues": 9
+    }
+  },
+  {
+    "engine": "chromium",
+    "width": 320,
+    "mode": "default",
+    "pageWidth": 320,
+    "mesh": "mesh-mobile",
+    "peers": 6,
+    "edges": 8,
+    "cloudWidth": 302,
+    "evidenceWidth": 283,
+    "stacked": true,
+    "initialVideoRequests": 0
+  },
+  {
+    "engine": "chromium",
+    "width": 768,
+    "mode": "default",
+    "pageWidth": 768,
+    "mesh": "mesh-desktop",
+    "peers": 6,
+    "edges": 8,
+    "cloudWidth": 359,
+    "evidenceWidth": 718,
+    "stacked": false,
+    "initialVideoRequests": 0
+  },
+  {
+    "engine": "chromium",
+    "width": 1920,
+    "mode": "default",
+    "pageWidth": 1920,
+    "mesh": "mesh-desktop",
+    "peers": 6,
+    "edges": 8,
+    "cloudWidth": 393,
+    "evidenceWidth": 1294,
+    "stacked": false,
+    "initialVideoRequests": 0
+  },
+  {
+    "engine": "chromium",
+    "width": 1440,
+    "mode": "text-200",
+    "pageWidth": 1440,
+    "mesh": "mesh-desktop",
+    "peers": 6,
+    "edges": 8,
+    "cloudWidth": 388,
+    "evidenceWidth": 1301,
+    "stacked": false,
+    "initialVideoRequests": 0
+  },
+  {
+    "engine": "chromium",
+    "width": 320,
+    "mode": "text-200",
+    "pageWidth": 320,
+    "mesh": "mesh-mobile",
+    "peers": 6,
+    "edges": 8,
+    "cloudWidth": 283,
+    "evidenceWidth": 246,
+    "stacked": true,
+    "initialVideoRequests": 0
+  },
+  {
+    "engine": "chromium",
+    "width": 390,
+    "mode": "no-js",
+    "pageWidth": 390,
+    "mesh": "mesh-mobile",
+    "peers": 6,
+    "edges": 8,
+    "cloudWidth": 372,
+    "evidenceWidth": 353,
+    "stacked": true,
+    "initialVideoRequests": 0,
+    "playback": {
+      "width": 1280,
+      "height": 1440,
+      "duration": 60.566667,
+      "captions": "showing",
+      "cues": 9
+    }
+  },
+  {
+    "engine": "firefox",
+    "width": 390,
+    "mode": "default",
+    "pageWidth": 390,
+    "mesh": "mesh-mobile",
+    "peers": 6,
+    "edges": 8,
+    "cloudWidth": 372,
+    "evidenceWidth": 353,
+    "stacked": true,
+    "initialVideoRequests": 0,
+    "playback": {
+      "width": 1280,
+      "height": 1440,
+      "duration": 60.566992,
+      "captions": "showing",
+      "cues": 9
+    }
+  },
+  {
+    "engine": "firefox",
+    "width": 1440,
+    "mode": "default",
+    "pageWidth": 1440,
+    "mesh": "mesh-desktop",
+    "peers": 6,
+    "edges": 8,
+    "cloudWidth": 392,
+    "evidenceWidth": 1301,
+    "stacked": false,
+    "initialVideoRequests": 0,
+    "playback": {
+      "width": 1280,
+      "height": 1440,
+      "duration": 60.566992,
+      "captions": "showing",
+      "cues": 9
+    }
+  },
+  {
+    "engine": "webkit",
+    "width": 390,
+    "mode": "default",
+    "pageWidth": 390,
+    "mesh": "mesh-mobile",
+    "peers": 6,
+    "edges": 8,
+    "cloudWidth": 372,
+    "evidenceWidth": 353,
+    "stacked": true,
+    "initialVideoRequests": 0,
+    "playback": {
+      "width": 1280,
+      "height": 1440,
+      "duration": 60.567,
+      "captions": "showing",
+      "cues": 9
+    }
+  },
+  {
+    "engine": "webkit",
+    "width": 1440,
+    "mode": "default",
+    "pageWidth": 1440,
+    "mesh": "mesh-desktop",
+    "peers": 6,
+    "edges": 8,
+    "cloudWidth": 392,
+    "evidenceWidth": 1301,
+    "stacked": false,
+    "initialVideoRequests": 0,
+    "playback": {
+      "width": 1280,
+      "height": 1440,
+      "duration": 60.567,
+      "captions": "showing",
+      "cues": 9
+    }
+  }
+]

@@ -124,7 +124,18 @@ def require_runtime_boundary():
         legacy_push = event_name == "push" and mode == "" and (os.environ.get("GITHUB_WORKFLOW"),
             os.environ.get("GITHUB_REF")) in (("Build hosted Weather clients", "refs/heads/feature/hosted-weather-clients"),
                 ("Build hosted Overmorrow client", "refs/heads/feature/hosted-overmorrow"))
-        require(legacy_dispatch or legacy_push or BOUNDARY is not None, "RUNTIME_BOUNDARY_REQUIRED")
+        # Both installed-Android entry points predate input_mode. Their
+        # reviewed workflows have no dispatch inputs and one explicit push ref.
+        android_ref = {
+            ("VOLPAROSSA/volparossa-weather", "Build hosted Android client"):
+                "refs/heads/feature/overmorrow-native-android",
+            ("VOLPAROSSA/volparossa", "Weather Android protected core delivery"):
+                "refs/heads/feature/weather-android-core",
+        }.get((os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_WORKFLOW")))
+        android = android_ref is not None and not value.get("inputs", {}) and (
+            event_name == "workflow_dispatch" or
+            event_name == "push" and os.environ.get("GITHUB_REF") == android_ref)
+        require(legacy_dispatch or legacy_push or android or BOUNDARY is not None, "RUNTIME_BOUNDARY_REQUIRED")
 
 
 def available_memory():

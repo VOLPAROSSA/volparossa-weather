@@ -1,0 +1,245 @@
+{
+  "schema": "volparossa.weather.archived-temperature-verification.v1",
+  "model_run_at": "2026-10-10T12:00:00.000Z",
+  "lead_hours": 24,
+  "retrieved_utc_date": "2026-11-18",
+  "availability_basis": "supplied-archive-last-modified",
+  "prospective_capture_proven": false,
+  "decoder": "GDAL 3.10.3, released 2025/04/01",
+  "attribution": "ECMWF Open Data, CC BY 4.0. Selected native grid cells and converted Kelvin to Celsius.",
+  "forecast_sources": [
+    {
+      "model": "ifs",
+      "last_modified_at": "2026-10-10T19:34:06.000Z",
+      "index_url": "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/20261010/12z/ifs/0p25/oper/20261010120000-24h-oper-fc.index",
+      "index_sha256": "3a6f96b346b9f230314ffe502d29f216933a6a3367c1cec932705617c62db8ed",
+      "grib_url": "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/20261010/12z/ifs/0p25/oper/20261010120000-24h-oper-fc.grib2",
+      "field_sha256": "5abb88c7343f1dd075dfee50c6fb6e0cdcbd53f8e503c5a79737eedcd924b909",
+      "range_start": 22824671,
+      "range_length": 663131
+    },
+    {
+      "model": "aifs-single",
+      "last_modified_at": "2026-10-10T17:34:03.000Z",
+      "index_url": "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/20261010/12z/aifs-single/0p25/oper/20261010120000-24h-oper-fc.index",
+      "index_sha256": "525035d702fa28fa218950d468a8d66cdb279e960679eceea807d629efdef159",
+      "grib_url": "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/20261010/12z/aifs-single/0p25/oper/20261010120000-24h-oper-fc.grib2",
+      "field_sha256": "ec7949d00698ba8d9ff4b8a0e7dfd1f63ed09fad0a8036a99684740211d64ef1",
+      "range_start": 85497735,
+      "range_length": 552161
+    }
+  ],
+  "coverage": {
+    "stations": 4,
+    "grid_cells": 3,
+    "candidate_station_times": 4,
+    "paired": 4,
+    "excluded": 0
+  },
+  "stations": [
+    {
+      "observation_file": {
+        "url": "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/hourly/air_temperature/recent/stundenwerte_TU_00403_akt.zip",
+        "sha256": "5c4f1509768c7892f47116724742d6ce2dede6ea98ac636d2a113209785edcb6"
+      },
+      "observations": {
+        "source": "Deutscher Wetterdienst (DWD), hourly 2 m station observations, Berlin-Dahlem (FU)",
+        "license": "CC-BY-4.0",
+        "station": {
+          "id": "00403",
+          "latitude": 52.4537,
+          "longitude": 13.3017
+        },
+        "declared_sharing": "public",
+        "declared_purpose": "retrospective-evaluation",
+        "source_authenticated": false
+      },
+      "coverage": {
+        "candidate_times": 1,
+        "paired": 1,
+        "excluded": 0
+      },
+      "models": {
+        "ifs": {
+          "mean_error_degC": 0.21762695312500036,
+          "mean_absolute_error_degC": 0.21762695312500036
+        },
+        "aifs-single": {
+          "mean_error_degC": 0.40207519531250036,
+          "mean_absolute_error_degC": 0.40207519531250036
+        }
+      },
+      "cases": [
+        {
+          "valid_at": "2026-10-11T12:00:00.000Z",
+          "lead_hours": 24,
+          "grid": {
+            "latitude": 52.5,
+            "longitude": 13.25,
+            "distance_km": 6.226210111935156
+          },
+          "observation_quality": "provisional",
+          "observation_statistic": "nominal-synoptic-hour",
+          "ifs_degC": 11.917626953125,
+          "aifs_single_degC": 12.1020751953125,
+          "observed_degC": 11.7,
+          "ifs_error_degC": 0.21762695312500036,
+          "aifs_single_error_degC": 0.40207519531250036
+        }
+      ]
+    },
+    {
+      "observation_file": {
+        "url": "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/hourly/air_temperature/recent/stundenwerte_TU_00420_akt.zip",
+        "sha256": "51c7a18e0ef98f216aca6ff3a55fcb3172a884b7b158448f0f92d6e5a0eb8595"
+      },
+      "observations": {
+        "source": "Deutscher Wetterdienst (DWD), hourly 2 m station observations, Berlin-Marzahn",
+        "license": "CC-BY-4.0",
+        "station": {
+          "id": "00420",
+          "latitude": 52.5447,
+          "longitude": 13.5598
+        },
+        "declared_sharing": "public",
+        "declared_purpose": "retrospective-evaluation",
+        "source_authenticated": false
+      },
+      "coverage": {
+        "candidate_times": 1,
+        "paired": 1,
+        "excluded": 0
+      },
+      "models": {
+        "ifs": {
+          "mean_error_degC": -0.7698730468750004,
+          "mean_absolute_error_degC": 0.7698730468750004
+        },
+        "aifs-single": {
+          "mean_error_degC": 0.5708251953124996,
+          "mean_absolute_error_degC": 0.5708251953124996
+        }
+      },
+      "cases": [
+        {
+          "valid_at": "2026-10-11T12:00:00.000Z",
+          "lead_hours": 24,
+          "grid": {
+            "latitude": 52.5,
+            "longitude": 13.5,
+            "distance_km": 6.408916926790025
+          },
+          "observation_quality": "provisional",
+          "observation_statistic": "nominal-synoptic-hour",
+          "ifs_degC": 10.730126953125,
+          "aifs_single_degC": 12.0708251953125,
+          "observed_degC": 11.5,
+          "ifs_error_degC": -0.7698730468750004,
+          "aifs_single_error_degC": 0.5708251953124996
+        }
+      ]
+    },
+    {
+      "observation_file": {
+        "url": "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/hourly/air_temperature/recent/stundenwerte_TU_00433_akt.zip",
+        "sha256": "54543fed98a4763cccd99464fa15424ce1414a4a3688fb648b4d7ce871e51225"
+      },
+      "observations": {
+        "source": "Deutscher Wetterdienst (DWD), hourly 2 m station observations, Berlin-Tempelhof",
+        "license": "CC-BY-4.0",
+        "station": {
+          "id": "00433",
+          "latitude": 52.4676,
+          "longitude": 13.402
+        },
+        "declared_sharing": "public",
+        "declared_purpose": "retrospective-evaluation",
+        "source_authenticated": false
+      },
+      "coverage": {
+        "candidate_times": 1,
+        "paired": 1,
+        "excluded": 0
+      },
+      "models": {
+        "ifs": {
+          "mean_error_degC": -0.869873046875,
+          "mean_absolute_error_degC": 0.869873046875
+        },
+        "aifs-single": {
+          "mean_error_degC": 0.4708251953125,
+          "mean_absolute_error_degC": 0.4708251953125
+        }
+      },
+      "cases": [
+        {
+          "valid_at": "2026-10-11T12:00:00.000Z",
+          "lead_hours": 24,
+          "grid": {
+            "latitude": 52.5,
+            "longitude": 13.5,
+            "distance_km": 7.551065387954855
+          },
+          "observation_quality": "provisional",
+          "observation_statistic": "nominal-synoptic-hour",
+          "ifs_degC": 10.730126953125,
+          "aifs_single_degC": 12.0708251953125,
+          "observed_degC": 11.6,
+          "ifs_error_degC": -0.869873046875,
+          "aifs_single_error_degC": 0.4708251953125
+        }
+      ]
+    },
+    {
+      "observation_file": {
+        "url": "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/hourly/air_temperature/recent/stundenwerte_TU_03987_akt.zip",
+        "sha256": "bb2a405ac75547d53f46dee5b4fda7cbce51e2f07acd14e65c8bdd30e2505d30"
+      },
+      "observations": {
+        "source": "Deutscher Wetterdienst (DWD), hourly 2 m station observations, Potsdam",
+        "license": "CC-BY-4.0",
+        "station": {
+          "id": "03987",
+          "latitude": 52.3812,
+          "longitude": 13.0622
+        },
+        "declared_sharing": "public",
+        "declared_purpose": "retrospective-evaluation",
+        "source_authenticated": false
+      },
+      "coverage": {
+        "candidate_times": 1,
+        "paired": 1,
+        "excluded": 0
+      },
+      "models": {
+        "ifs": {
+          "mean_error_degC": 1.255126953125,
+          "mean_absolute_error_degC": 1.255126953125
+        },
+        "aifs-single": {
+          "mean_error_degC": 0.5333251953125,
+          "mean_absolute_error_degC": 0.5333251953125
+        }
+      },
+      "cases": [
+        {
+          "valid_at": "2026-10-11T12:00:00.000Z",
+          "lead_hours": 24,
+          "grid": {
+            "latitude": 52.5,
+            "longitude": 13,
+            "distance_km": 13.866462261623814
+          },
+          "observation_quality": "provisional",
+          "observation_statistic": "nominal-synoptic-hour",
+          "ifs_degC": 12.855126953125,
+          "aifs_single_degC": 12.1333251953125,
+          "observed_degC": 11.6,
+          "ifs_error_degC": 1.255126953125,
+          "aifs_single_error_degC": 0.5333251953125
+        }
+      ]
+    }
+  ]
+}

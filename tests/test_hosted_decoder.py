@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Inert recipe/validator tests; no compilation, downloads or native decoder execution."""
 import json
+import io
 import os
 from pathlib import Path
 import runpy
@@ -343,6 +344,59 @@ print('owned-child-reaped')
         with patch.object(sys, "argv", ["recipe", "plan"]), patch.dict(H["main"].__globals__,
                 plan=Mock(side_effect=H["CleanupUnconfirmed"]("unconfirmed"))):
             self.assertEqual(H["main"](), 125)
+
+    def test_cli_emits_bounded_fixed_diagnostic_without_exception_or_path_details(self):
+        canary = '/private/secret-argv-or-stderr'
+        errors = (
+            (ValueError('DEVELOPMENT_SSL_DATA_LINK'), 'ValueError', 'DEVELOPMENT_SSL_DATA_LINK'),
+            (ValueError(canary), 'ValueError', 'PREPARATION_FAILED'),
+            (OSError(2, canary, canary), 'OSError', 'PREPARATION_FAILED'),
+            (KeyError(canary), 'KeyError', 'PREPARATION_FAILED'),
+            (TypeError(canary), 'TypeError', 'PREPARATION_FAILED'),
+            (subprocess.CalledProcessError(7, [canary], output=canary, stderr=canary),
+                'SubprocessError', 'PREPARATION_FAILED'),
+            (subprocess.TimeoutExpired([canary], 1, output=canary, stderr=canary),
+                'SubprocessError', 'PREPARATION_FAILED'),
+        )
+        for error, category, code in errors:
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with self.subTest(error=type(error).__name__), \
+                    patch.object(sys, 'argv', ['recipe', 'capture-source-toolchain', '--output-dir', canary]), \
+                    patch.object(sys, 'stdout', stdout), patch.object(sys, 'stderr', stderr), \
+                    patch.dict(H['main'].__globals__, capture_source_toolchain=Mock(side_effect=error)):
+                self.assertEqual(H['main'](), 1)
+            lines = stderr.getvalue().splitlines()
+            self.assertEqual(lines[0], 'HOSTED_DECODER_PREPARATION_FAILED')
+            self.assertEqual(len(lines), 2)
+            self.assertEqual(stdout.getvalue(), '')
+            self.assertNotIn(canary, stderr.getvalue())
+            self.assertLess(len(lines[1]), 256)
+            self.assertEqual(json.loads(lines[1]), dict(schema=1, kind='hosted-decoder-preparation-failure',
+                action='capture-source-toolchain', category=category, code=code))
+
+    def test_diagnostic_code_and_category_are_closed_even_for_custom_exception_text(self):
+        class CustomValueError(ValueError):
+            def __str__(self):
+                raise AssertionError('exception text must not be inspected')
+        for error in (ValueError('lowercase'), ValueError('BAD-CODE'), ValueError('CODE\n'),
+                      ValueError('A' * 65), ValueError('CODE', '/private/path'), ValueError(42)):
+            with self.subTest(args=error.args):
+                self.assertEqual(H['preparation_failure']('build-source', error)['code'], 'PREPARATION_FAILED')
+        self.assertEqual(H['preparation_failure']('build-source', ValueError('A' * 64))['code'], 'A' * 64)
+        diagnostic = H['preparation_failure']('/private/action', CustomValueError('CODE_2'))
+        self.assertEqual(diagnostic['category'], 'ValueError')
+        self.assertEqual(diagnostic['action'], 'unknown')
+        self.assertEqual(diagnostic['code'], 'CODE_2')
+
+    def test_cli_interruption_and_unconfirmed_cleanup_keep_original_exit_and_marker(self):
+        for error, code, marker in ((H['BuildInterrupted']('private detail'), 130, 'DECODER_BUILD_INTERRUPTED'),
+                                   (H['CleanupUnconfirmed']('private detail'), 125, 'DECODER_CLEANUP_UNCONFIRMED')):
+            stderr = io.StringIO()
+            with self.subTest(code=code), patch.object(sys, 'argv', ['recipe', 'plan']), \
+                    patch.object(sys, 'stderr', stderr), \
+                    patch.dict(H['main'].__globals__, plan=Mock(side_effect=error)):
+                self.assertEqual(H['main'](), code)
+            self.assertEqual(stderr.getvalue(), marker + '\n')
 
     def test_signal_first_arriving_during_join_or_close_is_cleanup_unconfirmed(self):
         for location in ("wait", "close"):

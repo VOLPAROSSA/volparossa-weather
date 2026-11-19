@@ -62,8 +62,9 @@ const fs=require('node:fs'),crypto=require('node:crypto'),path=require('node:pat
 const args=process.argv.slice(2),read=key=>args[args.indexOf(key)+1];
 const name=read('--name'),kind=name==='synthetic.weather'?'weather':'air_quality';
 const cache=read('--cache'),reuse=args.includes('--reuse-cache'),marker=path.join(cache,'SYNTHETIC-NOT-A-CORE-CACHE');
-fs.appendFileSync(${JSON.stringify(callsPath)},JSON.stringify({kind,reuse,cache})+'\\n',{mode:0o600});
-if(args[2]!=='content'||args[3]!=='fetch-name'||args.includes('--cache-only'))process.exit(8);
+const offline=args.includes('--cache-only');
+fs.appendFileSync(${JSON.stringify(callsPath)},JSON.stringify({kind,reuse,cache,offline})+'\\n',{mode:0o600});
+if(args[2]!=='content'||args[3]!=='fetch-name'||offline&&!reuse)process.exit(8);
 const mode=JSON.parse(fs.readFileSync(${JSON.stringify(plan)},'utf8'))[kind]||'ok';
 try{
  if(reuse){if(fs.readFileSync(marker,'utf8')!=='synthetic-owned')throw Error('synthetic rejected cache');}
@@ -75,10 +76,11 @@ try{
  const bytes=Buffer.from(JSON.stringify(${JSON.stringify(data)}[kind])),output=read('--local-output');
  fs.writeFileSync(output,bytes,{mode:0o600,flag:'wx'});
  process.stdout.write(JSON.stringify({operation:'named_content_download',publisher_key:read('--publisher-key'),
- name,revision:2,manifest_id:'b'.repeat(64),publication_expires_unix_seconds:Math.floor(Date.now()/1000)+1200,
+ name,revision:2,manifest_id:'b'.repeat(64),publication_expires_unix_seconds:typeof mode==='object'?mode.expiry:Math.floor(Date.now()/1000)+1200,
  sha256:crypto.createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length,local_delivery:true,
  output_mode:'0600',ownership_changed:false,origin_authenticated:false,globally_latest:false,
- local_output:output,cache,cache_only:false}));
+ local_output:output,cache,cache_only:offline,peer_bytes:0,providers_used:0,origin_body_bytes:0,
+ origin_range_requests:0,provider_peer_ids:[],control_relay_peer_id:'',...mode.receipt}));
  }
 }catch{process.stderr.write('PRIVATE_SYNTHETIC_CORE_ERROR');process.exitCode=9;}
 `, { mode: 0o700 });
@@ -147,6 +149,45 @@ test('first actual GET creates through the default child, refresh and fresh serv
   assert.equal((await readdir(f.root)).some(name => name.startsWith('forecast-')), false);
   assert.deepEqual((await f.calls()).map(call => call.cache), [f.config.core.cache, f.config.airQuality.core.cache,
     f.config.core.cache, f.config.airQuality.core.cache, f.config.core.cache, f.config.airQuality.core.cache]);
+});
+
+test('offline GET reopens only populated caches, preserves product deadlines and refuses network receipts', async t => {
+  const f = await fixture(t), config = structuredClone(f.config);
+  config.core.cacheMode = config.airQuality.core.cacheMode = 'cache-only';
+  const offline = await f.start({ config });
+  assert.equal((await get(offline.origin)).status, 503);
+  await absent(config.core.cache);
+
+  const online = await f.start();
+  for (const path of [WEATHER, AQ]) assert.equal((await get(online.origin, path)).status, 200);
+  await online.close();
+  const { cacheMode, ...options } = config.core;
+  assert.equal(cacheMode, 'cache-only');
+  let observed;
+  await fetchCachedProvider({ ...options, cacheOnly: true }, { variables: config.variables,
+    observeReceipt: event => { observed = event; } });
+  assert.equal(observed.reuseCache, true);
+  const expiry = Math.floor(Date.now() / 1000) + 5;
+  await f.setPlan({ weather: { expiry } });
+  const prior = await get(offline.origin);
+  assert.equal(prior.status, 200);
+  assert.equal(prior.body.delivery.cache_only, true);
+  assert.equal(Date.parse(prior.body.freshness.expires_at), expiry * 1000);
+  await delay(Math.max(0, expiry * 1000 - Date.now()));
+  assert.deepEqual(await get(offline.origin), { status: 503, body: { error: 'FORECAST_UNAVAILABLE' } });
+  assert.equal((await get(offline.origin, AQ)).body.delivery.cache_only, true);
+
+  for (const receipt of [{ cache_only: false }, { peer_bytes: 1 }, { providers_used: 1 },
+    { provider_peer_ids: ['unexpected'] }, { control_relay_peer_id: 'unexpected' },
+    { origin_body_bytes: 1 }, { origin_range_requests: 1 }]) {
+    await f.setPlan({ weather: { expiry: expiry + 360, receipt } });
+    assert.equal((await get(offline.origin)).status, 503);
+  }
+  const calls = await f.calls();
+  assert.equal(calls.length, 14);
+  assert.deepEqual(calls.filter(call => !call.offline).map(call => call.kind), ['weather', 'air_quality']);
+  assert.ok(calls.filter(call => call.offline).every(call => call.reuse));
+  assert.equal((await readdir(f.root)).some(name => name.startsWith('forecast-')), false);
 });
 
 test('joined failure after synthetic core creation never retries; restart reopens retained cache', async t => {

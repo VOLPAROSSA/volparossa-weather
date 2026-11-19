@@ -1,0 +1,95 @@
+<div class="atlas">
+<section id="intro" aria-labelledby="atlas-title" class="plate opening">
+  <div class="opening-copy">
+    <p class="plate-label ruled">The Atlas of the Atmosphere</p>
+    <p class="product">VOLPAROSSA Weather</p>
+    <h1 id="atlas-title">One forecast.<br>More than one app.</h1>
+    <p class="opening-lead">Follow a public forecast from its model run to the weather apps that display it.</p>
+    <div class="atlas-actions"><a class="button print-primary" href="#demo"><span aria-hidden="true"><svg width="14" height="14" aria-hidden="true" viewBox="0 0 16 16"><path d="M3 2v12l11-6Z" fill="currentColor"/></svg></span> Watch the demo</a><a class="button print-outline" href="{{docs_url}}">Documentation</a></div>
+    <p class="develop"><span aria-hidden="true">●</span> Integration in development</p>
+  </div>
+  <figure class="chart-plate">
+    <div class="chart-composition">{{storm_picture}}<img class="cartography" src="assets/atlas/synoptic.svg" width="1000" height="660" alt="Illustrative synoptic chart with an Atlantic low, warm and cold fronts, and a red-hatched high over continental Europe."></div>
+    <figcaption>An illustrated synoptic chart of the North Atlantic and Europe.</figcaption>
+  </figure>
+  <div class="hero-key"><div class="key-box"><p class="plate-label">Synoptic map legend</p><ul>{{legend}}</ul></div>
+    <figure class="fox"><figcaption>VOLPAROSSA<br>Weather atlas</figcaption>{{fox_picture}}</figure>
+  </div>
+</section>
+
+<section id="demo" aria-labelledby="demo-title" class="plate demo-row">
+  <div class="screening">
+    <details class="film"><summary><span class="film-cover"><span class="sr-description">Play Weather Demo 0</span>{{film_picture}}<span class="cover-lettering" aria-hidden="true"><span class="plate-label">VOLPAROSSA Weather</span><strong>Weather<br>Demo 0</strong><span class="play-mark" aria-hidden="true"><svg width="14" height="14" aria-hidden="true" viewBox="0 0 16 16"><path d="M3 2v12l11-6Z" fill="currentColor"/></svg></span></span></span><span class="close-player">Close Weather Demo 0 <span aria-hidden="true">×</span></span></summary>
+    <template id="movie-player">{{movie}}</template><noscript>{{movie}}</noscript>
+    </details>
+    <div class="media-links"><a href="assets/demo/transcript-final.txt">Read transcript</a><span aria-hidden="true">·</span><a href="assets/demo/weather-demo-0-final.mp4">Open video file</a></div>
+  </div>
+  <div class="demo-copy"><h2 id="demo-title">See the forecast arrive.</h2><p>Watch Overmorrow display ECMWF weather and a NOAA fine-particle forecast on an Android emulator. The app connects to an external VOLPAROSSA Core running on Debian 13.</p>
+    <p class="note">One-minute development preview. A labelled excerpt is replayed and 13 seconds of loading are cut.</p><a class="ink-link" href="{{demo_release}}">Demo release and evidence {{north_east}}</a></div>
+  <div class="cloud-print">{{cloud_picture}}</div>
+</section>
+
+<section id="forecast-source" aria-labelledby="archive-title" class="plate archive-row">
+  <div class="archive-heading"><h2 id="archive-title">Where did <br>15.4 °C <br>come from?</h2></div>
+  <div class="archive-record"><p class="plate-label ruled">Archived forecast</p><p class="temperature">{{temperature}}</p>
+    <p class="source-line">Berlin · ECMWF IFS · Air temperature at 2 m</p>
+    <dl class="times"><div><dt>Model run</dt><dd><time datetime="{{run_iso}}">{{run_text}}</time></dd></div><div><dt>Valid for</dt><dd><time datetime="{{valid_iso}}">{{valid_text}}</time></dd></div><div><dt>Lead time</dt><dd>{{lead_hours}} hours</dd></div></dl></div>
+  <figure class="berlin-maps"><div class="map-pair"><img class="locator" src="assets/atlas/europe.svg" width="520" height="245" alt="Berlin in central Europe" loading="lazy"><div class="detail-map">{{inset}}</div></div>
+    <figcaption><span><i class="point" aria-hidden="true"></i> Public test point <b>{{test_coords}}</b></span><span><i class="cell" aria-hidden="true"></i> Model grid point <b>{{grid_coords}}</b></span><em>About {{distance}} km apart</em></figcaption></figure>
+  <div class="archive-source"><p>The decoder selected the model grid point nearest to the public Berlin test point. Its forecast of {{kelvin}} K converts to {{celsius}} °C, shown here to one decimal place.</p><div><a class="ink-link" href="{{berlin_record}}">Inspect the source record {{north_east}}</a><p class="note">Adapted from <a href="{{ecmwf_open_data}}">ECMWF Open Data</a> under <a href="{{cc_by_4}}">CC BY 4.0</a>. Nearest grid point selected and temperature converted to Celsius.</p></div></div>
+</section>
+
+<section id="shared-forecast" aria-labelledby="mesh-title" class="plate mesh-row">
+  <div class="mesh-intro"><h2 id="mesh-title">One forecast, several readers.</h2><p>A publisher can share a forecast for a chosen public area. Peers can deliver the same product to other readers. The model run, units and valid times stay with the data.</p>
+    <details class="atlas-detail"><summary>How readers check a forecast</summary><p>The reader checks the trusted publisher, file integrity and expiry. Reading a cached copy keeps the original forecast age. Point selection uses model fields locally. The owner explicitly chooses a public area to publish.</p></details></div>
+  <figure class="network"><p class="plate-label flanked">Decentralised mesh · Peer to peer</p>
+    <div class="network-line">
+      <div class="forecast-source"><div class="source-slip">
+        <svg viewBox="0 0 165 82" aria-hidden="true" preserveAspectRatio="none"><path d="M8 7Q20 3 43 6T86 6T130 5Q148 8 157 5Q164 12 160 29T159 54Q163 69 157 75Q137 72 115 76T69 74T30 74L7 77Q3 70 6 55T5 28Q3 14 8 7Z"/><path class="paper-fold" d="M13 58q31 3 57 1m14 1q34 3 64 -2M12 65q23 -2 46 1t48 0 44 -1M9 14q3 16 1 24m146 11q-1 11 1 18"/></svg>
+        <strong>Published<br>forecast</strong></div>
+        <div class="record-origin"><p>Origin: ECMWF IFS</p><p>Run: <time datetime="{{run_iso}}">{{run_text}}</time></p><p>Valid: <time datetime="{{valid_iso}}">{{valid_text}}</time></p></div>
+      </div>
+      <div class="peer-drawing">{{desktop_mesh}}{{mobile_mesh}}</div>
+      <div class="readers">
+        <div><svg viewBox="0 0 50 38" aria-hidden="true"><rect x="2" y="3" width="45" height="32" rx="3"/><path d="M3 10h43M6 7h2m2 0h2m2 0h2m4 0h21"/></svg><span>Drizz.li<small>(web)</small></span></div>
+        <div><svg viewBox="0 0 50 44" aria-hidden="true"><rect x="13" y="2" width="24" height="40" rx="3"/><path d="M17 5h16M14 36h22m-13 3h3"/></svg><span>Overmorrow<small>(Android)</small></span></div>
+      </div>
+    </div>
+    <figcaption><p class="network-caption">Model run and valid time stay with the forecast</p>
+      <p class="path-key"><span>Cooperating peers</span><span><i></i>A–B–C–F</span><span><i></i>A–D–E–F</span></p>Possible delivery routes for one public forecast. The diagram illustrates the network.</figcaption></figure>
+</section>
+
+<section id="forecast-fields" aria-labelledby="fields-title" class="plate fields-row">
+  <h2 id="fields-title">What do the numbers mean?</h2>
+  <dl class="field-register">
+    <div><dt><span class="plate-label">Temperature</span>{{thermometer}} °C</dt><dd>Air temperature at 2 m, for the model’s stated valid time.</dd></div>
+    <div><dt><span class="plate-label">Wind</span>{{wind}} m/s</dt><dd>Wind speed at 10 m. Direction is the bearing the wind comes from. At zero speed, direction is undefined.</dd></div>
+    <div><dt><span class="plate-label">Precipitation</span>{{rain}} mm</dt><dd>Total over the model’s stated accumulation window. Read both times with the amount. Windows can overlap.</dd></div>
+    <div><dt><span class="plate-label">Particles</span>{{particles}} µg/m³</dt><dd>NOAA GEFS-Aerosols supplies forecast PM2.5 and PM10 concentrations at its own valid times.</dd></div>
+  </dl>
+  <aside class="missing"><p class="plate-label">Example</p><strong>Unavailable</strong><p>A missing value stays unavailable. A reported zero is displayed as zero.</p></aside>
+</section>
+
+<div class="spread plate"><section id="apps" aria-labelledby="apps-title"><h2 id="apps-title">Two familiar views.</h2>
+  <figure class="devices"><div class="device-pair">
+  <div class="web-frame"><div class="window-bar" aria-hidden="true">○ ○ ○</div><b>Drizz.li</b><div class="mini-map"><img src="assets/atlas/synoptic.svg" width="1000" height="660" alt="" loading="lazy"></div><small>ECMWF IFS · Model forecast</small></div>
+  <div class="phone-frame"><div class="speaker" aria-hidden="true"></div><b>Overmorrow</b>{{cloud_sun}}<span>Weather</span><small>Forecast<br>valid time</small></div>
+  </div><figcaption>Interface illustrations</figcaption></figure>
+  <div class="client-notes"><details class="atlas-detail"><summary>Drizz.li integration</summary><p>The web client displayed a real ECMWF temperature and wind forecast delivered through Core. Rain and particle interactions have also been exercised with synthetic data.</p><a class="ink-link" href="{{drizzli}}">Drizz.li integration {{north_east}}</a></details>
+  <details class="atlas-detail"><summary>Overmorrow integration</summary><p>In an Android emulator, the installed debug app requested real weather and particle forecasts through an external Core. The trial recorded refreshes from cache and a return from the background.</p><a class="ink-link" href="{{overmorrow}}">Overmorrow integration {{north_east}}</a></details></div>
+</section>
+<section id="research" aria-labelledby="research-title"><p class="plate-label ruled">Research direction</p><h2 id="research-title">How could forecasts improve?</h2>
+  <p>A forecast can be compared with a later observation for the same place, time and variable. The project aims to test whether a correction improves on the original model in other places and periods.</p>
+  <figure class="timeline"><ol><li><i></i>Forecast recorded</li><li><i></i>Observation collected</li><li><i></i>Correction evaluated</li></ol><figcaption>Proposed evaluation using licensed observations.</figcaption></figure>
+</section></div>
+
+<section id="evidence" aria-labelledby="evidence-title" class="plate evidence-row">
+  <h2 id="evidence-title">What works today.<br>What comes next.</h2>
+  <div class="evidence-list"><h3 class="plate-label">Demonstrated</h3><ul><li>Direct model decoding with source and validity checks.</li><li>Peer delivery and reuse of real forecast products in scoped trials.</li><li>App-triggered retrieval, refresh and background/resume in an Android emulator.</li></ul><a class="ink-link" href="{{android_trial}}">Read the Android trial {{north_east}}</a></div>
+  <div class="evidence-list upcoming"><h3 class="plate-label">In development</h3><ul><li>Physical Android devices, iOS and a deployable mobile Core.</li><li>Automatic shared acquisition and recovery from real expired products.</li><li>Forecast corrections evaluated against independent observations.</li></ul><a class="ink-link" href="{{weather_evidence}}">Explore the Weather evidence {{north_east}}</a></div>
+  <div class="margin-cloud">{{margin_picture}}</div>
+</section></div>
+
+<section id="contribute" aria-labelledby="end-title" class="closing-band"><div class="closing-inner"><div class="closing-grid"><img src="assets/logo.png" width="64" height="64" alt=""><div><h2 id="end-title">Help build open weather tools.</h2><p>Help connect public forecasts to more readers and test them against observations.</p></div>
+  <div class="atlas-actions"><a class="button ghost" href="{{docs_url}}">Documentation</a><a class="button primary" href="{{project}}">{{github_icon}} Contribute on GitHub</a></div></div>
+  <div class="imprint"><div><a href="{{ecmwf_open_data}}">ECMWF</a> · <a href="{{noaa_data}}">NOAA</a> · <a href="{{drizzli}}">Drizz.li</a> · <a href="{{overmorrow}}">Overmorrow</a></div><a href="credits/">Sources and credits</a></div></div></section>
