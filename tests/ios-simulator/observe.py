@@ -48,9 +48,16 @@ def sim(*args, timeout=60):
 
 
 def capture(app, device, directory):
-    sim('boot', device)
-    sim('bootstatus', device, '-b', timeout=240)
-    sim('install', device, str(app), timeout=90)
+    # CoreSimulator starts system services and installs a full upstream debug
+    # bundle on the same runner. Give setup one bounded budget. The time
+    # available to the running application is measured separately below.
+    started = time.monotonic()
+    setup_deadline = started + 480
+    sim('bootstatus', device, '-b', timeout=setup_deadline - started)
+    booted = time.monotonic()
+    print(f'iPhone simulator booted in {booted - started:.1f}s', flush=True)
+    sim('install', device, str(app.resolve(strict=True)), timeout=max(.1, setup_deadline - booted))
+    print(f'Original app installed in {time.monotonic() - booted:.1f}s', flush=True)
     assert sim('get_app_container', device, BUNDLE, 'app').endswith('/Runner.app')
     pair = json.loads(subprocess.check_output(['node', HERE / 'fixture.mjs'], timeout=15))
     frames = []

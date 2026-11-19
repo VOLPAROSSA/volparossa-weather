@@ -5,6 +5,15 @@ on:
     paths:
       - .github/workflows/iphone-simulator.yml
       - tests/ios-simulator/**
+      - LICENSE
+      - integrations/overmorrow/stage.py
+      - integrations/overmorrow/upstream.json
+      - integrations/overmorrow/upstream.patch
+      - integrations/overmorrow/overlay/lib/**
+      - integrations/overmorrow/*fixture*.mjs
+      - integrations/drizzli/browser-fixture.mjs
+      - tests/*fixtures.mjs
+      - src/*.mjs
 permissions:
   contents: read
 concurrency:
