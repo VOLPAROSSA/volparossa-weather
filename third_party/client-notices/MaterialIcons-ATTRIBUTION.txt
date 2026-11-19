@@ -1,0 +1,9 @@
+Material Icons / MaterialIcons-Regular
+Copyright 2019 Google LLC. All Rights Reserved.
+Creator: Google LLC.
+Source: https://storage.googleapis.com/flutter_infra_release/flutter/fonts/3012db47f3130e62f7cc0beabff968a33cbec8d8/fonts.zip
+License: Creative Commons Attribution 4.0 International (CC-BY-4.0).
+https://creativecommons.org/licenses/by/4.0/
+The complete original MaterialIcons_LICENSE.txt is included as MaterialIcons-LICENSE.txt.
+This new source recipe copies the full font unchanged; no subsetting or icon tree shaking.
+No endorsement by Google LLC is asserted.

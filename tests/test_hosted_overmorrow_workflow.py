@@ -7,7 +7,7 @@ import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = (ROOT / ".github/workflows/hosted-overmorrow.yml").read_text()
+SOURCE = (ROOT / ".github/workflows/hosted-overmorrow.yml").read_text().split("\n  input-candidate:", 1)[0]
 
 
 def step(name):

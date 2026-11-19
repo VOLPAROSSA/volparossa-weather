@@ -8,6 +8,7 @@ working-tree changes are not imported. Without it, only the exact upstream SHA
 is fetched. Failures leave the new directory for inspection, never erase it.
 """
 import argparse
+import runpy
 import hashlib
 import json
 import pathlib
@@ -28,7 +29,7 @@ def git(destination, *args):
                           timeout=240).stdout.strip()
 
 
-def stage(destination, source=None):
+def stage(destination, source=None, *, source_recipe=False):
     metadata = json.loads((HERE / "upstream.json").read_text())
     destination = pathlib.Path(destination).absolute()
     build = (ROOT / "build").resolve()
@@ -81,6 +82,10 @@ def stage(destination, source=None):
         shutil.copyfile(ROOT / relative, target)
     shutil.copyfile(ROOT / "LICENSE", destination / "LICENSE.VOLPAROSSA")
     git(destination, "diff", "--check")
+    if source_recipe:
+        # Data-only source preparation; no dependency/compiler execution.
+        inputs = runpy.run_path(str(ROOT / "scripts/prepare_hosted_client_inputs.py"))
+        inputs["prepare_source_stage"]("drizzli", destination)
     return {"schema": 1, "upstream_commit": metadata["commit"], "staged": True,
             "dependencies_installed": False, "built": False, "browser_tested": False}
 
@@ -89,10 +94,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--destination", required=True)
     parser.add_argument("--source-clone")
+    parser.add_argument("--source-recipe", action="store_true", help="new source recipe only; historical recipe is the default")
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
     if not args.execute:
         print(json.dumps({"execute": False, "action": "stage exact upstream source and local patches only",
                           "install_dependencies": False, "run_upstream_scripts": False}))
     else:
-        print(json.dumps(stage(args.destination, args.source_clone)))
+        print(json.dumps(stage(args.destination, args.source_clone, source_recipe=args.source_recipe)))
