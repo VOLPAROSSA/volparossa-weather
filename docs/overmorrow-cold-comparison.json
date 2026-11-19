@@ -1,0 +1,372 @@
+{
+  "declared_app_assets_verified": 35,
+  "kind": "p15-overmorrow-build-comparison",
+  "october_comparison": {
+    "added": [
+      "source-font-notices/MaterialIcons-ATTRIBUTION.txt",
+      "source-font-notices/MaterialIcons-LICENSE.txt",
+      "source-font-notices/NotoSans-OFL.txt"
+    ],
+    "changed": [
+      "assets/fonts/MaterialIcons-Regular.otf",
+      "main.dart.js"
+    ],
+    "compared_fields": [
+      "path",
+      "bytes",
+      "sha256"
+    ],
+    "core_source": "f3d00aac42ac75f96a66e042aba3eefcede2ec33",
+    "manifest": "tests/integration/weather-public-overmorrow-v5.json",
+    "removed": [],
+    "same_files": 59,
+    "sha256": "ae5737106fa68f9da706e360181b5b46066a867d7b970341e4d2b31bfa4e5a6e"
+  },
+  "output": {
+    "bytes": 24608666,
+    "files": 64,
+    "inventory": {
+      "LICENSE.VOLPAROSSA.txt": {
+        "bytes": 35149,
+        "mode": 384,
+        "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+      },
+      "LICENSE.txt": {
+        "bytes": 35128,
+        "mode": 384,
+        "sha256": "3743f7a4ab5132f7dbeb88e68097657ab8374e74b46b6402efbe80ccfb1b6488"
+      },
+      "assets/AssetManifest.bin": {
+        "bytes": 3094,
+        "mode": 384,
+        "sha256": "05197b1cfec9582d9d16d888ce56b933fb9b1f66185947514a162d1d81b5255e"
+      },
+      "assets/AssetManifest.bin.json": {
+        "bytes": 4130,
+        "mode": 384,
+        "sha256": "81f7d762695a7974272b5da5f0b1809a59d9dd3aa61ad4bbcd4ac88679a9b1aa"
+      },
+      "assets/FontManifest.json": {
+        "bytes": 163,
+        "mode": 384,
+        "sha256": "9c6b63d6dd90ff7e5ef39af16d2060d2416826f6942fe4faaebac39e830b8a58"
+      },
+      "assets/NOTICES": {
+        "bytes": 1472134,
+        "mode": 384,
+        "sha256": "56b18ec837108e97a94ff8a1759174226e4316cc00dbd9af8215ecb1f3b2c7a8"
+      },
+      "assets/assets/backdrops/clear_night.jpg": {
+        "bytes": 115873,
+        "mode": 384,
+        "sha256": "41108c0c92759902a855b70b803645a96830d3a95bb6fb1d8f19a2332cac3984"
+      },
+      "assets/assets/backdrops/clear_night_color.jpg": {
+        "bytes": 156692,
+        "mode": 384,
+        "sha256": "77924d274126b3462b2e84091b0ea70e580abd0cc5944e967dd40a7034a6168d"
+      },
+      "assets/assets/backdrops/clear_sky3.jpg": {
+        "bytes": 159064,
+        "mode": 384,
+        "sha256": "d91ed77944caf1d419ff1a7fa846902cbfeae16f897d19069bb1a93f2dcf0324"
+      },
+      "assets/assets/backdrops/cloudy13.jpg": {
+        "bytes": 147981,
+        "mode": 384,
+        "sha256": "418ff27683c95364a1e05067c8c75ee79a9a91cded9f7e1ddf33b160efd97448"
+      },
+      "assets/assets/backdrops/drizzle.jpg": {
+        "bytes": 71304,
+        "mode": 384,
+        "sha256": "523240f7b8af49df308d06fb51e94e0f439e726f5f3cee8ee4daf0a2f8ff3ee6"
+      },
+      "assets/assets/backdrops/fog2.jpg": {
+        "bytes": 262810,
+        "mode": 384,
+        "sha256": "6a7f036f6d2531bd9328730f279badc307d7a0fb5c96e7eeb1dfea0d09ba7904"
+      },
+      "assets/assets/backdrops/grayscale_snow2.jpg": {
+        "bytes": 63204,
+        "mode": 384,
+        "sha256": "7712c17997c27f34d33b3aaa0a6c7f1df266d39ac9a4f9d7a1b5a72ba4e8f4b4"
+      },
+      "assets/assets/backdrops/haze.jpg": {
+        "bytes": 254195,
+        "mode": 384,
+        "sha256": "17237ee84b6ed9dee35f16258c70bdd54937faf9a3b4f65e255101081790a78d"
+      },
+      "assets/assets/backdrops/heavy_rainy_sky.jpg": {
+        "bytes": 411962,
+        "mode": 384,
+        "sha256": "3aa0f82d3b4ed679e8b24f738fec7c7ed36ff642da4135c5ccb5aeef370adcad"
+      },
+      "assets/assets/backdrops/heavy_snow.jpg": {
+        "bytes": 443928,
+        "mode": 384,
+        "sha256": "a9a97c2eadbd5d8700c36c169283b421e35fc30938f24b4e92e507117d7015dd"
+      },
+      "assets/assets/backdrops/overcast4.jpg": {
+        "bytes": 827490,
+        "mode": 384,
+        "sha256": "0fe44b76e8d2cd0c022147563cb33853d29d63cb8af8b59ec8564d4eb55b9e3d"
+      },
+      "assets/assets/backdrops/rainy_colorfull.jpg": {
+        "bytes": 616134,
+        "mode": 384,
+        "sha256": "5e13ab7b1978cdd24c19b98228a106894ec5725d99e1cea5e2cc3737b5e6db56"
+      },
+      "assets/assets/backdrops/sleet.jpg": {
+        "bytes": 216629,
+        "mode": 384,
+        "sha256": "778eadb1e1e467792f2d5241b68805915d2ee272e31d048c2ba11d424461cff1"
+      },
+      "assets/assets/backdrops/snowy_sky.jpg": {
+        "bytes": 167844,
+        "mode": 384,
+        "sha256": "19df61eec720007773e36c6837ba16ec986fb61b0dcd5ef46cadc012845c55b7"
+      },
+      "assets/assets/backdrops/thunderstorm4.jpg": {
+        "bytes": 205887,
+        "mode": 384,
+        "sha256": "2adb473a6623638e7eb221b542ade7816cc1114f4e11f5c7c3398d8c41cae53c"
+      },
+      "assets/assets/icons/icon.png": {
+        "bytes": 11575,
+        "mode": 384,
+        "sha256": "6660c744c9789188da25372b2ceb2fd3aee1bc034fcf0bbf962781198e0483b1"
+      },
+      "assets/assets/m3shapes/12_sided_cookie.svg": {
+        "bytes": 4044,
+        "mode": 384,
+        "sha256": "646d86d53472072478544a9c6078c3e0d6b5aaeb383cc68eac450d2dadb8bdc0"
+      },
+      "assets/assets/m3shapes/4_sided_cookie.svg": {
+        "bytes": 864,
+        "mode": 384,
+        "sha256": "a62e1b615b0e4c8605f95065de30558d6b25bf4c9fe5825784b7f0f39d77a902"
+      },
+      "assets/assets/m3shapes/9_sided_cookie.svg": {
+        "bytes": 2290,
+        "mode": 384,
+        "sha256": "c775f0d842952d0880c887483da3c587d8d1b2fc3a98cd933713f1062be0d593"
+      },
+      "assets/assets/m3shapes/arrow.svg": {
+        "bytes": 1351,
+        "mode": 384,
+        "sha256": "d626b62df2a5008127b2672fb8dedaf659d4056bb90c93c4377c076d3dc9552e"
+      },
+      "assets/assets/map/style.json": {
+        "bytes": 19810,
+        "mode": 384,
+        "sha256": "902bec7a9201126cff0b8fb40d8e38a9275dcecd75e0e1727efd83e14acc1c73"
+      },
+      "assets/assets/weather_icons/clear_night.svg": {
+        "bytes": 1206,
+        "mode": 384,
+        "sha256": "7408fd472b9699a415acbf062866d2806ea08004f3bbfb2a7e177456aaa99659"
+      },
+      "assets/assets/weather_icons/clear_sky.svg": {
+        "bytes": 1083,
+        "mode": 384,
+        "sha256": "340ef584196991aee3fe0fbccf7c5429fe7428d548982e733361ee039776a3b3"
+      },
+      "assets/assets/weather_icons/cloudy.svg": {
+        "bytes": 1075,
+        "mode": 384,
+        "sha256": "15eae7c37e0646949b73ae6dd1f210cc33edda022edc38da4f6bb47a6d703664"
+      },
+      "assets/assets/weather_icons/cloudy_night.svg": {
+        "bytes": 1649,
+        "mode": 384,
+        "sha256": "7c951f21c30e989b5f7f50096176a171213fd8623f77aabce475457b5f319a82"
+      },
+      "assets/assets/weather_icons/drizzle.svg": {
+        "bytes": 3759,
+        "mode": 384,
+        "sha256": "eac7fa86150d5c180618c0d9f3c1dcd7d1c29de4aa1e518bef78705d1a21849f"
+      },
+      "assets/assets/weather_icons/fog.svg": {
+        "bytes": 4932,
+        "mode": 384,
+        "sha256": "43ef7ac9e839e7c0b7613fa48e67884ed3ab7ea5e08003776987ba863b034ba2"
+      },
+      "assets/assets/weather_icons/haze.svg": {
+        "bytes": 2973,
+        "mode": 384,
+        "sha256": "7c36413de8ae4e22a61f91df73345f89d2bf18119a27b9bc803235307c364d9a"
+      },
+      "assets/assets/weather_icons/heavy_rain.svg": {
+        "bytes": 1868,
+        "mode": 384,
+        "sha256": "0b5de311fa4d68455def23b0b631a8f917c1842156887d3df62ef423dcb9b32b"
+      },
+      "assets/assets/weather_icons/heavy_snow.svg": {
+        "bytes": 1965,
+        "mode": 384,
+        "sha256": "98792455fa4af023473e189e76cc6c16f886b96e702ca0c6ca2453b86c11a51d"
+      },
+      "assets/assets/weather_icons/partly_cloudy.svg": {
+        "bytes": 1464,
+        "mode": 384,
+        "sha256": "444beed5f48ef1e45bc02a431e3532299c32a61f6c73b37b9cab5e35905695b3"
+      },
+      "assets/assets/weather_icons/rain.svg": {
+        "bytes": 2655,
+        "mode": 384,
+        "sha256": "908313f50d6012f42620ffde0ca1c75145cd3373e071e60d3df140f8798c5a30"
+      },
+      "assets/assets/weather_icons/sleet.svg": {
+        "bytes": 2674,
+        "mode": 384,
+        "sha256": "1507703e5f50aaff9ffa429378d536798fa47d9f7a3da72dd5e76c1a0a839429"
+      },
+      "assets/assets/weather_icons/snow.svg": {
+        "bytes": 1952,
+        "mode": 384,
+        "sha256": "7a14ae0b1b28eda57abce82e90fb21752e3eb20aa4a5e1f8ef0e15030c6d5cca"
+      },
+      "assets/assets/weather_icons/thunderstorm.svg": {
+        "bytes": 2228,
+        "mode": 384,
+        "sha256": "8287318ecc8c576753dca3950adfd5d0be4fdb6cb9765847ce7f8b983f0dc073"
+      },
+      "assets/fonts/MaterialIcons-Regular.otf": {
+        "bytes": 1645184,
+        "mode": 384,
+        "sha256": "d9865b671a09d683d13a863089d8825e0f61a37696ce5d7d448bc8023aa62453"
+      },
+      "assets/fonts/NotoSans_Condensed-Regular.ttf": {
+        "bytes": 628576,
+        "mode": 384,
+        "sha256": "a33452e68cae1307a4b168c501e12d143e18c210db45102d2e8d852ce7986bb5"
+      },
+      "assets/packages/flutter_map/lib/assets/flutter_map_logo.png": {
+        "bytes": 2424,
+        "mode": 384,
+        "sha256": "6051ae42fb505931a833e58f9209a9f96669a4d0e4b3f06f6d82cde12a0e0401"
+      },
+      "assets/shaders/ink_sparkle.frag": {
+        "bytes": 8867,
+        "mode": 384,
+        "sha256": "e01b61b394cf66a641bea87e3b4fe3787d372f636c8bc8a2a67438cdc29da6f6"
+      },
+      "assets/shaders/stretch_effect.frag": {
+        "bytes": 6714,
+        "mode": 384,
+        "sha256": "fa9ccf8e429631a461c7a7c644daba811a53463f78aa2ad023e0e9c81b815b4a"
+      },
+      "canvaskit/canvaskit.js": {
+        "bytes": 86619,
+        "mode": 384,
+        "sha256": "5b96deff653e229163d08bb51e5f17f0831397fd17d4ddbb3d872642738ef9ab"
+      },
+      "canvaskit/canvaskit.wasm": {
+        "bytes": 7083768,
+        "mode": 384,
+        "sha256": "98ff521224f8c66763d6772c94b9773d29c7fb8cd2e53342bf6e3c8203b84b4d"
+      },
+      "canvaskit/chromium/canvaskit.js": {
+        "bytes": 86256,
+        "mode": 384,
+        "sha256": "e97a3ac057e9d8c9e80b024f2d72c005d21a1f8d98e3e33f439f3744d544f88a"
+      },
+      "canvaskit/chromium/canvaskit.wasm": {
+        "bytes": 5708955,
+        "mode": 384,
+        "sha256": "de186b1791a7de02d9cafe60ab99ff9fe018e1ae53d9c0e190b7737464d49d17"
+      },
+      "favicon.png": {
+        "bytes": 689,
+        "mode": 384,
+        "sha256": "618fc91ccc0e0c078b686c95eaf66e9dbeb803142b19defed2dbbc7aec44a79d"
+      },
+      "flutter.js": {
+        "bytes": 9412,
+        "mode": 384,
+        "sha256": "ed5d5920a9868a8b93d790a9aae4165a62962728d4abbec5a14f600d73c53bd3"
+      },
+      "flutter_bootstrap.js": {
+        "bytes": 9804,
+        "mode": 384,
+        "sha256": "9a95291c7a72b1fe9e225ed675cc293826fce09a9cd5f4dce3f5fbc9cd93cab5"
+      },
+      "icons/Icon-192.png": {
+        "bytes": 9491,
+        "mode": 384,
+        "sha256": "63e6aba24e023bfb7c2b393ec9cb9b891b9b5e5e164c01e1c4371300fe29088f"
+      },
+      "icons/Icon-512.png": {
+        "bytes": 43169,
+        "mode": 384,
+        "sha256": "ed7640c68544464fbe25860631b6568a93fe1cb89d115bdf301b36fc935010e5"
+      },
+      "icons/Icon-maskable-192.png": {
+        "bytes": 9491,
+        "mode": 384,
+        "sha256": "63e6aba24e023bfb7c2b393ec9cb9b891b9b5e5e164c01e1c4371300fe29088f"
+      },
+      "icons/Icon-maskable-512.png": {
+        "bytes": 43169,
+        "mode": 384,
+        "sha256": "ed7640c68544464fbe25860631b6568a93fe1cb89d115bdf301b36fc935010e5"
+      },
+      "index.html": {
+        "bytes": 1201,
+        "mode": 384,
+        "sha256": "f5b440e6b7cd86972bbd763ea4bfa877c23c1463d7ed84b5912683fd4e983543"
+      },
+      "main.dart.js": {
+        "bytes": 3458160,
+        "mode": 384,
+        "sha256": "246f13eb8486d795b4d45e5a7c97f29faa29ab67bc74ad5c219e8cfd1ee203aa"
+      },
+      "manifest.json": {
+        "bytes": 916,
+        "mode": 384,
+        "sha256": "d7c5a2ddb96ce0699d7dd9a567db3eb86d5087177a44806a90e66554c8605a22"
+      },
+      "source-font-notices/MaterialIcons-ATTRIBUTION.txt": {
+        "bytes": 571,
+        "mode": 384,
+        "sha256": "c7a9e37bed9577f6f6d93a00e7f6f2e8872488894d9789a41e641e84d7569345"
+      },
+      "source-font-notices/MaterialIcons-LICENSE.txt": {
+        "bytes": 18531,
+        "mode": 384,
+        "sha256": "be698262aecd042c0de6f886cc0af622f8def446462026992cc530275d8a9e74"
+      },
+      "source-font-notices/NotoSans-OFL.txt": {
+        "bytes": 4396,
+        "mode": 384,
+        "sha256": "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a"
+      },
+      "version.json": {
+        "bytes": 91,
+        "mode": 384,
+        "sha256": "18b63143b50ad9f873df79a42615bda63c8ee8adedfd7c40068e2a76db0a2f70"
+      }
+    }
+  },
+  "package_root": {
+    "archive_data_only": true,
+    "object_bytes": 258386066,
+    "packages": 235,
+    "regular_objects": 4946,
+    "snapshot": "20261023T000000Z",
+    "snapshot_packages_installed_on_runner": false
+  },
+  "runs": [
+    {
+      "archive_sha256": "79e53c8ab23a9fb318371ce330c63675d66373ee1bffad492c954f1712eb18e6",
+      "artifact": 14490102988,
+      "compiled": true,
+      "flutter_tests": 24,
+      "receipt_sha256": "4654d6f0eaa4e6744676da3daff30146a9c3f07e313440c58a9dd76a0ffcd963",
+      "run": 44438611156,
+      "source": "19bd528a2576ab40849785354f4342608a71b0cc",
+      "steps": 15
+    }
+  ],
+  "schema": 1
+}
