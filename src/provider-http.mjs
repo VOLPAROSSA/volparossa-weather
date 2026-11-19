@@ -167,15 +167,13 @@ async function listenUnix(server, socketPath) {
 
 function coreConfiguration(value, airQuality = false) {
   const core = structuredClone(value);
-  const automatic = core && Object.hasOwn(core, 'cacheMode');
+  const explicit = core && Object.hasOwn(core, 'cacheMode');
   exact(core, ['mode', 'executable', 'controlSocket', 'cache', 'scratchParent', 'publisherKey',
-    'name', 'minRevision', 'query', automatic ? 'cacheMode' : 'reuseCache'], 'BRIDGE_CONFIG_INVALID');
-  requireThat(core.mode === 'core-cache' && (automatic ? core.cacheMode === 'create-or-open'
+    'name', 'minRevision', 'query', explicit ? 'cacheMode' : 'reuseCache'], 'BRIDGE_CONFIG_INVALID');
+  requireThat(core.mode === 'core-cache' && (explicit ? ['create-or-open', 'cache-only'].includes(core.cacheMode)
     : typeof core.reuseCache === 'boolean'), 'BRIDGE_CONFIG_INVALID');
-  // Historical configurations remain open-only. The explicit new mode lets
-  // the first actual GET ask core to create a cache; it does not create one
-  // while starting the server, or make the HTTP process a cache validator.
-  requireThat(automatic || core.reuseCache === true, 'BRIDGE_REUSABLE_CACHE_REQUIRED');
+  // Existing reuseCache configurations always open an owned directory.
+  requireThat(explicit || core.reuseCache === true, 'BRIDGE_REUSABLE_CACHE_REQUIRED');
   for (const name of ['executable', 'controlSocket', 'cache', 'scratchParent']) absolute(core[name]);
   requireThat(typeof core.publisherKey === 'string' && /^[a-f0-9]{64}$/.test(core.publisherKey)
     && typeof core.name === 'string' && Buffer.byteLength(core.name) >= 1 && Buffer.byteLength(core.name) <= 128
@@ -191,6 +189,8 @@ function coreConfiguration(value, airQuality = false) {
 
 async function requestCore(core, signal) {
   if (!Object.hasOwn(core, 'cacheMode')) return core;
+  const { cacheMode, ...options } = core;
+  if (cacheMode === 'cache-only') return { ...options, reuseCache: true, cacheOnly: true };
   // Existence only selects one core operation. An unreadable parent is not an
   // absent cache. A canonical, non-group/world-writable parent must already
   // exist; neither parents nor cache files are made/adopted/repaired here.
@@ -210,7 +210,6 @@ async function requestCore(core, signal) {
   requireThat(['dev', 'ino', 'uid', 'gid', 'mode'].every(key => parent[key] === after[key])
     && await realpath(parentPath) === parentPath, 'BRIDGE_CACHE_PARENT_CHANGED');
   requireThat(!signal.aborted, 'CANCELLED');
-  const { cacheMode: _mode, ...options } = core;
   // Core checks ownership, directory identity, locks, index and chunks. A
   // create/EEXIST race or any failed open causes no retry or fallback here. After
   // joined cleanup, a later GET/restart makes a fresh choice for the same path,
@@ -286,7 +285,9 @@ function resultBytes(result, configuration, airQuality = false) {
   const { core, variables } = configuration;
   const delivery = result?.delivery;
   exact(delivery, ['mode', 'publisher_key', 'name', 'revision', 'manifest_id', 'sha256',
-    'publication_expires_at', 'freshness', 'upstream_origin_attested', 'manifest_media_type_checked'], 'BRIDGE_RESULT_INVALID');
+    'publication_expires_at', 'freshness', 'upstream_origin_attested', 'manifest_media_type_checked',
+    ...(core.cacheMode === 'cache-only' ? ['cache_only'] : [])], 'BRIDGE_RESULT_INVALID');
+  requireThat(core.cacheMode !== 'cache-only' || delivery.cache_only === true, 'BRIDGE_RESULT_INVALID');
   requireThat(delivery.mode === 'core-cache' && delivery.publisher_key === core.publisherKey && delivery.name === core.name
     && Number.isSafeInteger(delivery.revision) && delivery.revision >= core.minRevision
     && typeof delivery.manifest_id === 'string' && /^[a-f0-9]{64}$/.test(delivery.manifest_id)
