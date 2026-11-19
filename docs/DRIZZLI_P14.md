@@ -1,5 +1,27 @@
 # P14: bounded Drizz.li candidate build
 
+## Independent cold builds on November 18 and 19, 2026
+
+Two fresh GitHub-hosted runners built Drizz.li offline from the same pinned
+sources. The second ran on protected Weather revision
+`2a38b8707428ddc35548b64cd26aa6b8eac89703` after integration. All 97 output
+paths matched by mode, byte count and SHA-256, covering 1,421,053 bytes. Both
+jobs completed all twelve steps and typechecking reported zero errors and
+warnings. The signed package root contained 227 packages and 4,921 distinct
+regular files. [First build](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44423008159)
+and [independent build](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44433427655).
+
+The module graph and the output inventory were byte-identical. The staged
+source inventories differed only in Git's local index and HEAD reflog.
+All 88 web files also matched the earlier Core manifest by path, size and
+SHA-256. The nine additional files contain the original license notices.
+The comparison records the archive digests and the hashes of both staged
+source inventories. [Comparison](../integrations/drizzli/p14-cold-comparison.json),
+[original output inventory](../integrations/drizzli/p14-cold-output.json)
+and [October Core manifest](https://github.com/VOLPAROSSA/volparossa/blob/e1c326baf413b525dabbca747b3e30289f0cb0d4/tests/integration/weather-public-drizzli-v4.json).
+
+## Original candidate and subsequent trials
+
 This package depends on draft [PR #33](https://github.com/VOLPAROSSA/volparossa-weather/pull/33)
 at `e774912e292f339d42ff23f00b4d8fc5d69e5b47`. Its shared runtime was independently
 accepted against [P13 run 40596738646](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/40596738646),
