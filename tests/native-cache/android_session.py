@@ -62,7 +62,7 @@ def run(work, node, host_netns, app_source):
             process = subprocess.Popen(args, stdout=output, stderr=output)
             stack.callback(stop, process)
             return process
-        server = start([ADB, '-L', 'tcp:127.0.0.1:5037', 'nodaemon', 'server'])
+        server = driver['start_adb_server'](ADB, start)
         emulator = start([SDK / 'emulator/emulator', '-avd', 'weather_cache', '-port', '5554', '-accel', 'on',
             '-cores', '2', '-memory', '1536', '-no-window', '-no-audio', '-no-snapshot', '-no-boot-anim',
             '-gpu', 'swiftshader_indirect', '-no-metrics', '-camera-back', 'none', '-camera-front', 'none'])

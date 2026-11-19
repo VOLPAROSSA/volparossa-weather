@@ -411,6 +411,7 @@ class CandidateTests(unittest.TestCase):
     def test_independent_weather_and_drizzli_changes_preserve_shared_input_guard(self):
         validate = W['validate_repository_changes']
         validate(['README.md', '.github/workflows/weather-cache-expiry.yml',
+                  'scripts/prepare_hosted_android_ci.py', 'tests/test_hosted_android_ci.py',
                   'tests/native-cache/read-client.mjs', 'integrations/drizzli/README.md',
                   'integrations/drizzli/overlay/src/routes/weather/week/VolparossaWeek.svelte'])
         for shared in ('src/provider.mjs', 'scripts/prepare_hosted_client_inputs.py',

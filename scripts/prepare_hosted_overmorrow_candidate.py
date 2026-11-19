@@ -163,6 +163,7 @@ def validate_repository_changes(paths):
         'tests/test_hosted_overmorrow_pub_metadata.py',
         'tests/test_hosted_overmorrow_pub_outputs.py',
         'README.md', '.github/workflows/weather-cache-expiry.yml', '.github/workflows/hosted-android.yml',
+        'scripts/prepare_hosted_android_ci.py', 'tests/test_hosted_android_ci.py',
         'tests/test_hosted_android_workflow.py', 'tests/test_hosted_client_runtime.py', shared,
         'docs/P15_OVERMORROW_CANDIDATE.md', 'docs/overmorrow-cold-comparison.json'}
     require(all(path in allowed or path.startswith(('integrations/drizzli/', 'tests/native-cache/'))

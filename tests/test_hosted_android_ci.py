@@ -58,6 +58,20 @@ def report():
 
 
 class NativeCI(unittest.TestCase):
+    def test_adb_server_owns_the_loopback_listener_before_clients_start(self):
+        process = Mock(); process.poll.return_value = None
+        launch = Mock(return_value=process)
+        with patch.object(M.socket, 'create_connection') as connect, patch.object(M.time, 'sleep'):
+            connect.side_effect = (ConnectionRefusedError(), ExitStack())
+            self.assertIs(M.start_adb_server('/sdk/adb', launch), process)
+        launch.assert_called_once_with(['/sdk/adb', '-L', 'tcp:5037', 'nodaemon', 'server'])
+        self.assertEqual(connect.call_count, 2)
+        self.assertTrue(all(call.args == (('127.0.0.1', 5037),) for call in connect.call_args_list))
+        process.poll.return_value = 1
+        with patch.object(M.socket, 'create_connection') as connect, self.assertRaisesRegex(ValueError, 'ADB_SERVER_STOPPED'):
+            M.start_adb_server('/sdk/adb', launch)
+        connect.assert_not_called()
+
     def test_rejects_developer_and_selfhosted(self):
         with self.assertRaisesRegex(ValueError, "DISPOSABLE_HOSTED_ONLY"):
             M.guards({})
@@ -1326,6 +1340,7 @@ class EmulatorDiagnostics(unittest.TestCase):
         stack.enter_context(patch.object(M, "PROOF", proof))
         stack.enter_context(patch.object(M.os, "getuid", return_value=1000))
         stack.enter_context(patch.object(M.socket, "if_nameindex", return_value=[(1, "lo")]))
+        stack.enter_context(patch.object(M.socket, "create_connection", side_effect=lambda *args, **kwargs: ExitStack()))
         stack.enter_context(patch.object(Path, "read_text", read))
         stack.enter_context(patch.object(Path, "exists", exists))
         stack.enter_context(patch.object(M.subprocess, "Popen", side_effect=popen))
