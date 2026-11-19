@@ -242,6 +242,11 @@ including the explicit UTC window, without inventing hourly rain rates or AQI.
 Add `--air-quality` for the separate particulate scenario; combine both flags
 to test independent product failure and expiry. The new receipt uses
 `build/drizzli-air-quality-01` and `build/drizzli-air-quality-browser-01`.
+Add `--foreground-refresh` to the combined trial to switch real Firefox tabs.
+Returning while both publications are fresh makes no request. If either expires
+while the tab is hidden, returning to the forecast requests both products once
+through the local bridge. If a replacement is still unavailable, the next
+return tries again. The hidden tab does not poll.
 Eight upstream static assets copied into that build retained group-write bits;
 those specific generated files were made non-group/world-writable before the
 browser preflight. No serving-permission check was relaxed.
