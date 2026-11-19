@@ -85,7 +85,15 @@ source requests and do not prove core delivery or native Android/iOS operation.
 
 On an iPhone 16 Pro Max simulator running iOS 18.5, the installed Overmorrow app requested the synthetic weather and particulate products through its normal provider. Its forecast screen displayed the native forecast heading, the IFS model and the current-observations availability message. Apple Vision read the rendered screen after the simulator was removed. The two requests and the screenshot, source and executable digests are recorded in the original result. [Hosted trial](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44525328252) · [Original observations](../../docs/evidence/iphone-44525328252/iphone-result.json) · [Archive and source digests](../../docs/evidence/iphone-44525328252/verification.json)
 
-The trial used the pinned Overmorrow commit, Flutter 3.38.5, Xcode 16.4 and the standard application entry point. The hosted workflow can be started from Actions. Signed Core delivery on iOS, the native particulate detail page and physical devices remain open. [Simulator workflow](../../.github/workflows/iphone-simulator.yml)
+The synthetic trial used the pinned Overmorrow commit, Flutter 3.38.5, Xcode 16.4 and the standard application entry point. [Simulator workflow](../../.github/workflows/iphone-simulator.yml)
+
+### Signed expiry in the installed iPhone app
+
+On the same simulator, the ordinary Overmorrow app displayed a real ECMWF IFS forecast of 7.115 °C for 20 November 2026 at 00:00 UTC. The weather row disappeared when its signed publication expired while the app remained in the foreground. After the first tap on “Refresh forecasts”, the screen showed “Weather unavailable or expired”. The second tap restored the forecast from signed revision 2. The four original simulator images show the native table, its expiry, the refusal and the recovery. [Initial screen](../../docs/evidence/iphone-signed-44542699817/initial.png) · [Expired](../../docs/evidence/iphone-signed-44542699817/expired.png) · [Refused](../../docs/evidence/iphone-signed-44542699817/refused.png) · [Recovered](../../docs/evidence/iphone-signed-44542699817/recovered.png)
+
+The app requested both forecasts each time. Core returned weather and particulate status codes of 200/200, 503/200 and 200/200. The independent NOAA GEFS-Aerosols product contained 6.18903 µg/m³ PM2.5 and 13.0314 µg/m³ PM10. The native particulate table remained available during the weather failure. Inside a Debian 13 guest with no network card, Core refused the expired weather publication 205 milliseconds after its signed deadline. The guest generated its keys locally. The receipt records both signed manifest IDs and the original source, application and screenshot digests. [Original receipt](../../docs/evidence/iphone-signed-44542699817/iphone-result.json) · [Verified archive and Git digests](../../docs/evidence/iphone-signed-44542699817/verification.json) · [Hosted trial](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44542699817)
+
+The iOS 18.5 run used software emulation for the Core guest. Physical iPhone measurements, standalone mobile Core and the dedicated particulate detail page remain open. [Reproduction workflow](../../.github/workflows/iphone-signed-recovery.yml)
 
 ## Android trial candidate
 
