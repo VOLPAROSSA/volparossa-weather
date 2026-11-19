@@ -1,7 +1,7 @@
 # P15 Overmorrow candidate, 2026-10-28
 
 The November 19 integration uses protected Weather revision
-`2a38b8707428ddc35548b64cd26aa6b8eac89703` as its source-review base.
+`eb7eeeb9ddb52cafa689df4202206a0460445ece` as its source-review base.
 The candidate constructs the offline Flutter package root from the signed
 Ubuntu snapshot and checks the packages against the existing Overmorrow lock.
 The [November hosted trial](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44433873133)
@@ -14,6 +14,15 @@ For a package with no configured defines, hooks_runner 0.23.0 constructs a
 seventh field alongside the six fields in the October report. The public input
 contract rejects missing, null and populated envelopes.
 [Flutter producer](https://github.com/flutter/flutter/blob/f6ff1529fd6d8af5f706051d9251ac9231c83407/packages/flutter_tools/lib/src/isolated/native_assets/native_assets.dart#L218).
+
+The [following run](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44436063774)
+passed all 24 Flutter tests, both hook profiles and the release web compiler.
+The post-build verifier then looked for two launcher design images absent from
+Flutter's declared web assets. The original pubspec declares four directories
+and the single file `assets/icons/icon.png`, totaling 35 application assets.
+The output check now reads these declarations from the sealed pubspec, compares
+the exact set of emitted application paths and verifies every file's bytes.
+[Original asset declarations](https://github.com/bmaroti9/Overmorrow/blob/97995e2e00e454389e00e35f1e65654afe3e8bed/pubspec.yaml).
 
 **P15i preflight, 2026-10-31:** the complete hook-state contract is checked
 jointly against original producers for test and test-plus-web lifecycles. The

@@ -28,6 +28,26 @@ class CandidateTests(unittest.TestCase):
         path.chmod(0o600)
         return path
 
+    def test_flutter_assets_follow_the_pubspec_and_match_output_byte_for_byte(self):
+        self.file('pubspec.yaml', b'flutter:\n  assets:\n    - assets/map/\n    - assets/icons/icon.png\n\n')
+        self.file('assets/icons/icon_material.png')
+        output = self.base / 'build/web'
+        for name in ('assets/map/world.png', 'assets/icons/icon.png'):
+            self.file(name)
+            self.file('build/web/assets/' + name)
+        bind = W['bind_declared_assets']
+        self.assertEqual(bind(self.base, output), 2)
+        extra = self.file('build/web/assets/assets/icons/icon_material.png')
+        with self.assertRaisesRegex(ValueError, 'P15_ASSET_OUTPUT_SET'):
+            bind(self.base, output)
+        extra.unlink()
+        asset = self.file('build/web/assets/assets/icons/icon.png', b'changed')
+        with self.assertRaisesRegex(ValueError, 'P15_ASSET_OUTPUT$'):
+            bind(self.base, output)
+        asset.unlink()
+        with self.assertRaisesRegex(ValueError, 'P15_ASSET_OUTPUT_SET'):
+            bind(self.base, output)
+
     def test_only_explicit_offline_commands_and_original_full_font_build(self):
         self.assertEqual(W['tool_command'](), [str(O.SDK / 'bin/cache/dart-sdk/bin/dart'),
             '--suppress-analytics', 'pub', '--directory', str(O.SDK / 'packages/flutter_tools'),

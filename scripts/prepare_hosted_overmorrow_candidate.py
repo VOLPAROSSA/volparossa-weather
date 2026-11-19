@@ -20,7 +20,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-BASE = '2a38b8707428ddc35548b64cd26aa6b8eac89703'
+BASE = 'eb7eeeb9ddb52cafa689df4202206a0460445ece'
 INPUT = ROOT / 'build/hosted-overmorrow-input-candidate'
 PUBLIC = ROOT / 'build/p15-overmorrow-candidate-public'
 STAGE = ROOT / 'build/p15-overmorrow-stage'
@@ -392,21 +392,45 @@ def seal_app_sources(stage, app_packages, plugin_aliases=None, inventory=None):
             and name != 'test/volparossa/fixtures/products.json'}
 
 
+def bind_declared_assets(stage, output):
+    # The sealed Overmorrow pubspec declares individual files and direct directory members.
+    manifest = I.read(stage / 'pubspec.yaml', 128 * 1024).decode()
+    blocks = re.findall(r'^  assets:\n((?:    - assets/[^\n]+\n)+)(?=\n)', manifest, re.M)
+    require(len(blocks) == 1, 'P15_ASSET_DECLARATIONS')
+    expected = set()
+    for line in blocks[0].splitlines():
+        declaration = line.removeprefix('    - ')
+        require(re.fullmatch(r'assets/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+(?:/|\.[A-Za-z0-9]+)', declaration),
+                'P15_ASSET_DECLARATIONS')
+        path = stage / declaration
+        if declaration.endswith('/'):
+            require(path.is_dir(), 'P15_ASSET_DECLARATIONS')
+            expected.update(member.relative_to(stage) for member in path.iterdir() if member.is_file())
+        else:
+            require(path.is_file(), 'P15_ASSET_DECLARATIONS')
+            expected.add(path.relative_to(stage))
+    asset_root = output / 'assets'
+    emitted = {p.relative_to(asset_root) for p in (asset_root / 'assets').rglob('*') if p.is_file()}
+    require(expected and emitted == expected, 'P15_ASSET_OUTPUT_SET')
+    for name in sorted(expected):
+        require(I.read(asset_root / name, 8 * 1024**2) == I.read(stage / name, 8 * 1024**2),
+                'P15_ASSET_OUTPUT')
+    return len(expected)
+
+
 def asset_binding(stage, sdk, output=None):
     notices, _ = I.notice_inputs()
     noto = I.read(stage / 'fonts/NotoSans_Condensed-Regular.ttf', 2 * 1024**2)
     require(I.sha(noto) == notices['fonts']['NotoSans']['font_sha256'], 'P15_NOTO_FONT')
     material = I.full_material_font(sdk, output)
+    evidence = dict(noto_sha256=I.sha(noto), material=material, original_assets_unchanged=True)
     if output is not None:
         require(I.read(output / 'assets/fonts/NotoSans_Condensed-Regular.ttf', 2 * 1024**2) == noto,
                 'P15_NOTO_OUTPUT')
-        for path in (stage / 'assets').rglob('*'):
-            if path.is_file():
-                target = output / 'assets' / path.relative_to(stage)
-                require(I.read(target, 8 * 1024**2) == I.read(path, 8 * 1024**2), 'P15_ASSET_OUTPUT')
+        evidence['declared_assets_verified'] = bind_declared_assets(stage, output)
         raw = I.read(output / 'assets/NOTICES', 8 * 1024**2)
         require(raw and b'Copyright' in raw, 'P15_FLUTTER_NOTICES')
-    return dict(noto_sha256=I.sha(noto), material=material, original_assets_unchanged=True)
+    return evidence
 
 
 def command(action):
