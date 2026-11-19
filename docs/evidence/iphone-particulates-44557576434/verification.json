@@ -1,0 +1,21 @@
+{
+  "protected_merge": "69f4c781963d9d9ed1f658fbfd6c58ee9ed54181",
+  "receipt_artifact": {
+    "archive_sha256": "sha256:3af0d5d7c7b82d4633df595e156dd43cafc11014b3681b6ef8ef8cbc8cf8e538",
+    "bytes": 1923,
+    "id": 14550726224
+  },
+  "result_sha256": "ac63cc59f5c23f6bbecdd6b7fbdb346701448d410c657f902b64970117e0fcc1",
+  "run": 44557576434,
+  "run_url": "https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44557576434",
+  "screenshots_artifact": {
+    "archive_sha256": "sha256:e5cb61ccb1e24ea4d8a1e40749a03616918eb078f56afc441bd6b397c393b3ad",
+    "bytes": 1693658,
+    "height": 2868,
+    "id": 14550346073,
+    "width": 1320
+  },
+  "source_head": "5c4797a9f32da75833ad6e99461090cb94a35394",
+  "tested": "08cc08faa6e572bee53310c27a4d778eaca1488f",
+  "tree": "f81e925b23d7ede4017be0b09a7ced242f4ebc5d"
+}
