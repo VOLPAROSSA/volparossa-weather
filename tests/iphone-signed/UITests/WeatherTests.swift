@@ -12,7 +12,7 @@ private func control(_ command: String) throws -> String {
     guard fd >= 0 else { throw WitnessError.transport }
     defer { close(fd) }
     var timeout = timeval(tv_sec: 120, tv_usec: 0)
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout)))
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
     var address = sockaddr_in()
     address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
     address.sin_family = sa_family_t(AF_INET)
@@ -25,7 +25,7 @@ private func control(_ command: String) throws -> String {
     let data = Data((command + "\n").utf8)
     guard data.withUnsafeBytes({ write(fd, $0.baseAddress, $0.count) }) == data.count else { throw WitnessError.transport }
     var bytes = [UInt8](repeating: 0, count: 256)
-    let count = read(fd, &bytes, bytes.count)
+    let count = read(fd, &bytes, 256)
     guard count > 0, let reply = String(bytes: bytes.prefix(count), encoding: .utf8), reply.last == "\n" else {
         throw WitnessError.transport
     }

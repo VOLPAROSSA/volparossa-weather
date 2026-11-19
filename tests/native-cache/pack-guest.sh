@@ -37,8 +37,13 @@ if [[ "$profile" = iphone ]]; then
     cp LICENSE "$guest_data/licenses/Weather"
     cp "$core/LICENSE" "$guest_data/licenses/Core"
     cp "$core/THIRD_PARTY_LICENSES.md" "$guest_data/licenses/Core-dependencies.md"
-    node_prefix=$(dirname "$(dirname "$(realpath "$(command -v node)")")")
-    cp "$node_prefix/LICENSE" "$guest_data/licenses/Node"
+    node_version=$(node -p process.versions.node)
+    [[ "$node_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+    # Hosted Ubuntu installs Node with n, which copies bin and share but omits
+    # the distribution's root LICENSE. Obtain the notices for that exact release.
+    curl --fail --silent --show-error --proto '=https' --max-time 60 --max-filesize 1048576 \
+        "https://raw.githubusercontent.com/nodejs/node/v$node_version/LICENSE" -o "$guest_data/licenses/Node"
+    test -s "$guest_data/licenses/Node"
     extra+=(licenses)
 fi
 tar --create --file="$vm/medium/trial.tar" --directory="$guest_data" \
