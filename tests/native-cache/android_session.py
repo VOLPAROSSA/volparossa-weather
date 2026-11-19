@@ -4,6 +4,7 @@ from contextlib import ExitStack
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import runpy
 import socket
@@ -38,11 +39,14 @@ def run(work, node, host_netns, app_source):
     with APK.open('rb') as stream:
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     assert product['apk']['sha256'] == digest
+    driver = runpy.run_path(str(ROOT / 'scripts/prepare_hosted_android_ci.py'))
+    original_env = driver['environment']()
+    os.environ.update({key: original_env[key] for key in ('ANDROID_EMULATOR_USE_SYSTEM_LIBS', 'QT_QPA_PLATFORM')})
     os.environ.update(ANDROID_HOME=str(SDK), ANDROID_SDK_ROOT=str(SDK),
         ANDROID_AVD_HOME=str(work / 'avd'), ANDROID_USER_HOME=str(work / 'android'),
-        ANDROID_EMULATOR_HOME=str(work / 'android'), XDG_RUNTIME_DIR=str(work / 'runtime'),
+        XDG_RUNTIME_DIR=str(work / 'runtime'), JAVA_TOOL_OPTIONS='-Duser.home=' + str(work / 'java'),
         XDG_CONFIG_HOME=str(work / 'config'), TMPDIR=str(work / 'tmp'), JAVA_HOME='/usr/lib/jvm/java-17-openjdk-amd64')
-    for directory in ('avd', 'android', 'runtime', 'config', 'tmp'):
+    for directory in ('avd', 'android', 'runtime', 'config', 'tmp', 'java'):
         (work / directory).mkdir(mode=0o700)
     avd = work / 'avd/device.avd'
     subprocess.run([SDK / 'cmdline-tools/19.0/bin/avdmanager', 'create', 'avd', '--name', 'weather_cache',
@@ -52,7 +56,6 @@ def run(work, node, host_netns, app_source):
         stream.write('\nhw.lcd.width=1080\nhw.lcd.height=1920\nhw.lcd.density=420\nhw.keyboard=yes\n')
     def adb(*args, seconds=20):
         return subprocess.check_output([ADB, '-s', 'emulator-5554', *args], timeout=seconds, stderr=subprocess.PIPE)
-    driver = runpy.run_path(str(ROOT / 'scripts/prepare_hosted_android_ci.py'))
     with ExitStack() as stack:
         log = stack.enter_context((work / 'emulator.log').open('xb'))
         def start(args, output=log):
@@ -64,7 +67,14 @@ def run(work, node, host_netns, app_source):
             '-cores', '2', '-memory', '1536', '-no-window', '-no-audio', '-no-snapshot', '-no-boot-anim',
             '-gpu', 'swiftshader_indirect', '-no-metrics', '-camera-back', 'none', '-camera-front', 'none'])
         def booted():
-            assert server.poll() is None and emulator.poll() is None, 'emulator process stopped'
+            if server.poll() is not None or emulator.poll() is not None:
+                # This is before APK installation. Keep only bounded startup errors.
+                with (work / 'emulator.log').open('rb') as source:
+                    source.seek(max(0, source.seek(0, 2) - 12288))
+                    lines = source.read().decode(errors='replace').splitlines()
+                for line in [line for line in lines if re.search(r'panic|error|fatal|cannot|failed|space|kvm', line, re.I)][-8:]:
+                    print('AVD startup:', line[:240], file=sys.stderr)
+                raise RuntimeError(f'AVD startup stopped: adb={server.returncode} emulator={emulator.returncode}')
             try:
                 return adb('shell', 'getprop', 'sys.boot_completed', seconds=3).strip() == b'1'
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
