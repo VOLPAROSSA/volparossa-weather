@@ -53,7 +53,7 @@ debug build, strict offline rebuild and installed-emulator trial also pass,
 including actual refresh taps and background/resume expiry with synthetic
 products. Separate Android emulator runs exercised cold Core retrieval and
 signed expiry with recovery while NOAA particulates stayed visible. Physical
-devices, iOS packaging and native home-screen widgets remain unverified.
+devices, iOS release packaging and native home-screen widgets remain unverified.
 [Cold delivery run](https://github.com/VOLPAROSSA/volparossa/actions/runs/38717988016) ·
 [Signed expiry and recovery](#signed-expiry-in-the-installed-android-app)
 
@@ -80,6 +80,12 @@ their notices are exported for later admission into the core trial. Original
 build and browser reports remain separate. SDKs, dependency caches, browser
 profiles and Git data are not uploaded. These synthetic trials make no weather
 source requests and do not prove core delivery or native Android/iOS operation.
+
+## iPhone Simulator
+
+On an iPhone 16 Pro Max simulator running iOS 18.5, the installed Overmorrow app requested the synthetic weather and particulate products through its normal provider. Its forecast screen displayed the native forecast heading, the IFS model and the current-observations availability message. Apple Vision read the rendered screen after the simulator was removed. The two requests and the screenshot, source and executable digests are recorded in the original result. [Hosted trial](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44525328252) · [Original observations](../../docs/evidence/iphone-44525328252/iphone-result.json) · [Archive and source digests](../../docs/evidence/iphone-44525328252/verification.json)
+
+The trial used the pinned Overmorrow commit, Flutter 3.38.5, Xcode 16.4 and the standard application entry point. The hosted workflow can be started from Actions. Signed Core delivery on iOS, the native particulate detail page and physical devices remain open. [Simulator workflow](../../.github/workflows/iphone-simulator.yml)
 
 ## Android trial candidate
 
