@@ -84,7 +84,10 @@ class NativeCI(unittest.TestCase):
         self.assertNotIn("--offline", online)
         self.assertIn("--offline", offline)
         self.assertEqual(offline[offline.index("--dependency-verification") + 1], "strict")
-        self.assertLess(offline.index("clean"), offline.index("assembleDebug"))
+        for command in (online, offline):
+            self.assertIn(":app:assembleDebug", command)
+            self.assertNotIn("assembleDebug", command)
+        self.assertLess(offline.index("clean"), offline.index(":app:assembleDebug"))
         self.assertIn("--no-daemon", offline)
         self.assertIn("--max-workers=1", offline)
         self.assertIn("-Ptarget-platform=android-x64", offline)
