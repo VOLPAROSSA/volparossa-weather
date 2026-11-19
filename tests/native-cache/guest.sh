@@ -82,14 +82,16 @@ systemctl is-active --quiet volparossa-agent
 stage=seed
 install -d -o weatherowner -g weatherowner -m 0700 /run/weather-owner
 chmod -R a+rX bin scripts src tests
-chmod 0644 forecast.json
-runuser -u volparossa -- volparossa content publish --input "$root/forecast.json" --cache "$state/forecast-cache" \
+test "$(stat -c %a "$root")" = 755
+install -o volparossa -g volparossa -m 0600 forecast.json "$state/trial-original.json"
+runuser -u weatherowner -- test -r "$root/scripts/serve-provider.mjs"
+runuser -u volparossa -- volparossa content publish --input "$state/trial-original.json" --cache "$state/forecast-cache" \
     --identity "$state/identity.key" --passphrase-file "$state/trial-passphrase" --manifest "$state/trial-manifest" \
     --name weather.public-community-cache-trial --revision 1 --content-type application/vnd.volparossa.forecast.v1+json \
     --lifetime-seconds 60 --quota-bytes 131072 --max-entries 16 --min-free-bytes 67108864 > /run/weather-owner/publication.json
 key=$(python3 -c 'import json;print(json.load(open("/run/weather-owner/publication.json"))["publisher_key_hex"])')
 runuser -u volparossa -- "$root/bin/remember_weather_manifest" "$state/forecast-cache" "$state/trial-manifest" "$key"
-rm -- "$state/trial-passphrase" "$state/trial-manifest"
+rm -- "$state/trial-passphrase" "$state/trial-manifest" "$state/trial-original.json"
 mv -- forecast.json /run/weather-owner/original.json
 chown weatherowner:weatherowner /run/weather-owner/{original,publication}.json
 chmod 0600 /run/weather-owner/{original,publication}.json

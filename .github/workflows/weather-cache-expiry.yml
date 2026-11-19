@@ -51,6 +51,11 @@ jobs:
           cargo build --locked --offline -p volparossa --bin volparossa --example remember_weather_manifest
           cargo build --locked --offline -p volparossa-agent --bin volparossa-agent -p volparossa-helper-entry --bin volparossa-helper
           git diff --exit-code HEAD
+          # The Cargo fetch uses a read-only global Git policy. Subsequent
+          # checkout cleanup uses an empty private writable configuration.
+          settings="$RUNNER_TEMP/weather-cleanup-$GITHUB_RUN_ID.gitconfig"
+          install -m 0600 /dev/null "$settings"
+          echo "GIT_CONFIG_GLOBAL=$settings" >> "$GITHUB_ENV"
       - name: Acquire one current public-community temperature forecast
         run: |
           set -euo pipefail

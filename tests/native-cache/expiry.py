@@ -5,6 +5,7 @@ import hashlib
 import http.client
 import json
 import os
+import re
 from pathlib import Path
 import selectors
 import shutil
@@ -87,9 +88,26 @@ def run(root, source, publication):
     cfg.write_text(json.dumps(dict(core=core, variables=["temperature_2m"])))
     bridge = [NODE, ROOT/"scripts/serve-provider.mjs", "--config", cfg, "--static-root", root/"www", "--port", "0"]
     signed_expiry = pub["expires_unix_seconds"]
+    command = [CLI, "--control-socket", control, "content", "fetch-name", "--publisher-key",
+               pub["publisher_key_hex"], "--name", NAME, "--min-revision", "1", "--cache", cache,
+               "--quota-bytes", "131072", "--max-entries", "16", "--min-free-bytes", "67108864",
+               "--reuse-cache", "--cache-only"]
     with child(bridge) as first:
         origin = opening(first)
         status, body = get(origin)
+        if status != 200:
+            # This extra offline call is used only on failure and only prints
+            # closed error codes or cache mode and byte counters.
+            raw = subprocess.run([*command, "--local-output", root / "diagnostic.json"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            if raw.returncode == 0:
+                report = json.loads(raw.stdout)
+                detail = ",".join(f"{k}={report.get(k)}" for k in ("cache_only", "peer_bytes", "providers_used"))
+            else:
+                codes = re.findall(r"(?<![A-Za-z0-9_])[A-Z][A-Z0-9_]{3,70}(?![A-Za-z0-9_])",
+                                   raw.stderr[:4096].decode(errors="replace"))
+                detail = ",".join(codes[:3]) or "CORE_REJECTED"
+            print(f"WEATHER_API_DIAGNOSTIC=http={status},core={raw.returncode},{detail}", file=sys.stderr)
         assert status == 200 and body["forecast"] == forecast
         delivery = body["delivery"]
         assert delivery["cache_only"] is True and delivery["manifest_id"] == pub["manifest_id"]
@@ -106,10 +124,7 @@ def run(root, source, publication):
         assert signed_expiry <= observed and get(origin) == (503, {"error": "FORECAST_UNAVAILABLE"})
         assert list((root/"scratch").iterdir()) == []
     expired_output = root / "expired-forecast.json"
-    denied = subprocess.run([CLI, "--control-socket", control, "content", "fetch-name",
-        "--publisher-key", pub["publisher_key_hex"], "--name", NAME, "--min-revision", "1",
-        "--cache", cache, "--local-output", expired_output, "--quota-bytes", "131072", "--max-entries", "16",
-        "--min-free-bytes", "67108864", "--reuse-cache", "--cache-only"],
+    denied = subprocess.run([*command, "--local-output", expired_output],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
     assert denied.returncode != 0 and not expired_output.exists()
     evidence = forecast["samples"][0]["evidence"]

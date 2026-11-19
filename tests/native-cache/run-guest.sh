@@ -33,7 +33,10 @@ cp "$core"/packaging/systemd/{volparossa-helper.service,volparossa-agent.service
 mv -- "$artifacts/forecast.json" "$guest_data/forecast.json"
 echo "$GITHUB_SHA" > "$guest_data/weather.sha"
 echo "$CORE_SOURCE" > "$guest_data/core.sha"
-tar --create --file="$vm/medium/trial.tar" --directory="$guest_data" .
+# Archive the inputs without their private host staging directory. The guest
+# installs this public code under a separately owned traversal boundary.
+tar --create --file="$vm/medium/trial.tar" --directory="$guest_data" \
+    bin units scripts src tests forecast.json weather.sha core.sha
 genisoimage -quiet -R -V WEATHERDATA -o "$vm/data.iso" "$vm/medium"
 rm -rf --one-file-system -- "$guest_data" "$vm/medium"
 echo 'instance-id: weather-expiry' > "$vm/meta"
@@ -56,9 +59,9 @@ test "$(stat -c%s "$vm/result")" -le 8192
 if ! jq -e --arg app "$GITHUB_SHA" --arg engine "$CORE_SOURCE" \
     '.weather_sha == $app and .core_sha == $engine and .distinct_weather_owner and .core_refused_expired and
      .network_interfaces == ["lo"] and .http_after_expiry == 503 and .processes_joined and .private_directory_removed' \
-    "$vm/result" >/dev/null; then
+    "$vm/result" >/dev/null 2>&1; then
     grep -oE '^WEATHER_TRIAL_FAILED=[a-z-]{1,40}$' "$vm/result" || true
-    grep -Eo 'guest diagnostics \[.{0,240}\]|File "[^"]*/expiry.py", line [0-9]{1,4}|WEATHER_GUEST_LINE=[0-9]{1,5}|AssertionError:[ a-zA-Z]{1,100}' "$vm/console" | tail -12 || true
+    grep -Eo 'guest diagnostics \[.{0,240}\]|File "[^"]*/expiry.py", line [0-9]{1,4}|WEATHER_GUEST_LINE=[0-9]{1,5}|WEATHER_API_DIAGNOSTIC=[A-Za-z0-9_,.=-]{1,180}|AssertionError:[ a-zA-Z]{1,100}' "$vm/console" | tail -12 || true
     exit 1
 fi
 echo "$digest  $image" | sha512sum --check --strict -
