@@ -125,7 +125,9 @@ def run(root, source, publication):
     quality = None
     if mobile:
         aq_path = publication.with_name('air-quality.json')
-        quality = json.loads(aq_path.read_bytes())
+        air_bytes = aq_path.read_bytes()
+        air_hash = hashlib.sha256(air_bytes).hexdigest()
+        quality = json.loads(air_bytes)
         aq_path.unlink()
     config = bridge_config(core, forecast, quality)
     cfg.write_text(json.dumps(config))
@@ -209,7 +211,8 @@ def run(root, source, publication):
                 drizzli_rejected_expired=True, drizzli_recovered=True, revision_after_recovery=2,
                 replacement_manifest_id=recovered["manifest"], drizzli_displayed_temperature_c=recovered["display"],
                 network_interfaces=interfaces, core_refused_expired=True, original_plaintext_removed=True, scratch_empty=True,
-                **({('iphone_requests' if mobile_port == iphone else 'android_requests'): mobile_responses} if mobile else {}))
+                **({'air_product_sha256': air_hash,
+                    ('iphone_requests' if mobile_port == iphone else 'android_requests'): mobile_responses} if mobile else {}))
 
 
 if __name__ == "__main__":

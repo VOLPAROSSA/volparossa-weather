@@ -21,7 +21,7 @@ from android_relay import relay
 from observe import BUNDLE, sim
 
 PHASES = ('initial', 'refused', 'recovered')
-SCREENS = ('initial', 'expired', 'refused', 'recovered')
+SCREENS = ('initial', 'expired', 'refused', 'recovered', 'particulates')
 
 
 @contextmanager
@@ -91,6 +91,11 @@ def drive(work, medium, build, device, screens):
                     return 'unavailable'
                 assert status == 200
                 return str(body['forecast']['samples'][0]['temperature_2m'])
+            if name == 'particulates':
+                status, quality = json.loads((work / 'recovered.json').read_bytes())['air']
+                assert status == 200
+                sample = quality['forecast']['samples'][0]
+                return ' '.join(str(sample[key]) for key in ('pm2_5', 'pm10'))
             if name.startswith('screen-') and name[7:] in SCREENS:
                 phase = name[7:]
                 assert phase == next(expected)
@@ -99,7 +104,7 @@ def drive(work, medium, build, device, screens):
                 assert picture.read_bytes()[:8] == b'\x89PNG\r\n\x1a\n'
                 frames[phase] = digest(picture)
                 shutil.copyfile(picture, screens / picture.name)
-                if phase != 'expired':
+                if phase in PHASES:
                     (work / (phase + '.observed')).touch(exist_ok=False)
                 print('Observed mounted iPhone interface:', phase, flush=True)
                 return 'ok'
@@ -142,6 +147,7 @@ def verify(work, frames):
         air_status, quality = receipt['air']
         assert [status, air_status] == guest['iphone_requests'][phase] == ([503, 200] if phase == 'refused' else [200, 200])
         assert quality['delivery']['cache_only'] is True and quality['delivery']['revision'] == 1
+        assert quality['delivery']['sha256'] == guest['air_product_sha256']
         air = quality['forecast']['samples'][0]
         current_air = [quality['delivery']['manifest_id'], air['pm2_5'], air['pm10']]
         if air_delivery is None:
