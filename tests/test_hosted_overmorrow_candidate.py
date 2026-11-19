@@ -419,6 +419,13 @@ class CandidateTests(unittest.TestCase):
             with self.subTest(shared=shared), self.assertRaisesRegex(ValueError, 'P15_SHARED_SOURCE_CHANGED'):
                 validate(['integrations/drizzli/README.md', shared])
 
+    def test_shared_controller_must_match_the_reviewed_android_routing_change(self):
+        validate = W['validate_repository_changes']
+        name = 'scripts/prepare_hosted_clients_ci.py'
+        validate([name])
+        with patch.object(I, 'read', return_value=b'unreviewed'), self.assertRaisesRegex(ValueError, 'P15_SHARED_SOURCE_CHANGED'):
+            validate([name])
+
     def test_reviewed_source_set_replaces_old_unreachable_allowances(self):
         self.file('pubspec.yaml')
         expected = W['source_files'](self.base)

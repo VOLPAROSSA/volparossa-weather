@@ -688,7 +688,7 @@ class RuntimeBoundary(unittest.TestCase):
             self.assertIn('scripts/prepare_hosted_client_runtime.py',
                 runpy.run_path(str(ROOT / 'scripts/prepare_hosted_source_recipe.py'))['PROFILES'][profile])
 
-    def test_existing_android_workflows_have_only_their_original_inputless_entry_points(self):
+    def test_android_accepts_real_inputless_events_and_only_the_weather_cache_toggle(self):
         event = self.root / 'android-event.json'
         for repository, workflow, branch in (
                 ('VOLPAROSSA/volparossa-weather', 'Build hosted Android client', 'overmorrow-native-android'),
@@ -696,6 +696,13 @@ class RuntimeBoundary(unittest.TestCase):
             ref = 'refs/heads/feature/' + branch
             for name, actual_ref, inputs, actual_repo, allowed in (
                     ('workflow_dispatch', 'refs/heads/main', {}, repository, True),
+                    ('workflow_dispatch', 'refs/heads/main', None, repository, True),
+                    ('workflow_dispatch', ref, {'signed_cache_recovery': 'true'}, repository,
+                        repository == 'VOLPAROSSA/volparossa-weather'),
+                    ('workflow_dispatch', ref, {'signed_cache_recovery': 'false'}, repository,
+                        repository == 'VOLPAROSSA/volparossa-weather'),
+                    ('workflow_dispatch', ref, {'signed_cache_recovery': 'other'}, repository, False),
+                    ('push', ref, {'signed_cache_recovery': 'true'}, repository, False),
                     ('push', ref, {}, repository, True),
                     ('pull_request', ref, {}, repository, False),
                     ('push', 'refs/heads/main', {}, repository, False),

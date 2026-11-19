@@ -1,0 +1,67 @@
+name: Prepare real signed-cache trial inputs
+description: Compile the pinned Core and acquire the original public forecast fields.
+inputs:
+  particulates:
+    description: Also acquire a genuine NOAA particulate forecast for the installed app.
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: VOLPAROSSA/volparossa
+        ref: 3cccff9190126e1b4bb76504aa2932735f523ea3
+        path: build/core
+        persist-credentials: false
+    - name: Install the authenticated Core compiler and ecCodes distribution
+      shell: bash
+      run: |
+        set -eu
+        test "$RUNNER_ENVIRONMENT" = github-hosted
+        core_source=3cccff9190126e1b4bb76504aa2932735f523ea3
+        test "$(git -C build/core rev-parse HEAD)" = "$core_source"
+        echo "CORE_SOURCE=$core_source" >> "$GITHUB_ENV"
+        python3 -B build/core/scripts/provision-rust189.py runner
+        sudo -n apt-get update -o APT::Update::Error-Mode=any
+        sudo -n apt-get install --no-install-recommends -y libeccodes-tools qemu-system-x86 qemu-utils cloud-image-utils genisoimage
+        dpkg-query -W libeccodes-tools libeccodes0 libeccodes-data
+    - name: Compile the pinned CLI, daemon and local cache setup
+      working-directory: build/core
+      shell: bash
+      run: |
+        set -eu
+        cargo fetch --locked
+        install -D -m 0644 ../../tests/native-cache/remember_weather_manifest.rs crates/volparossa/examples/remember_weather_manifest.rs
+        cargo build --locked --offline -p volparossa --bin volparossa --example remember_weather_manifest
+        cargo build --locked --offline -p volparossa-agent --bin volparossa-agent -p volparossa-helper-entry --bin volparossa-helper
+        git diff --exit-code HEAD
+        # The Cargo fetch uses a read-only global Git policy. Subsequent
+        # checkout cleanup uses an empty private writable configuration.
+        settings="$RUNNER_TEMP/weather-cleanup-$GITHUB_RUN_ID.gitconfig"
+        install -m 0600 /dev/null "$settings"
+        echo "GIT_CONFIG_GLOBAL=$settings" >> "$GITHUB_ENV"
+    - name: Acquire current public-community forecasts
+      env:
+        WITH_PARTICULATES: ${{ inputs.particulates }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        trial="$RUNNER_TEMP/weather-offline-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+        mkdir -m 0700 "$trial" "$trial/acquisition"
+        echo "WEATHER_TRIAL=$trial" >> "$GITHUB_ENV"
+        run=$(node -e 'console.log(new Date(Math.floor(Date.now()/43200000)*43200000-43200000).toISOString())')
+        decoder=$(realpath /usr/bin/grib_ls)
+        digest=$(sha256sum < "$decoder" | cut -d' ' -f1)
+        node scripts/forecast.mjs origin --latitude 52.52 --longitude 13.41 \
+          --community-area --run "$run" --steps 24 --execute --accept-data-license \
+          --decoder "$decoder" --decoder-sha256 "$digest" --scratch-parent "$trial/acquisition" > "$trial/forecast.json"
+        test -s "$trial/forecast.json"
+        if [[ "$WITH_PARTICULATES" = true ]]; then
+          node scripts/air-quality.mjs origin --latitude 52.52 --longitude 13.41 \
+            --community-area --run "$run" --steps 24 --execute --accept-data-license \
+            --decoder "$decoder" --decoder-sha256 "$digest" --scratch-parent "$trial/acquisition" > "$trial/air-quality.json"
+          test -s "$trial/air-quality.json"
+        fi
+        rmdir "$trial/acquisition"

@@ -11,6 +11,8 @@ test "$repo" = "$GITHUB_WORKSPACE"
 test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 core=$repo/build/core
 test "$(git -C "$core" rev-parse HEAD)" = "$CORE_SOURCE"
+case "${1:-}" in ''|--android) ;; *) exit 2 ;; esac
+test "$#" -le 1
 artifacts=$WEATHER_TRIAL
 vm=$(mktemp -d "$artifacts/kvm.XXXXXX")
 cleanup() { rm -rf --one-file-system -- "$vm"; }
@@ -23,7 +25,7 @@ curl --fail --show-error --silent --location --connect-timeout 30 --max-time 600
 digest=$(jq -er '.sha512 | select(test("^[a-f0-9]{128}$"))' "$manifest")
 echo "$digest  $image" | sha512sum --check --strict -
 guest_data=$vm/stage
-git archive HEAD src scripts tests/native-cache/expiry.py tests/native-cache/read-client.mjs | tar -xf - -C "$guest_data"
+git archive HEAD src scripts tests/native-cache/expiry.py tests/native-cache/android_channel.py tests/native-cache/read-client.mjs | tar -xf - -C "$guest_data"
 # The app build stages this exact client next to the same Weather provider modules.
 git show HEAD:integrations/drizzli/overlay/src/lib/services/volparossa/client.mjs > "$guest_data/src/drizzli-client.mjs"
 install -m 0755 "$(realpath "$(command -v node)")" "$guest_data/bin/node"
@@ -37,8 +39,17 @@ echo "$GITHUB_SHA" > "$guest_data/weather.sha"
 echo "$CORE_SOURCE" > "$guest_data/core.sha"
 # Archive the inputs without their private host staging directory. The guest
 # installs this public code under a separately owned traversal boundary.
+extra=()
+device=()
+if [[ "${1:-}" = --android ]]; then
+    mv -- "$artifacts/air-quality.json" "$guest_data/air-quality.json"
+    extra=(air-quality.json)
+    test -f "$artifacts/mobile/booted"
+    device=(-chardev "socket,id=mobile,path=$artifacts/mobile.sock,server=on,wait=off"
+            -device virtserialport,chardev=mobile,name=weather.android)
+fi
 tar --create --file="$vm/medium/trial.tar" --directory="$guest_data" \
-    bin units scripts src tests forecast.json weather.sha core.sha
+    bin units scripts src tests forecast.json weather.sha core.sha "${extra[@]}"
 genisoimage -quiet -R -V WEATHERDATA -o "$vm/data.iso" "$vm/medium"
 rm -rf --one-file-system -- "$guest_data" "$vm/medium"
 echo 'instance-id: weather-expiry' > "$vm/meta"
@@ -52,6 +63,7 @@ sudo -n -- /usr/bin/setpriv --reuid "$(id -u)" --regid "$kvm_gid" --clear-groups
     timeout --kill-after=10s 420s qemu-system-x86_64 -accel kvm -cpu host -m 2048 -smp 2 -nic none \
     -display none -monitor none -serial "file:$vm/console" -no-reboot \
     -device virtio-serial-pci -chardev "file,id=result,path=$vm/result" -device virtserialport,chardev=result,name=weather.result \
+    "${device[@]}" \
     -drive "if=virtio,format=qcow2,file=$vm/overlay.qcow2" -drive "if=virtio,readonly=on,format=raw,file=$vm/seed.img" \
     -drive "media=cdrom,readonly=on,format=raw,file=$vm/data.iso" || {
         grep -oE 'WEATHER_GUEST_LINE=[0-9]{1,5}|guest diagnostics \[.{0,240}\]' "$vm/console" | tail -5 || true

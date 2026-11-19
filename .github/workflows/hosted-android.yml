@@ -3,6 +3,11 @@ run-name: Pinned Android debug build and installed synthetic app trial
 
 on:
   workflow_dispatch:
+    inputs:
+      signed_cache_recovery:
+        description: Exercise signed ECMWF expiry and replacement in the installed app
+        type: boolean
+        default: false
   push:
     branches: [feature/overmorrow-native-android]
     paths:
@@ -144,3 +149,23 @@ jobs:
             'Debug synthetic weather/air-quality only; no mobile core, live origins, physical-device or release claim.' \
             'No SDK, caches, signing keys, AVD disks, VM-service tokens or private logs are uploaded.' \
             >> "$GITHUB_STEP_SUMMARY"
+      - name: Prepare genuine ECMWF and NOAA inputs for the signed-cache trial
+        if: inputs.signed_cache_recovery
+        uses: ./tests/native-cache/prepare
+        env:
+          CARGO_BUILD_JOBS: '2'
+        with:
+          particulates: 'true'
+      - name: Exercise the installed Android app across genuine signed expiry
+        if: inputs.signed_cache_recovery
+        run: bash tests/native-cache/run-android.sh
+      - name: Retain the joined Android, publication and session receipts
+        if: inputs.signed_cache_recovery && success()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-signed-cache-recovery-${{ github.sha }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            ${{ env.WEATHER_TRIAL }}/result.json
+            ${{ env.WEATHER_TRIAL }}/installed.json

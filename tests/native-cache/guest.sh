@@ -95,6 +95,20 @@ runuser -u volparossa -- volparossa content publish --input "$state/trial-origin
     --identity "$state/identity.key" --passphrase-file "$state/trial-passphrase" --manifest "$state/trial-replacement" \
     --name weather.public-community-cache-trial --revision 2 --content-type application/vnd.volparossa.forecast.v1+json \
     --lifetime-seconds 300 --quota-bytes 131072 --max-entries 16 --min-free-bytes 67108864 > /run/weather-owner/replacement.json
+if [[ -c /dev/virtio-ports/weather.android ]]; then
+    chown weatherowner /dev/virtio-ports/weather.android
+    chmod 0600 /dev/virtio-ports/weather.android
+    install -o volparossa -g volparossa -m 0600 air-quality.json "$state/particulate.json"
+    runuser -u volparossa -- volparossa content publish --input "$state/particulate.json" --cache "$state/air-quality-cache" \
+        --identity "$state/identity.key" --passphrase-file "$state/trial-passphrase" --manifest "$state/air-manifest" \
+        --name weather.public-community-air-trial --revision 1 --content-type application/vnd.volparossa.air-quality.forecast.v1+json \
+        --lifetime-seconds 400 --quota-bytes 131072 --max-entries 16 --min-free-bytes 67108864 >/dev/null
+    runuser -u volparossa -- "$root/bin/remember_weather_manifest" "$state/air-quality-cache" "$state/air-manifest" "$key"
+    rm -- "$state/particulate.json" "$state/air-manifest"
+    mv -- air-quality.json /run/weather-owner/air-quality.json
+    chown weatherowner:weatherowner /run/weather-owner/air-quality.json
+    chmod 0600 /run/weather-owner/air-quality.json
+fi
 rm -- "$state/trial-passphrase" "$state/trial-manifest" "$state/trial-original.json"
 rm -rf --one-file-system -- "$state/replacement-cache"
 mv -- forecast.json /run/weather-owner/original.json
