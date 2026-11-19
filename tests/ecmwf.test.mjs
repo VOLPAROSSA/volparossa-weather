@@ -59,6 +59,15 @@ test('actual decoder-shaped result yields Celsius with run, valid time and missi
   assert.deepEqual(parseForecast(encode(result)), result);
 });
 
+test('Kelvin conversion preserves the decimal model field across freezing and scientific notation', () => {
+  for (const [kelvin, celsius] of [[280.265, 7.115], [282.123, 8.973], [262.615, -10.535], [273.14, -0.01],
+    [273.15, 0], [0, -273.15], [277.3000004, 4.1500004], [1e-7, -273.1499999]]) {
+    const field = decoded();
+    field[0].neighbours[0].value = kelvin;
+    assert.equal(sampleFromDecoded(field, QUERY, 12, EVIDENCE).temperature_2m, celsius);
+  }
+});
+
 test('mismatched native message or accumulated quantity cannot masquerade as 2m instantaneous temperature', () => {
   for (const changes of [{ shortName: 'tp' }, { paramId: 130 }, { level: 850 }, { dataDate: 20260929 },
     { validityTime: 1200 }, { stepType: 'accum' }, { endStep: 15 }, { class: 'ai' }, { stepUnits: 0 }]) {

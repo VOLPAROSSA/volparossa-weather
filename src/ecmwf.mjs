@@ -179,9 +179,20 @@ function decodedPoint(decoded, input, step, parameter) {
   return { keys, point, validAt };
 }
 
+function celsiusFromKelvin(kelvin) {
+  // Subtract the decimal SI offset at the decoder's precision before storing the result.
+  const [coefficient, exponent = '0'] = String(kelvin).split('e');
+  const [whole, fraction = ''] = coefficient.split('.');
+  const places = fraction.length - Number(exponent);
+  const scale = Math.max(2, places);
+  const kelvinUnits = BigInt(whole + fraction) * 10n ** BigInt(scale - places);
+  const celsiusUnits = kelvinUnits - 27315n * 10n ** BigInt(scale - 2);
+  return Number(String(celsiusUnits) + 'e-' + scale);
+}
+
 export function sampleFromDecoded(decoded, input, step, evidence) {
   const { point, validAt } = decodedPoint(decoded, input, step, '2t');
-  return { valid_at: validAt, lead_hours: step, temperature_2m: point.value === null ? null : point.value - 273.15,
+  return { valid_at: validAt, lead_hours: step, temperature_2m: point.value === null ? null : celsiusFromKelvin(point.value),
     grid: { latitude: point.latitude, longitude: point.longitude > 180 ? point.longitude - 360 : point.longitude,
       distance_km: point.distance, method: 'nearest-grid-no-interpolation' }, evidence };
 }
