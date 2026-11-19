@@ -245,7 +245,8 @@ to test independent product failure and expiry. The new receipt uses
 Add `--foreground-refresh` to the combined trial to switch real Firefox tabs.
 Returning while both publications are fresh makes no request. If either expires
 while the tab is hidden, returning to the forecast requests both products once
-through the local bridge. The hidden tab does not poll.
+through the local bridge. If a replacement is still unavailable, the next
+return tries again. The hidden tab does not poll.
 Eight upstream static assets copied into that build retained group-write bits;
 those specific generated files were made non-group/world-writable before the
 browser preflight. No serving-permission check was relaxed.

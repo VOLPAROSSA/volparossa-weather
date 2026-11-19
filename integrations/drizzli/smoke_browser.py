@@ -356,23 +356,35 @@ def verify_foreground_refresh(client, fixture, click_refresh):
     wait_for(lambda: client.script("return document.documentElement.dataset.trialVisibility === 'HV';"))
     wait_for(lambda: refresh_idle(client))
     require(counts() == before)
-    for mode, restore in (('short-lived', 'valid'), ('aq-short-lived', 'aq-valid')):
-        click_refresh(mode)
+    def both_products():
+        return client.script("""return [...document.querySelectorAll('section[aria-label^="VOLPAROSSA"]')]
+          .filter(section => section.querySelector('tbody tr')).length === 2;""")
+
+    def return_after(mode, delay):
         before = counts()
-        require(client.script("""return [...document.querySelectorAll('section[aria-label^="VOLPAROSSA"]')]
-          .filter(section => section.querySelector('tbody tr')).length === 2;"""))
         switch(other)
-        # Each fixture publication lasts 2.5 seconds. The background tab must stay quiet.
-        time.sleep(3)
-        fixture_command(fixture, restore)
+        time.sleep(delay)
+        fixture_command(fixture, mode)
         require(counts() == before)
         switch(original)
-        wait_for(lambda: counts() == (before[0] + 1, before[1] + 1))
+        expected = (before[0] + 1, before[1] + 1)
+        wait_for(lambda: counts() == expected)
         wait_for(lambda: refresh_idle(client))
-        require(client.script("""return [...document.querySelectorAll('section[aria-label^="VOLPAROSSA"]')]
-          .filter(section => section.querySelector('tbody tr')).length === 2;"""))
-        require(counts() == (before[0] + 1, before[1] + 1))
-    wait_for(lambda: client.script("return document.documentElement.dataset.trialVisibility === 'HVHVHV';"))
+        require(counts() == expected)
+
+    for mode, restore in (('short-lived', 'valid'), ('aq-short-lived', 'aq-valid')):
+        click_refresh(mode)
+        require(both_products())
+        # Each fixture publication lasts 2.5 seconds. The background tab must stay quiet.
+        if mode == 'short-lived':
+            return_after('unavailable', 3)
+            require(client.script("""return !!document.querySelector('section[aria-label="VOLPAROSSA forecast"] [role="alert"]')
+              && !!document.querySelector('section[aria-label="VOLPAROSSA air quality"] tbody tr');"""))
+            return_after(restore, 0.3)
+        else:
+            return_after(restore, 3)
+        require(both_products())
+    wait_for(lambda: client.script("return document.documentElement.dataset.trialVisibility === 'HVHVHVHV';"))
     switch(other)
     client.command('WebDriver:CloseWindow', {})
     switch(original)

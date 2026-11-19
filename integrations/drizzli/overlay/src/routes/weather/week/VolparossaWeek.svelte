@@ -75,7 +75,6 @@
     controller?.abort();
     clearTimeout(expiryTimer);
     clearTimeout(airQualityExpiryTimer);
-    weatherExpires = airQualityExpires = 0;
     const current = ++requestVersion;
     loading = airQualityLoading = true;
     forecast = airQuality = null;
