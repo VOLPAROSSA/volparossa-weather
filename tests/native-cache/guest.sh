@@ -96,8 +96,22 @@ mv -- forecast.json /run/weather-owner/original.json
 chown weatherowner:weatherowner /run/weather-owner/{original,publication}.json
 chmod 0600 /run/weather-owner/{original,publication}.json
 stage=owner
-runuser -u weatherowner -- env GITHUB_SHA="$(cat weather.sha)" CORE_SOURCE="$(cat core.sha)" \
-    python3 -B "$root/tests/native-cache/expiry.py" /run/weather-owner/original.json /run/weather-owner/publication.json > /run/result.json
+# The real client has a required veth into its protected worker. The owner
+# needs only loopback and the agent's filesystem Unix socket for this read.
+python3 - <<'CHECK'
+import json, pathlib, re, subprocess
+devices = pathlib.Path("/sys/bus/pci/devices").glob("*/class")
+assert all(not p.read_text().startswith("0x02") for p in devices)
+links = json.loads(subprocess.check_output(["ip", "-j", "-d", "link", "show"]))
+assert sum(bool(re.fullmatch("vpih[0-9a-f]{8}", link["ifname"]))
+           and link.get("linkinfo", {}).get("info_kind") == "veth" for link in links) == 1
+CHECK
+guest_net=$(readlink /proc/self/ns/net)
+env GITHUB_SHA="$(cat weather.sha)" CORE_SOURCE="$(cat core.sha)" unshare --net -- /bin/bash -ceu '
+    test "$(readlink /proc/self/ns/net)" != "$1"
+    ip link set lo up
+    exec runuser -u weatherowner -- python3 -B "$2" /run/weather-owner/original.json /run/weather-owner/publication.json
+' offline-owner "$guest_net" "$root/tests/native-cache/expiry.py" > /run/result.json
 stage=cleanup
 test ! -e /run/weather-owner/original.json
 rmdir /run/weather-owner

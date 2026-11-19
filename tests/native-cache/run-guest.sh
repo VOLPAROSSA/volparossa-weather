@@ -65,4 +65,4 @@ if ! jq -e --arg app "$GITHUB_SHA" --arg engine "$CORE_SOURCE" \
     exit 1
 fi
 echo "$digest  $image" | sha512sum --check --strict -
-jq -c --arg image "$digest" '. + {kvm:true,guest_nics:0,debian13_image_sha512:$image,helper_and_agent_stopped:true}' "$vm/result" > "$artifacts/result.json"
+jq -c --arg image "$digest" '. + {kvm:true,guest_nics:0,guest_client_ingress_veth:true,debian13_image_sha512:$image,helper_and_agent_stopped:true}' "$vm/result" > "$artifacts/result.json"
