@@ -5,7 +5,7 @@ import XCTest
 
 private enum WitnessError: Error { case transport, deadline(String), screen(String) }
 
-// The witness coordinates only phase names and reads the expected forecast value.
+// The witness coordinates phase names and reads expected values from the actual app responses.
 // Application traffic uses an independent, two-route HTTP relay on port 43210.
 private func control(_ command: String) throws -> String {
     let fd = socket(AF_INET, SOCK_STREAM, 0)
@@ -46,10 +46,16 @@ private func waitFor(_ command: String, seconds: TimeInterval = 450) throws -> S
 final class WeatherTests: XCTestCase {
     let app = XCUIApplication(bundleIdentifier: "com.marotidev.overmorrow")
 
+    // A short signed decimal must not match the beginning of a longer displayed value.
+    private func numericLabel(_ value: String) -> NSPredicate {
+        let literal = NSRegularExpression.escapedPattern(for: value)
+        return NSPredicate(format: "label MATCHES %@", "(?s).*(?<![0-9.eE+-])" + literal + "(?![0-9.eE+-]).*")
+    }
+
     // Match the installed Flutter view through the operating system accessibility tree.
     // Always require an element within the actual device screen before recording a frame.
-    private func visible(_ text: String, upward: Bool, steps: Int = 18) throws -> XCUIElement {
-        let predicate = NSPredicate(format: "label CONTAINS[c] %@", text)
+    private func visible(_ text: String, upward: Bool, steps: Int = 18, numeric: Bool = false) throws -> XCUIElement {
+        let predicate = numeric ? numericLabel(text) : NSPredicate(format: "label CONTAINS[c] %@", text)
         let matches = app.descendants(matching: .any).matching(predicate)
         for index in 0...steps {
             for item in matches.allElementsBoundByIndex {
@@ -69,7 +75,7 @@ final class WeatherTests: XCTestCase {
     }
 
     private func assertRemoved(_ value: String) {
-        let predicate = NSPredicate(format: "label CONTAINS[c] %@", value)
+        let predicate = numericLabel(value)
         XCTAssertFalse(app.descendants(matching: .any).matching(predicate).firstMatch.exists)
     }
 
@@ -84,7 +90,7 @@ final class WeatherTests: XCTestCase {
         XCTAssertEqual(try waitFor("ready-initial", seconds: 1000), "ok")
         app.launch()
         let value = try waitFor("value-initial", seconds: 160)
-        _ = try visible(value, upward: false)
+        _ = try visible(value, upward: false, numeric: true)
         try observe("initial")
         XCTAssertEqual(try waitFor("ready-refused"), "ok")
         _ = try visible("values are hidden", upward: false, steps: 3)
@@ -99,7 +105,22 @@ final class WeatherTests: XCTestCase {
         try visible("Refresh forecasts", upward: false).tap()
         let replacement = try waitFor("value-recovered", seconds: 160)
         XCTAssertEqual(replacement, value)
-        _ = try visible(replacement, upward: true)
+        _ = try visible(replacement, upward: true, numeric: true)
         try observe("recovered")
+
+        try visible("Air quality details", upward: false).tap()
+        let title = app.descendants(matching: .any).matching(NSPredicate(format: "label ==[c] %@", "Air quality")).firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        XCTAssertTrue(title.isHittable)
+        _ = try visible("Native particulate forecast", upward: true, steps: 2)
+        for heading in ["PM2.5 (µg/m³)", "PM10 (µg/m³)"] {
+            _ = try visible(heading, upward: false, steps: 2)
+        }
+        let concentrations = try control("particulates").split(separator: " ")
+        XCTAssertEqual(concentrations.count, 2)
+        for value in concentrations {
+            _ = try visible(String(value), upward: false, steps: 2, numeric: true)
+        }
+        try observe("particulates")
     }
 }

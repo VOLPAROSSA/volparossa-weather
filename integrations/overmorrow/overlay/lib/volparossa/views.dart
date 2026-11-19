@@ -118,6 +118,7 @@ class _NativeProductViewState extends State<NativeProductView>
               SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: DataTable(
+                  columnSpacing: 24,
                   columns: [
                     const DataColumn(label: Text('Native valid time (UTC)')),
                     ...(widget.airQuality

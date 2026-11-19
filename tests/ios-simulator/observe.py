@@ -61,7 +61,8 @@ def capture(app, device, directory, setup_deadline):
     print(f'iPhone simulator booted in {booted - started:.1f}s', flush=True)
     sim('install', device, str(app.resolve(strict=True)), deadline=setup_deadline)
     print(f'Original app installed in {time.monotonic() - booted:.1f}s', flush=True)
-    pair = json.loads(subprocess.check_output(['node', HERE / 'fixture.mjs'], timeout=15))
+    # Start this short-lived pair only after installation, within the same setup budget.
+    pair = json.loads(subprocess.check_output(['node', HERE / 'fixture.mjs'], timeout=remaining(setup_deadline)))
     frames = []
     with ThreadingHTTPServer(('127.0.0.1', 43210), Handler) as server:
         server.calls, server.lock, server.complete = [], threading.Lock(), threading.Event()

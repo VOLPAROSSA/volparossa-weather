@@ -44,7 +44,8 @@ Credits: ECMWF, NOAA and Overmorrow; see [attribution and notices](https://githu
   each selected GRIB2 field's exact HTTP byte range. Never download the whole file.
 - Use an explicitly pinned official ecCodes decoder to find the nearest model
   grid point, check its run/validity/parameter/unit metadata and convert 2 m
-  temperature from Kelvin to Celsius. Missing values remain `null`.
+  temperature from Kelvin to Celsius. Subtract the exact 273.15 offset at the
+  precision of the decoded value. Missing values remain `null`.
 - Opt into real 10 m wind components, speed and meteorological direction with
   `--include-wind`. Decode `2t`, `10u` and `10v` independently and require matching
   initialization, valid time, full grid geometry and nearest grid point.
