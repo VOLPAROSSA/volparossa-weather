@@ -64,8 +64,11 @@ peers; that trial fetches the products before opening the UI. Drizz.li has a
 separate real temperature/wind delivery proof and synthetic rain/particulate
 interaction tests. An installed Overmorrow Android debug app also passes actual
 app-triggered core delivery, refresh and background/resume with real products in
-an isolated emulator. Expiry behavior has only been demonstrated with synthetic
-products. Physical devices, iOS support, observation acquisition, trained corrections and
+an isolated emulator. The installed app also hides expired signed weather and
+restores it after a second refresh tap while the NOAA particulate product stays
+visible. [Signed Android recovery results](integrations/overmorrow/README.md#signed-expiry-in-the-installed-android-app)
+
+Physical devices, iOS support, observation acquisition, trained corrections and
 automatic shared acquisition remain unfinished. The local verification command
 compares archived IFS and AIFS temperatures using supplied station observations. Rain accumulation
 must not be presented as hourly rainfall; unsupported values are not invented.
@@ -394,11 +397,15 @@ passes on core `aac5be7f602fae9754153cdcb5c401ecb9ee7cb6` and Weather
 `3b90442a9d5be4db73ccf83cba2028364980c3ca`. The installed app initiates cold peer
 retrieval of real weather and particulate products, with exact native tables,
 two cache-backed refreshes, background/resume and cleanup. All six product
-requests record zero origin bytes. The products remain fresh during this trial:
-**actual expired-product recovery is still unverified**. The
-[core evidence ledger](https://github.com/VOLPAROSSA/volparossa/blob/main/docs/IMPLEMENTATION_STATUS.md#execution-priorities-and-next-milestones)
-records the result and earlier failures; the linked integration guide retains
-the earlier candidate history. Physical devices, a deployable mobile core, iOS,
+requests record zero origin bytes. The products remain fresh throughout that trial.
+A subsequent Android 16 run exercised signed expiry. On returning from the
+background, the weather table disappeared. The first tap reported unavailable
+weather, the second restored the table from signed revision 2, and air quality
+remained available through both taps.
+[Installed Android and Core evidence](integrations/overmorrow/README.md#signed-expiry-in-the-installed-android-app) ·
+[Core evidence ledger](https://github.com/VOLPAROSSA/volparossa/blob/main/docs/IMPLEMENTATION_STATUS.md#execution-priorities-and-next-milestones)
+
+Physical devices, a deployable mobile core, iOS,
 home-screen widgets and release packaging remain required.
 
 ### Additional weather data

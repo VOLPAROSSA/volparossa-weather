@@ -1,5 +1,5 @@
 name: Build hosted Android client
-run-name: Pinned Android debug build and installed synthetic app trial
+run-name: ${{ inputs.signed_cache_recovery && 'Installed Overmorrow Android across signed ECMWF expiry' || 'Pinned Android debug build and installed synthetic app trial' }}
 
 on:
   workflow_dispatch:

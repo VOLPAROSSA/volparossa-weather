@@ -51,9 +51,11 @@ full browser trial.
 The separate joined core delivery trial below passes in the browser. The Android
 debug build, strict offline rebuild and installed-emulator trial also pass,
 including actual refresh taps and background/resume expiry with synthetic
-products. Live Android-to-core delivery, physical devices, iOS packaging and
-native home-screen widgets remain unverified. Neither synthetic interaction
-tests nor successful delivery establish forecast accuracy.
+products. Separate Android emulator runs exercised cold Core retrieval and
+signed expiry with recovery while NOAA particulates stayed visible. Physical
+devices, iOS packaging and native home-screen widgets remain unverified.
+[Cold delivery run](https://github.com/VOLPAROSSA/volparossa/actions/runs/38717988016) ·
+[Signed expiry and recovery](#signed-expiry-in-the-installed-android-app)
 
 ## Hosted build and browser trials
 
@@ -109,6 +111,12 @@ The debug APK is 74,381,351 bytes with SHA256
 It has no production release authority. App/emulator shutdown, private-state
 removal, enclosing process drain, sandbox cleanup, KVM access restoration and
 unchanged host network namespace all pass.
+
+### Signed expiry in the installed Android app
+
+On Android 16, Overmorrow showed 8.973 °C from ECMWF and NOAA particulate values of 7.45526 and 20.8904 µg/m³. The temperature disappeared when the app returned from the background after its signed deadline. The first refresh tap received HTTP 503 for weather and HTTP 200 for particulates. The second tap recovered the weather table from signed revision 2. Both particulate values remained visible through all three phases. [Installed app observations](../../docs/evidence/android-44514675704/installed.json) · [Debian Core observations](../../docs/evidence/android-44514675704/result.json)
+
+The app used Android API 36 on an x86_64 emulator. The Debian Core guest had no network card. The fixture forwarded only the two requests from the isolated emulator to the guest's cache-only bridge. Select **signed_cache_recovery** in the hosted Android workflow to repeat the trial. [Hosted run](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44514675704) · [Source, APK and archive digests](../../docs/evidence/android-44514675704/verification.json)
 
 ### Earlier link inventory failures
 
@@ -600,11 +608,12 @@ original deadline and keep directory ownership until any pending write stops;
 an incomplete cleanup remains a failure. Raw receipts include local trial paths
 and must not be exported as public artifacts.
 
-The combined core/VM runner and its source, custody, cold-fetch and packet-capture
-acceptance checks remain to be integrated and executed. These components do not
-prove Android-triggered cold peer retrieval, live expiry behavior, an embedded
-mobile daemon or physical-device support. The historical synthetic Android trial
-and the successful web/core trial below retain their separate scopes.
+The combined Core/VM runner subsequently recorded the installed app's cold peer
+retrieval of both real products, two cache-backed refreshes and a background/resume
+cycle while both products were fresh. A separate signed-expiry trial exercised
+the stale weather and recovery screens. Both runs used an Android emulator and an
+external Debian Core. [Cold delivery run](https://github.com/VOLPAROSSA/volparossa/actions/runs/38717988016) ·
+[Signed expiry and recovery](#signed-expiry-in-the-installed-android-app)
 
 ## Joined core delivery trial
 

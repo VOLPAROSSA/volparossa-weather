@@ -34,7 +34,9 @@ jobs:
           node --version
           node -e 'if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)'
       - name: Check ECMWF and core-cache contracts
-        run: node --test tests/*.test.mjs
+        run: |
+          node --test tests/*.test.mjs
+          python3 -B -m unittest discover -s tests/native-cache -p 'test_*.py'
       - name: Check Drizz.li adapter without downloading upstream dependencies
         run: |
           node --test integrations/drizzli/test-client.mjs integrations/drizzli/test-prepare-core-browser.mjs
