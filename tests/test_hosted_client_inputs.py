@@ -573,6 +573,8 @@ class ClientInputTests(unittest.TestCase):
             expected = 'historical-v1, source-input-inventory, installed-environment-inventory'
             if profile == 'overmorrow':
                 expected += ', runtime-boundary-verification'
+            else:
+                expected += ', drizzli-candidate-build'
             self.assertIn('options: [' + expected + ']', historical)
             self.assertIn('timeout-minutes: 30', candidate)
             self.assertIn(f'--profile {profile} --mode source-input-inventory', candidate)

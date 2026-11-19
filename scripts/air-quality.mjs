@@ -12,16 +12,18 @@ try {
     decoder: { type: 'string' }, 'decoder-sha256': { type: 'string' }, 'scratch-parent': { type: 'string' },
     executable: { type: 'string' }, 'control-socket': { type: 'string' }, cache: { type: 'string' },
     'publisher-key': { type: 'string' }, name: { type: 'string' }, 'min-revision': { type: 'string' },
-    'reuse-cache': { type: 'boolean', default: false },
+    'reuse-cache': { type: 'boolean', default: false }, 'cache-only': { type: 'boolean', default: false },
   } });
   const mode = positionals[0];
+  const cacheOnly = values['cache-only'];
+  requireThat(!cacheOnly || mode === 'core-cache', 'CACHE_ONLY_REQUIRES_CORE');
   requireThat(positionals.length === 1 && ['origin', 'core-cache'].includes(mode), 'MODE_REQUIRED');
   requireThat(values.latitude !== undefined && values.longitude !== undefined
     && /^\d+(,\d+)*$/.test(values.steps), 'QUERY_REQUIRED');
   const query = airQualityRequest({ latitude: Number(values.latitude), longitude: Number(values.longitude),
     run: values.run, steps: values.steps.split(',').map(Number), communityArea: values['community-area'] });
   if (!values.execute) {
-    console.log(JSON.stringify({ mode, executed: false, query, output_contract: AQ_SCHEMA, auto_fallback: false,
+    console.log(JSON.stringify({ mode, executed: false, query, ...(cacheOnly ? { cache_only: true } : {}), output_contract: AQ_SCHEMA, auto_fallback: false,
       notice: mode === 'origin'
         ? 'Explicit NOAA surface particulate model forecast. Fetch bounded fields; locate point locally. Source IP visible. Requires --execute and --accept-data-license. No AQI or current observation.'
         : 'Read exact public community product from explicit trusted publisher/name through core. No origin fallback or publication. No AQI or current observation.' }, null, 2));
@@ -37,7 +39,7 @@ try {
         : await (await import('../src/air-quality-core.mjs')).fetchCachedAirQuality({
           mode, executable: values.executable, controlSocket: values['control-socket'], cache: values.cache,
           scratchParent: values['scratch-parent'], publisherKey: values['publisher-key'], name: values.name,
-          minRevision: Number(values['min-revision']), query, reuseCache: values['reuse-cache'],
+          minRevision: Number(values['min-revision']), query, reuseCache: values['reuse-cache'], cacheOnly,
         }, { signal: controller.signal });
       console.log(JSON.stringify(result, null, 2));
     } finally { process.removeListener('SIGINT', abort); process.removeListener('SIGTERM', abort); }

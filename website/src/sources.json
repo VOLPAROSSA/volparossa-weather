@@ -1,0 +1,200 @@
+{
+  "links": {
+    "project": "https://github.com/VOLPAROSSA/volparossa-weather",
+    "publication_url": "https://volparossa.org/volparossa-weather/",
+    "docs_fallback": "https://github.com/VOLPAROSSA/volparossa-weather#readme",
+    "demo_release": "https://github.com/VOLPAROSSA/volparossa/releases/tag/weather-demo-0.1.0",
+    "demo_guide": "https://github.com/VOLPAROSSA/volparossa/blob/a1f268d64dd3b2625c827f2ed77840c65d0a405c/docs/demos/weather-demo-0/README.md",
+    "demo_notices": "https://github.com/VOLPAROSSA/volparossa/blob/a1f268d64dd3b2625c827f2ed77840c65d0a405c/docs/demos/weather-demo-0/NOTICES.md",
+    "android_trial": "https://github.com/VOLPAROSSA/volparossa/actions/runs/38717988016",
+    "berlin_record": "https://github.com/VOLPAROSSA/volparossa-weather/blob/c69dc3de06cf8e69eff62d3fe70027461dea0089/third_party/ecmwf-smoke.json",
+    "weather_evidence": "https://github.com/VOLPAROSSA/volparossa-weather#the-first-executable-slice",
+    "drizzli": "https://github.com/VOLPAROSSA/volparossa-weather/blob/c69dc3de06cf8e69eff62d3fe70027461dea0089/integrations/drizzli/README.md",
+    "overmorrow": "https://github.com/VOLPAROSSA/volparossa-weather/blob/c69dc3de06cf8e69eff62d3fe70027461dea0089/integrations/overmorrow/README.md",
+    "ecmwf_open_data": "https://www.ecmwf.int/en/forecasts/datasets/open-data",
+    "cc_by_4": "https://creativecommons.org/licenses/by/4.0/",
+    "noaa_data": "https://github.com/VOLPAROSSA/volparossa-weather/blob/c69dc3de06cf8e69eff62d3fe70027461dea0089/third_party/noaa-gefs.json",
+    "noaa_terms": "https://www.weather.gov/disclaimer/"
+  },
+  "demo": {
+    "duration_seconds": 60.57,
+    "pixel_width": 1280,
+    "pixel_height": 1440,
+    "assets": [
+      {
+        "filename": "weather-demo-0-final.mp4",
+        "url": "https://github.com/VOLPAROSSA/volparossa/releases/download/weather-demo-0.1.0/weather-demo-0-final.mp4",
+        "bytes": 3866091,
+        "sha256": "aee031d680fd20d76045e40f2dcd18ed16ebdca5a58186b8e18ec7a681f2b2e1"
+      },
+      {
+        "filename": "captions-final.vtt",
+        "url": "https://github.com/VOLPAROSSA/volparossa/releases/download/weather-demo-0.1.0/captions-final.vtt",
+        "bytes": 913,
+        "sha256": "1adf2bcc263560f3c88a82b6bbb1fab5f1250c23614d4c185cc27d62724b3cd9"
+      },
+      {
+        "filename": "transcript-final.txt",
+        "url": "https://github.com/VOLPAROSSA/volparossa/releases/download/weather-demo-0.1.0/transcript-final.txt",
+        "bytes": 3111,
+        "sha256": "00c3ba464ddbd01f4e7cb15168e853f62443a8bcf180c28e93c5940f1a63614f"
+      },
+      {
+        "filename": "thumbnail-final-web.webp",
+        "url": "https://github.com/VOLPAROSSA/volparossa/releases/download/weather-demo-0.1.0/thumbnail-final-web.webp",
+        "bytes": 32390,
+        "sha256": "6d77662a6e369b193477dbbc8c63aa4304497223338585c0a1cd6ffe6fa423c0"
+      },
+      {
+        "filename": "publication-SHA256SUMS",
+        "url": "https://github.com/VOLPAROSSA/volparossa/releases/download/weather-demo-0.1.0/publication-SHA256SUMS",
+        "bytes": 1621,
+        "sha256": "3492bb7c41e66d3f35c37d86914b084d0f75f7f1616b363c4e56ee7696d504ea"
+      }
+    ]
+  },
+  "berlin": {
+    "location": "Berlin",
+    "record_kind": "Archived forecast",
+    "model": "ifs",
+    "model_run_at": "2026-09-30T12:00:00.000Z",
+    "lead_hours": 12,
+    "valid_at": "2026-10-01T00:00:00.000Z",
+    "parameter": "2t",
+    "input_unit": "K",
+    "decoded_temperature_kelvin": 288.546,
+    "normalized_temperature_celsius": 15.396000000000015,
+    "public_test_point": {
+      "latitude": 52.52,
+      "longitude": 13.41
+    },
+    "nearest_model_grid_point": {
+      "latitude": 52.5,
+      "longitude": 13.5,
+      "distance_km": 6.48435
+    },
+    "display_temperature": "15.4 °C",
+    "temperature_height_metres": 2,
+    "source_record": "https://github.com/VOLPAROSSA/volparossa-weather/blob/c69dc3de06cf8e69eff62d3fe70027461dea0089/third_party/ecmwf-smoke.json"
+  },
+  "network": {
+    "nodes": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E",
+      "F"
+    ],
+    "edges": [
+      [
+        "A",
+        "B"
+      ],
+      [
+        "B",
+        "C"
+      ],
+      [
+        "A",
+        "D"
+      ],
+      [
+        "D",
+        "E"
+      ],
+      [
+        "E",
+        "F"
+      ],
+      [
+        "C",
+        "F"
+      ],
+      [
+        "B",
+        "E"
+      ],
+      [
+        "B",
+        "F"
+      ]
+    ],
+    "routes": [
+      [
+        "A",
+        "B",
+        "C",
+        "F"
+      ],
+      [
+        "A",
+        "D",
+        "E",
+        "F"
+      ]
+    ],
+    "layouts": {
+      "desktop": {
+        "width": 600,
+        "height": 230,
+        "points": {
+          "A": [
+            70,
+            55
+          ],
+          "B": [
+            285,
+            45
+          ],
+          "C": [
+            510,
+            65
+          ],
+          "D": [
+            85,
+            170
+          ],
+          "E": [
+            300,
+            165
+          ],
+          "F": [
+            520,
+            170
+          ]
+        }
+      },
+      "mobile": {
+        "width": 300,
+        "height": 360,
+        "points": {
+          "A": [
+            60,
+            55
+          ],
+          "B": [
+            70,
+            160
+          ],
+          "C": [
+            55,
+            290
+          ],
+          "D": [
+            230,
+            55
+          ],
+          "E": [
+            235,
+            170
+          ],
+          "F": [
+            230,
+            295
+          ]
+        }
+      }
+    }
+  }
+}

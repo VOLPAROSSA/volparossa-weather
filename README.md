@@ -65,8 +65,9 @@ separate real temperature/wind delivery proof and synthetic rain/particulate
 interaction tests. An installed Overmorrow Android debug app also passes actual
 app-triggered core delivery, refresh and background/resume with real products in
 an isolated emulator. Expiry behavior has only been demonstrated with synthetic
-products. Physical devices, iOS support, observations, trained corrections, model
-comparison and automatic shared acquisition remain unfinished. Rain accumulation
+products. Physical devices, iOS support, observation acquisition, trained corrections and
+automatic shared acquisition remain unfinished. The local verification command
+compares archived IFS and AIFS temperatures using supplied station observations. Rain accumulation
 must not be presented as hourly rainfall; unsupported values are not invented.
 
 The [real IFS origin-to-native-decoder smoke](third_party/ecmwf-smoke.json) passes:
@@ -308,6 +309,15 @@ does not make cache markers, adopt foreign directories or erase incomplete
 caches. Each request makes at most one core call. A failed or cancelled fetch
 may leave a valid cache for the next request; invalid caches and unreadable paths
 remain errors, without an automatic repair or fallback.
+To read a previously completed named download offline, set `cacheMode: "cache-only"`
+for that product, or pass `--cache-only` to its `core-cache` CLI command.
+Core reopens the existing cache and checks the publisher, name, minimum revision,
+original signed expiry and object integrity. Weather also checks the forecast's
+original acquisition and model age. A valid response includes
+`delivery.cache_only: true`. When the publication expires, or if the cache is
+absent or incomplete, the HTTP endpoint returns 503. Offline requests make no
+peer or origin requests and never create a replacement cache.
+
 The two products must describe the same public area, but may use different
 publishers, models, runs and lead times. Requests are sequential and share one
 retrieval slot; a timed-out request finishes cancellation before releasing its
@@ -501,6 +511,138 @@ attribution to [ECMWF](https://www.ecmwf.int/en/forecasts/datasets/open-data), r
 the license and identify nearest-point selection/unit conversion. Respect source
 capacity; no retry storm, quota rotation or bulk ingestion is implemented.
 [Official index/range documentation](https://confluence.ecmwf.int/spaces/DAC/pages/272310539/ECMWF+open+data+real-time+forecasts+from+IFS+and+AIFS).
+
+## Compare forecasts with public station observations
+
+Use the pinned decoder and license opt-in from [Try a deliberately chosen
+model run](#try-a-deliberately-chosen-model-run). Save the `forecast` output
+from two `origin --community-area --execute` commands, one for IFS and one
+for AIFS Single. Select the same initialization
+and request the exact coordinates of the public station. The verifier reads
+these local files and the station measurements offline.
+
+```sh
+node scripts/verify-forecast.mjs ifs.json aifs-single.json observations.json
+```
+
+Supply instantaneous 2 m air temperatures in degrees Celsius for one station.
+The following input illustrates the format using **synthetic** data. For actual
+verification, identify the source dataset or provider and station, retain its
+license and attribution, and use quality flags derived from that source.
+Supplying the file declares permission for public evaluation and that the
+cases were held out. The verifier cannot authenticate those declarations.
+
+```json
+{
+  "schema": "volparossa.weather.observations.v1",
+  "source": "Synthetic example",
+  "license": "CC0-1.0",
+  "station": { "id": "synthetic", "latitude": 52.52, "longitude": 13.41 },
+  "sharing": "public",
+  "purpose": "held-out-evaluation",
+  "variable": "temperature_2m",
+  "unit": "degC",
+  "statistic": "instant",
+  "samples": [
+    { "observed_at": "2026-10-01T00:00:00.000Z", "temperature_2m": 8, "quality": "accepted" },
+    { "observed_at": "2026-10-01T06:00:00.000Z", "temperature_2m": null, "quality": "accepted" },
+    { "observed_at": "2026-10-01T12:00:00.000Z", "temperature_2m": 0, "quality": "accepted" }
+  ]
+}
+```
+
+The report accounts for every distinct timestamp in the three inputs. A paired
+case requires an accepted measurement, both forecast values at that exact UTC
+instant, and acquisition of both forecasts before that instant. Both models
+must have selected the same native grid point for the station. The verifier
+calculates its great-circle distance from the station coordinates and excludes
+points beyond the forecast contract's 50 km bound. Grid coordinates and distance
+accompany each scored case. Historical forecasts
+are eligible after their delivery expiry. Use `null` for missing values and
+`"rejected"` for measurements that failed source quality checks. Duplicate
+observation times are ambiguous and cause an error. Each file is limited to
+128 KiB, each forecast to 16 lead times, and observations to 32 timestamps.
+
+Signed error is forecast minus observation. Mean error and mean absolute error
+use the same pairs and are `null` when there are none. With observed values
+8 and 0, predictions 10 and −4 give a mean error of −1 °C and a mean absolute
+error of 3 °C. Predictions 7 and 1 on those same observations give 0 °C and
+1 °C. Run the example and its CLI checks with
+`node --test tests/forecast-verification.test.mjs`. These synthetic values
+illustrate the calculation. Claims about forecast skill require representative,
+independently held-out real observations across stations and model runs.
+
+### Archived example at Berlin-Tempelhof
+
+For 11 October 2026 at 12:00 UTC, Berlin-Tempelhof reported 11.6 °C. The
+24-hour IFS forecast gave 10.73 °C and AIFS Single gave 12.07 °C at the
+same grid point, 7.55 km from the station. Forecast minus observation was
+−0.87 °C for IFS and +0.47 °C for AIFS Single. DWD marks this observation
+as provisionally checked (`QN_9=1`, formal control only). This single
+station-hour cannot establish model skill.
+
+The [retrospective evidence](third_party/ecmwf-dwd-temperature-comparison.json)
+records the original station row, data licenses, exact ECMWF byte ranges and
+hashes. To reproduce, verify each index hash, select its `2t` range and
+retrieve that range only. Require HTTP 206 and the recorded `Content-Range`
+and SHA-256. For each resulting field, check `gdalinfo -json field.grib2` for
+the 2 m temperature, forecast run and valid hour, then read the Celsius value
+with `gdallocationinfo -wgs84 -valonly field.grib2 13.4020 52.4676`.
+For DWD, look up station 00433 at `MESS_DATUM=2026101112` in the recorded ZIP
+member. DWD updates its recent files and may revise values.
+
+Both ECMWF archive objects predate the observation. The source check on
+18 November retrieved them retrospectively and used GDAL. The offline
+prospective verification command requires a forecast captured for the station before
+the observation. The earlier Berlin capture selected a different location.
+
+### Score cached archive fields with the verification CLI
+
+Use `archive` when model records were downloaded after their valid hour.
+It reads two cached GRIB fields, their indexes and a local evaluation file.
+The [Berlin/Potsdam input](third_party/ecmwf-dwd-archive-input.json) contains
+the observation series and source rows for four stations. The [earlier field
+receipt](third_party/ecmwf-dwd-temperature-comparison.json) lists the public
+archive URLs, exact byte ranges and SHA-256 digests. In one directory, save
+the two indexes as `ifs.index` and `aifs-single.index` and the corresponding
+individual `2t` field ranges as `ifs.grib2` and `aifs-single.grib2`. On Linux
+the command uses the existing GDAL GRIB tools and `prlimit` under `/usr/bin`.
+
+```sh
+node scripts/verify-forecast.mjs archive third_party/ecmwf-dwd-archive-input.json /path/to/cached-fields
+```
+
+The CLI checks each field and index digest, the native lead and valid time,
+ECMWF parameter and level, units, dimensions and grid. It decodes each
+occupied cell once per model. For retrospective eligibility it uses the
+archive object's supplied Last-Modified time and reports the later retrieval
+date. The caller supplies normalized, publicly usable station series and
+their provenance. The CLI reads those series locally. For the published
+example, the original rows, units, sensor heights, timestamps and coordinates
+were separately checked against the four DWD ZIPs and their recorded hashes.
+
+For 11 October 2026 at 12:00 UTC the run paired all four station observations
+with 24-hour forecasts from both models. DWD supplied SYNOP-derived nominal
+hourly values; `QN_9=1` denotes formal quality control only. Marzahn and
+Tempelhof share one model cell. Four nearby stations in one hour are a
+reproduction example and cannot establish relative model skill.
+
+| DWD station | Grid distance | Observation | IFS | AIFS Single |
+| --- | ---: | ---: | ---: | ---: |
+| Berlin-Dahlem (FU) | 6.23 km | 11.7 °C | 11.92 °C | 12.10 °C |
+| Berlin-Marzahn | 6.41 km | 11.5 °C | 10.73 °C | 12.07 °C |
+| Berlin-Tempelhof | 7.55 km | 11.6 °C | 10.73 °C | 12.07 °C |
+| Potsdam | 13.87 km | 11.6 °C | 12.86 °C | 12.13 °C |
+
+The [CLI report](third_party/ecmwf-dwd-archive-report.json) retains the exact
+temperatures, signed errors, quality flags, archive availability, file hashes
+and per-station coverage. One invocation supports one native model run and
+lead at up to eight distinct stations. Station series use the observation
+contract above with `purpose: "retrospective-evaluation"`; use
+`statistic: "nominal-synoptic-hour"` for nominal SYNOP readings and
+`quality: "provisional"` for a preliminarily checked value. Unknown or
+incompatible units and statistics fail validation. Missing, rejected,
+unmatched or late-available pairs have no score.
 
 ## Shared forecasting and learning, next
 

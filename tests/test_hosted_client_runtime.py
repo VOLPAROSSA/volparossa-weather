@@ -45,12 +45,12 @@ class RuntimeBoundary(unittest.TestCase):
         event.write_text(json.dumps(dict(inputs=dict(input_mode='historical-v1')))); event.chmod(0o600)
         self.enterContext(patch.dict(os.environ, GITHUB_EVENT_PATH=str(event), GITHUB_EVENT_NAME='workflow_dispatch'))
 
-    def view(self, root, packages, profile, *, host):
+    def view(self, root, packages, profile, *, host, objects=None):
         record = dict(apt=dict(packages=[dict(**{k: v for k, v in p.items() if k != 'files'},
             files_sha256=M['sha'](M['canonical'](p['files']))) for p in packages]))
         inputs = SimpleNamespace(load_package_inputs=lambda selected: record)
         with patch.dict(M['View'].__init__.__globals__, module=Mock(return_value=inputs)):
-            return M['View'](root, packages, profile, host=host)
+            return M['View'](root, packages, profile, host=host, objects=objects)
 
     def fixture(self):
         host = self.root / 'host'
@@ -71,6 +71,28 @@ class RuntimeBoundary(unittest.TestCase):
             path.write_bytes(raw); path.chmod(0o644)
             files[name] = dict(type='file', mode=0o644, bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
         return host, [dict(identity=['fixture', '1', 'amd64'], files=files)]
+
+    def test_view_uses_quarantined_package_members_without_host_fallback(self):
+        host, packages = self.fixture()
+        store = M['PackageObjects'](self.root / 'objects')
+        for name, record in packages[0]['files'].items():
+            store.keep(name, record['sha256'], (host / name).read_bytes())
+        source = 'usr/lib/x86_64-linux-gnu/libfixture.so.1'
+        contents = (host / source).read_bytes()
+        digest = packages[0]['files'][source]['sha256']
+        count, size = len(store.digests), store.bytes
+        store.keep(source, digest, contents)
+        self.assertEqual((len(store.digests), store.bytes), (count, size))
+        self.assertFalse((store.root / packages[0]['files']['etc/ld.so.conf.d/fakeroot-x86_64-linux-gnu.conf']['sha256']).exists())
+        (host / source).write_bytes(b'changed installed library')
+        view = self.view(self.root / 'view', packages, 'drizzli', host=host, objects=store)
+        self.assertEqual((view.root / source).read_bytes(), contents)
+        (store.root / digest).write_bytes(b'x' * len(contents))
+        with self.assertRaisesRegex(ValueError, 'BOUNDARY_INSTALLED_BYTES'):
+            self.view(self.root / 'invalid', packages, 'drizzli', host=host, objects=store)
+        (store.root / digest).unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.view(self.root / 'missing', packages, 'drizzli', host=host, objects=store)
 
     def test_fixed_selection_excludes_foreign_configs_and_privileged_entries(self):
         for path in ('etc/ld.so.conf.d/fakeroot-x86_64-linux-gnu.conf',
@@ -665,6 +687,30 @@ class RuntimeBoundary(unittest.TestCase):
         for profile in ('drizzli', 'overmorrow'):
             self.assertIn('scripts/prepare_hosted_client_runtime.py',
                 runpy.run_path(str(ROOT / 'scripts/prepare_hosted_source_recipe.py'))['PROFILES'][profile])
+
+    def test_existing_android_workflows_have_only_their_original_inputless_entry_points(self):
+        event = self.root / 'android-event.json'
+        for repository, workflow, branch in (
+                ('VOLPAROSSA/volparossa-weather', 'Build hosted Android client', 'overmorrow-native-android'),
+                ('VOLPAROSSA/volparossa', 'Weather Android protected core delivery', 'weather-android-core')):
+            ref = 'refs/heads/feature/' + branch
+            for name, actual_ref, inputs, actual_repo, allowed in (
+                    ('workflow_dispatch', 'refs/heads/main', {}, repository, True),
+                    ('push', ref, {}, repository, True),
+                    ('pull_request', ref, {}, repository, False),
+                    ('push', 'refs/heads/main', {}, repository, False),
+                    ('workflow_dispatch', ref, {}, 'unrelated/repository', False),
+                    ('workflow_dispatch', ref, {'input_mode': 'drizzli-candidate-build'}, repository, False)):
+                with self.subTest(workflow=workflow, event=name, ref=actual_ref, repository=actual_repo, inputs=inputs):
+                    event.write_text(json.dumps({'inputs': inputs}))
+                    with patch.dict(os.environ, GITHUB_ACTIONS='true', GITHUB_EVENT_PATH=str(event),
+                                    GITHUB_EVENT_NAME=name, GITHUB_REF=actual_ref,
+                                    GITHUB_WORKFLOW=workflow, GITHUB_REPOSITORY=actual_repo):
+                        if allowed:
+                            H['require_runtime_boundary']()
+                        else:
+                            with self.assertRaisesRegex(ValueError, 'RUNTIME_BOUNDARY_REQUIRED'):
+                                H['require_runtime_boundary']()
 
     def test_actual_source_mode_cannot_fall_back_to_host_usr(self):
         event = self.root / 'source-event.json'

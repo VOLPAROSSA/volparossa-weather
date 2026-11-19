@@ -224,7 +224,7 @@ def package_data_path(name):
     return name
 
 
-def archive_member_inventory(tar):
+def archive_member_inventory(tar, keep_file=None):
     import io
     import tarfile
     files, count = {}, 0
@@ -246,10 +246,12 @@ def archive_member_inventory(tar):
                 content = archive.extractfile(member).read(I.MAX_MEMBER + 1)
                 I.require(len(content) == member.size, 'APT_MEMBER_SIZE')
                 files[name] = dict(type='file', bytes=len(content), sha256=I.sha(content), mode=member.mode & 0o777)
+                if keep_file is not None:
+                    keep_file(name, files[name]['sha256'], content)
     return files
 
 
-def candidate(profile, output, *, downloader=I.fetch, companions=None):
+def candidate(profile, output, *, downloader=I.fetch, companions=None, keep_file=None):
     global DIAGNOSTIC_OUTPUT, APT_CONFIG_FILE
     DIAGNOSTIC_OUTPUT = output
     I.require(companions is None or companions == load_installer_companions(), 'COMPANION_INPUTS_CHANGED')
@@ -346,7 +348,7 @@ def candidate(profile, output, *, downloader=I.fetch, companions=None):
         deb = private / (str(len(bindings)) + '.deb')
         I.write(deb, data)
         tar = run(['/usr/bin/dpkg-deb', '--fsys-tarfile', str(deb)], maximum=512 * 1024**2)
-        files = archive_member_inventory(tar)
+        files = archive_member_inventory(tar, keep_file)
         bindings.append(dict(identity=list(found[0][0]), input=item, indexed_origins=[row['suite'] for _, row in found], files=files))
     baseline = run(['/usr/bin/dpkg-query', '-W', '-f=${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Status}\n'])
     I.write(output / 'runner-packages.tsv', baseline)

@@ -16,12 +16,14 @@ try {
     'decoder-sha256': { type: 'string' }, 'scratch-parent': { type: 'string' },
     executable: { type: 'string' }, 'control-socket': { type: 'string' }, cache: { type: 'string' },
     'publisher-key': { type: 'string' }, name: { type: 'string' }, 'min-revision': { type: 'string' },
-    'reuse-cache': { type: 'boolean', default: false },
+    'reuse-cache': { type: 'boolean', default: false }, 'cache-only': { type: 'boolean', default: false },
     'include-wind': { type: 'boolean', default: false },
     'include-precipitation': { type: 'boolean', default: false },
     'output-contract': { type: 'string', default: 'forecast' }, variables: { type: 'string' },
   } });
   const mode = positionals[0];
+  const cacheOnly = values['cache-only'];
+  requireThat(!cacheOnly || mode === 'core-cache', 'CACHE_ONLY_REQUIRES_CORE');
   if (positionals.length !== 1 || !['origin', 'core-cache'].includes(mode)) throw new Error('MODE_REQUIRED');
   const provider = values['output-contract'] === 'provider';
   requireThat(['forecast', 'provider'].includes(values['output-contract'])
@@ -32,7 +34,7 @@ try {
     includeWind: values['include-wind'], includePrecipitation: values['include-precipitation'] });
   if (!values.execute) {
     if (mode === 'origin') ecmwfRequest(query);
-    console.log(JSON.stringify({ mode, executed: false, query, auto_fallback: false,
+    console.log(JSON.stringify({ mode, executed: false, query, ...(cacheOnly ? { cache_only: true } : {}), auto_fallback: false,
       ...(provider ? { output_contract: PROVIDER_SCHEMA, variables } : {}),
       index_urls: mode === 'origin' ? query.steps.map(step => fieldUrl(query, step, 'index')) : [],
       notice: mode === 'origin'
@@ -47,7 +49,7 @@ try {
           decoder: values.decoder, decoderSha256: values['decoder-sha256'], scratchParent: values['scratch-parent'], signal: controller.signal })
         : await (provider ? fetchCachedProvider : fetchCachedForecast)({ mode, executable: values.executable, controlSocket: values['control-socket'],
           cache: values.cache, scratchParent: values['scratch-parent'], publisherKey: values['publisher-key'],
-          name: values.name, minRevision: Number(values['min-revision']), query, reuseCache: values['reuse-cache'] },
+          name: values.name, minRevision: Number(values['min-revision']), query, reuseCache: values['reuse-cache'], cacheOnly },
         { signal: controller.signal, ...(provider ? { variables } : {}) });
       if (provider && mode === 'origin') result = toProviderForecast(result, { variables });
       console.log(JSON.stringify(result, null, 2));

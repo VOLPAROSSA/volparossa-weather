@@ -1,0 +1,5 @@
+# Keep the source-only export byte-identical to its upstream SHA-256 inventory.
+vendor/volparossa-theme/** -text
+vendor/volparossa-theme/assets/upstream/*.svg -whitespace
+vendor/volparossa-theme/assets/upstream/*-LICENSE.txt -whitespace
+assets/demo/** -text
