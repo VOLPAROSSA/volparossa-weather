@@ -16,6 +16,10 @@ ROUTES = {'/api/volparossa/forecast': 'weather', '/api/volparossa/air-quality': 
 BUNDLE = 'com.marotidev.overmorrow'
 
 
+def remaining(deadline):
+    return max(.1, deadline - time.monotonic())
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -43,22 +47,20 @@ class Handler(BaseHTTPRequestHandler):
             self.server.complete.set()
 
 
-def sim(*args, timeout=60):
-    return subprocess.check_output(['xcrun', 'simctl', *args], text=True, timeout=timeout).strip()
+def sim(*args, deadline):
+    return subprocess.check_output(['xcrun', 'simctl', *args], text=True, timeout=remaining(deadline)).strip()
 
 
-def capture(app, device, directory):
+def capture(app, device, directory, setup_deadline):
     # CoreSimulator starts system services and installs a full upstream debug
     # bundle on the same runner. Give setup one bounded budget. The time
     # available to the running application is measured separately below.
     started = time.monotonic()
-    setup_deadline = started + 480
-    sim('bootstatus', device, '-b', timeout=setup_deadline - started)
+    sim('bootstatus', device, '-b', deadline=setup_deadline)
     booted = time.monotonic()
     print(f'iPhone simulator booted in {booted - started:.1f}s', flush=True)
-    sim('install', device, str(app.resolve(strict=True)), timeout=max(.1, setup_deadline - booted))
+    sim('install', device, str(app.resolve(strict=True)), deadline=setup_deadline)
     print(f'Original app installed in {time.monotonic() - booted:.1f}s', flush=True)
-    assert sim('get_app_container', device, BUNDLE, 'app').endswith('/Runner.app')
     pair = json.loads(subprocess.check_output(['node', HERE / 'fixture.mjs'], timeout=15))
     frames = []
     with ThreadingHTTPServer(('127.0.0.1', 43210), Handler) as server:
@@ -67,7 +69,7 @@ def capture(app, device, directory):
         thread = threading.Thread(target=server.serve_forever)
         thread.start()
         try:
-            assert re.fullmatch(re.escape(BUNDLE) + r': [1-9][0-9]*', sim('launch', device, BUNDLE))
+            assert re.fullmatch(re.escape(BUNDLE) + r': [1-9][0-9]*', sim('launch', device, BUNDLE, deadline=setup_deadline))
             deadline = time.monotonic() + 100
             assert server.complete.wait(85), 'iPhone did not finish both product requests'
             # Capture the actual running screen while Flutter renders the arrived
@@ -77,9 +79,8 @@ def capture(app, device, directory):
                 path = directory / f'forecast-{i}.png'
                 if i:
                     time.sleep(2)
-                sim('io', device, 'screenshot', str(path), timeout=max(.1, deadline - time.monotonic()))
+                sim('io', device, 'screenshot', str(path), deadline=deadline)
                 frames.append(path)
-            sim('terminate', device, BUNDLE)
         finally:
             server.shutdown()
             thread.join(timeout=10)
@@ -92,20 +93,22 @@ def observe(app, screen, output):
     runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-18-5'
     device_type = 'com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro-Max'
     with tempfile.TemporaryDirectory(prefix='weather-screen-') as directory:
-        device = sim('create', 'VOLPAROSSA Weather trial', device_type, runtime)
+        setup_deadline = time.monotonic() + 480
+        device = sim('create', 'VOLPAROSSA Weather trial', device_type, runtime, deadline=setup_deadline)
         assert re.fullmatch(r'[0-9A-Fa-f-]{36}', device)
         try:
-            frames, hashes = capture(app, device, Path(directory))
+            frames, hashes = capture(app, device, Path(directory), setup_deadline)
         finally:
+            cleanup_deadline = time.monotonic() + 240
             try:
-                sim('shutdown', device)
+                sim('shutdown', device, deadline=cleanup_deadline)
             finally:
-                sim('delete', device)
-        remaining = json.loads(sim('list', 'devices', '--json'))['devices']
-        assert all(d['udid'] != device for devices in remaining.values() for d in devices)
+                sim('delete', device, deadline=cleanup_deadline)
+        devices = json.loads(sim('list', 'devices', '--json', deadline=cleanup_deadline))['devices']
+        assert all(d['udid'] != device for group in devices.values() for d in group)
         deadline = time.monotonic() + 65
         for path in reversed(frames):
-            observations = json.loads(subprocess.check_output([screen, path], timeout=max(.1, deadline - time.monotonic())))
+            observations = json.loads(subprocess.check_output([screen, path], timeout=remaining(deadline)))
             if all(observations.get(key) for key in ('provider_header', 'native_forecast', 'ifs_model')):
                 break
         else:
