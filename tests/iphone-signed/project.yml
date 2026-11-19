@@ -1,0 +1,33 @@
+name: WeatherWitness
+options:
+  deploymentTarget:
+    iOS: '16.0'
+settings:
+  base:
+    GENERATE_INFOPLIST_FILE: YES
+    SWIFT_VERSION: '5.0'
+targets:
+  WitnessHost:
+    type: application
+    platform: iOS
+    sources: [Host]
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: org.volparossa.test.weather-witness-host
+  InterfaceTests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: WitnessHost
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: org.volparossa.test.weather-witness
+      TEST_TARGET_NAME: WitnessHost
+schemes:
+  WeatherWitness:
+    build:
+      targets:
+        WitnessHost: all
+        InterfaceTests: [test]
+    test:
+      targets:
+        - InterfaceTests

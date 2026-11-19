@@ -1,0 +1,129 @@
+name: Signed Weather expiry and recovery on iPhone
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/iphone-signed-recovery.yml
+      - tests/iphone-signed/**
+      - tests/ios-simulator/build-app/**
+      - tests/ios-simulator/prepare.py
+      - tests/ios-simulator/observe.py
+      - integrations/drizzli/overlay/src/lib/services/volparossa/client.mjs
+      - scripts/forecast.mjs
+      - scripts/air-quality.mjs
+      - scripts/serve-provider.mjs
+      - tests/native-cache/**
+      - integrations/overmorrow/stage.py
+      - integrations/overmorrow/upstream.json
+      - integrations/overmorrow/upstream.patch
+      - integrations/overmorrow/overlay/lib/**
+      - src/*.mjs
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: weather-iphone-signed-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  media:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./tests/native-cache/prepare
+        with:
+          particulates: 'true'
+          wait-for-iphone: 'true'
+      - name: Pack the public model data and Core executables
+        run: |
+          set -euo pipefail
+          medium="$WEATHER_TRIAL/iphone"
+          bash tests/native-cache/pack-guest.sh iphone "$medium"
+          python3 -B tests/iphone-signed/media.py write "$medium"
+      - name: Send the current verified public inputs to the iPhone runner
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: iphone-inputs-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.WEATHER_TRIAL }}/iphone/data.iso
+            ${{ env.WEATHER_TRIAL }}/iphone/seed.img
+            ${{ env.WEATHER_TRIAL }}/iphone/media.json
+          retention-days: 1
+          if-no-files-found: error
+  iphone:
+    runs-on: macos-15
+    timeout-minutes: 85
+    env:
+      COCOAPODS_DISABLE_STATS: 'true'
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      CI: 'true'
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./tests/ios-simulator/build-app
+      - name: Prepare Debian and build the separate Apple UI test target
+        run: |
+          set -euo pipefail
+          mkdir -m 0700 "$RUNNER_TEMP/iphone-image"
+          python3 -B tests/iphone-signed/prepare-host.py "$RUNNER_TEMP/iphone-image"
+          xcodegen generate --spec tests/iphone-signed/project.yml --project tests/iphone-signed
+          xcodebuild -quiet -project tests/iphone-signed/WeatherWitness.xcodeproj -scheme WeatherWitness \
+            -configuration Debug -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/witness-build" build-for-testing
+      - name: Install the ordinary app on a fresh simulator
+        run: |
+          python3 -B tests/iphone-signed/device.py install build/ios-source/build/ios/iphonesimulator/Runner.app \
+            "$RUNNER_TEMP/weather-device" "$RUNNER_TEMP/iphone-ready.json"
+      - name: Signal the Linux publisher to acquire current model fields
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: iphone-ready-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/iphone-ready.json
+          if-no-files-found: error
+          retention-days: 1
+      - id: media
+        name: Find the corresponding Linux inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          id=$(python3 -B tests/iphone-signed/artifact.py inputs)
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          artifact-ids: ${{ steps.media.outputs.id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/iphone-media
+      - name: Verify the two Linux images before booting the guest
+        run: |
+          set -eu
+          python3 -B tests/iphone-signed/media.py verify "$RUNNER_TEMP/iphone-media"
+          mv "$RUNNER_TEMP/iphone-image/base.qcow2" "$RUNNER_TEMP/iphone-media/"
+      - name: Use the installed forecast, wait for expiry and refresh it twice
+        run: |
+          python3 -B tests/iphone-signed/session.py build/ios-source/build/ios/iphonesimulator/Runner.app \
+            "$RUNNER_TEMP/iphone-media" "$RUNNER_TEMP/witness-build" "$RUNNER_TEMP/weather-device" "$RUNNER_TEMP/iphone-result.json"
+      - name: Release an allocated simulator after an interrupted handoff
+        if: always()
+        run: python3 -B tests/iphone-signed/device.py remove "$RUNNER_TEMP/weather-device"
+      - name: Preserve the public forecast screens actually observed by XCTest
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: iphone-signed-screens-${{ github.sha }}
+          path: ${{ runner.temp }}/iphone-forecast-screens/*.png
+          if-no-files-found: ignore
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: iphone-signed-forecast-${{ github.sha }}
+          path: ${{ runner.temp }}/iphone-result.json
+          if-no-files-found: error
+          retention-days: 30

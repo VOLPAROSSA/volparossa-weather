@@ -23,6 +23,8 @@ ROOT = Path(__file__).resolve().parents[2]
 CLI = "/usr/bin/volparossa"
 NODE = shutil.which("node")
 NAME = "weather.public-community-cache-trial"
+# Software-emulated amd64 needs more time to start Node and the Core client.
+CALL_TIMEOUT = 60 if Path('/dev/virtio-ports/weather.iphone').exists() else 10
 
 
 @contextmanager
@@ -34,7 +36,7 @@ def child(args, env=None):
         if proc.poll() is None:
             os.killpg(proc.pid, signal.SIGTERM)
         try:
-            proc.wait(timeout=10)
+            proc.wait(timeout=CALL_TIMEOUT)
         except subprocess.TimeoutExpired:
             os.killpg(proc.pid, signal.SIGKILL)
             proc.wait()
@@ -47,14 +49,14 @@ def child(args, env=None):
 def opening(proc):
     with selectors.DefaultSelector() as ready:
         ready.register(proc.stdout, selectors.EVENT_READ)
-        if not ready.select(10):
+        if not ready.select(CALL_TIMEOUT):
             raise RuntimeError("bridge readiness timeout")
         return urlsplit(json.loads(proc.stdout.readline(4096))["listening"])
 
 
 def get(origin, path='/api/volparossa/forecast'):
     assert origin.scheme == "http" and origin.hostname == "127.0.0.1" and origin.port
-    conn = http.client.HTTPConnection(origin.hostname, origin.port, timeout=10)
+    conn = http.client.HTTPConnection(origin.hostname, origin.port, timeout=CALL_TIMEOUT)
     try:
         conn.request("GET", path)
         res = conn.getresponse()
@@ -66,8 +68,14 @@ def get(origin, path='/api/volparossa/forecast'):
 
 
 def read_client(origin):
-    result = subprocess.run([NODE, ROOT / "tests/native-cache/read-client.mjs", origin.geturl()],
-                            capture_output=True, check=True, timeout=10)
+    args = [NODE, ROOT / "tests/native-cache/read-client.mjs", origin.geturl()]
+    if Path('/dev/virtio-ports/weather.iphone').exists():
+        args.append('--software-emulation')
+    result = subprocess.run(args, capture_output=True, timeout=CALL_TIMEOUT)
+    if result.returncode:
+        known = re.findall(r'FORECAST_[A-Z_]{2,64}|TimeoutError|AbortError|TypeError', result.stderr.decode(errors='replace'))
+        print('WEATHER_CLIENT_DIAGNOSTIC=' + ','.join(known[:3] or ['CLIENT_EXIT']), file=sys.stderr)
+        result.check_returncode()
     return json.loads(result.stdout)
 
 
@@ -110,7 +118,9 @@ def run(root, source, publication):
                 scratchParent=str(root/"scratch"), name=NAME, minRevision=1, cacheMode="cache-only",
                 publisherKey=pub["publisher_key_hex"])
     cfg = root / "weather.json"
-    mobile = android_channel.PORT.exists()
+    iphone = Path('/dev/virtio-ports/weather.iphone')
+    mobile_port = iphone if iphone.exists() else android_channel.PORT
+    mobile = mobile_port.exists()
     mobile_responses = {}
     quality = None
     if mobile:
@@ -132,7 +142,7 @@ def run(root, source, publication):
             # This extra offline call is used only on failure and only prints
             # closed error codes or cache mode and byte counters.
             raw = subprocess.run([*command, "--local-output", root / "diagnostic.json"],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=CALL_TIMEOUT)
             if raw.returncode == 0:
                 report = json.loads(raw.stdout)
                 detail = ",".join(f"{k}={report.get(k)}" for k in ("cache_only", "peer_bytes", "providers_used"))
@@ -146,7 +156,7 @@ def run(root, source, publication):
         assert delivery["cache_only"] is True and delivery["manifest_id"] == pub["manifest_id"]
         assert delivery["sha256"] == wire_hash and delivery["revision"] == 1
         assert int(time.time()) < signed_expiry and body["freshness"]["expires_at"] == delivery["publication_expires_at"]
-    channel = android_channel.PORT.open('r+b', buffering=0) if mobile else nullcontext()
+    channel = mobile_port.open('r+b', buffering=0) if mobile else nullcontext()
     with child(bridge) as second, channel as port:
         origin = opening(second)
         status, body = get(origin)
@@ -158,7 +168,7 @@ def run(root, source, publication):
         if mobile:
             mobile_responses['initial'] = android_channel.exchange(port, 'initial', origin, get)
         remaining = signed_expiry - time.time()
-        assert 0 < remaining < 61
+        assert 0 < remaining <= (240 if mobile_port == iphone else 60)
         time.sleep(remaining + 0.05)
         observed = time.time()
         assert signed_expiry <= observed and get(origin) == (503, {"error": "FORECAST_UNAVAILABLE"})
@@ -166,14 +176,14 @@ def run(root, source, publication):
         assert read_client(origin) == {"error": "FORECAST_UNAVAILABLE"}
         expired_output = root / "expired-forecast.json"
         denied = subprocess.run([*command, "--local-output", expired_output],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=CALL_TIMEOUT)
         assert denied.returncode != 0 and not expired_output.exists()
         if mobile:
             mobile_responses['refused'] = android_channel.exchange(port, 'refused', origin, get)
         # The separate publisher may now deliver its pre-signed revision. The Weather account
         # still has neither the publisher's keys nor filesystem access to its cache.
         Path("/run/weather-recovery/advance").write_bytes(b"1")
-        stop = time.monotonic() + 15
+        stop = time.monotonic() + max(15, CALL_TIMEOUT)
         while True:
             recovered = read_client(origin)
             if recovered != {"error": "FORECAST_UNAVAILABLE"}:
@@ -199,7 +209,7 @@ def run(root, source, publication):
                 drizzli_rejected_expired=True, drizzli_recovered=True, revision_after_recovery=2,
                 replacement_manifest_id=recovered["manifest"], drizzli_displayed_temperature_c=recovered["display"],
                 network_interfaces=interfaces, core_refused_expired=True, original_plaintext_removed=True, scratch_empty=True,
-                **({'android_requests': mobile_responses} if mobile else {}))
+                **({('iphone_requests' if mobile_port == iphone else 'android_requests'): mobile_responses} if mobile else {}))
 
 
 if __name__ == "__main__":

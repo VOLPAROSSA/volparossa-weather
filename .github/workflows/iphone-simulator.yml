@@ -32,38 +32,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Verify the Flutter SDK and stage the original app
-        run: |
-          set -euo pipefail
-          test "$RUNNER_ENVIRONMENT" = github-hosted
-          test "$(uname -m)" = arm64
-          xcodebuild -version | grep -Fx 'Xcode 16.4'
-          sdk="$RUNNER_TEMP/ios-flutter"
-          mkdir -m700 "$sdk" build
-          zip="$sdk/sdk.zip"
-          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-redirs 3 \
-            --connect-timeout 30 --max-time 600 --max-filesize 3200000000 \
-            https://storage.googleapis.com/flutter_infra_release/releases/stable/macos/flutter_macos_arm64_3.38.5-stable.zip -o "$zip"
-          echo "edbbb62fc35223df318d4b41c5962483e020d91fd6ad2f6e0a8f4d0a41577646  $zip" | shasum -a 256 -c -
-          ditto -x -k "$zip" "$sdk"
-          rm "$zip"
-          test "$(git -C "$sdk/flutter" rev-parse HEAD)" = f6ff1529fd6d8af5f706051d9251ac9231c83407
-          echo "$sdk/flutter/bin" >> "$GITHUB_PATH"
-          echo "PUB_CACHE=$sdk/pub" >> "$GITHUB_ENV"
-          python3 -B integrations/overmorrow/stage.py --execute --destination "$PWD/build/ios-source"
-          python3 -B tests/ios-simulator/prepare.py "$PWD/build/ios-source" "$sdk/flutter"
-      - name: Prepare the pinned packages and build for the simulator
-        working-directory: build/ios-source
-        run: |
-          set -euo pipefail
-          flutter config --no-analytics --no-enable-swift-package-manager
-          flutter precache --ios
-          flutter pub get --enforce-lockfile
-          flutter pub get --offline --enforce-lockfile
-          flutter build ios --simulator --debug --no-pub \
-            --dart-define=VOLPAROSSA_WEATHER=true --dart-define=VOLPAROSSA_CORE_ORIGIN=http://127.0.0.1:43210
-          echo 'fdfb5275aac49a1a62f7424a665f88b7db6fe1314d1e7c9f037ad6d32d906ce3  pubspec.lock' | shasum -a 256 -c -
-          test -d build/ios/iphonesimulator/Runner.app
+      - uses: ./tests/ios-simulator/build-app
       - name: Read the two synthetic products and observe the original interface
         run: |
           set -euo pipefail
