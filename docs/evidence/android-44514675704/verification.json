@@ -1,0 +1,20 @@
+{
+  "apk": {
+    "bytes": 74381351,
+    "sha256": "41cb76bf7c83800e645d913082a3cebadcebeb5cce55f65a6511d0a5e6b73fcf"
+  },
+  "evidence": {
+    "joined_artifact": {
+      "digest": "sha256:79f786bbfeb4efa6616fac86b4cdeebb561b3c5e19c9046f7e7020acb32dbd30",
+      "id": 14526751212
+    },
+    "original_build_artifact": {
+      "digest": "sha256:08efed68df4c2084ce0cc9e832999b12a2a38e24204b36579ce869be148fcb1c",
+      "id": 14525343995
+    },
+    "original_core_receipt_sha256": "8434fc608a4d2ffb29b58a1d16781b1cdcf0289a902cf1347e6393a870c66321",
+    "original_installed_receipt_sha256": "2f5995799d1980f7d2fb087c4dd727c5e4bfdaf2c83c2e591162569c541f7b4f"
+  },
+  "run": "https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44514675704",
+  "weather_source": "1dbaacd0b729fb7b5f4bd40b2d28556ed4e90752"
+}

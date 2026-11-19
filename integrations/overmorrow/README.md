@@ -110,6 +110,12 @@ It has no production release authority. App/emulator shutdown, private-state
 removal, enclosing process drain, sandbox cleanup, KVM access restoration and
 unchanged host network namespace all pass.
 
+### Signed expiry in the installed Android app
+
+On Android 16, Overmorrow showed 8.973 °C from ECMWF and NOAA particulate values of 7.45526 and 20.8904 µg/m³. The temperature disappeared when the app returned from the background after its signed deadline. The first refresh tap received HTTP 503 for weather and HTTP 200 for particulates. The second tap recovered the weather table from signed revision 2. Both particulate values remained visible through all three phases. [Installed app observations](../../docs/evidence/android-44514675704/installed.json) · [Debian Core observations](../../docs/evidence/android-44514675704/result.json)
+
+The app used Android API 36 on an x86_64 emulator. The Debian Core guest had no network card. The fixture forwarded only the two requests from the isolated emulator to the guest's cache-only bridge. Select **signed_cache_recovery** in the hosted Android workflow to repeat the trial. [Hosted run](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44514675704) · [Source, APK and archive digests](../../docs/evidence/android-44514675704/verification.json)
+
 ### Earlier link inventory failures
 
 [Trial 32](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/38438989104)
