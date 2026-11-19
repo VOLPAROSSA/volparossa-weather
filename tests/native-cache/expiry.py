@@ -63,6 +63,12 @@ def get(origin):
         conn.close()
 
 
+def read_client(origin):
+    result = subprocess.run([NODE, ROOT / "tests/native-cache/read-client.mjs", origin.geturl()],
+                            capture_output=True, check=True, timeout=10)
+    return json.loads(result.stdout)
+
+
 def run(root, source, publication):
     interfaces = sorted(name for _, name in socket.if_nameindex())
     assert os.getuid() and interfaces == ["lo"], "only the loopback interface may be present"
@@ -72,6 +78,12 @@ def run(root, source, publication):
     assert control.is_socket() and control.stat().st_uid != os.getuid()
     pub = json.loads(publication.read_bytes())
     assert pub["operation"] == "offline_content_publish" and pub["network_publication"] is False
+    next_file = publication.with_name("replacement.json")
+    replacement = json.loads(next_file.read_bytes())
+    next_file.unlink()
+    assert replacement["operation"] == "offline_content_publish" and replacement["network_publication"] is False
+    assert replacement["publisher_key_hex"] == pub["publisher_key_hex"]
+    assert replacement["manifest_id"] != pub["manifest_id"] and replacement["expires_unix_seconds"] > pub["expires_unix_seconds"]
     forecast = json.loads(source.read_bytes())
     wire_hash = hashlib.sha256(source.read_bytes()).hexdigest()
     source.unlink()
@@ -117,16 +129,37 @@ def run(root, source, publication):
         origin = opening(second)
         status, body = get(origin)
         assert status == 200 and body["forecast"] == forecast and body["delivery"]["manifest_id"] == pub["manifest_id"]
+        initial = read_client(origin)
+        assert initial["manifest"] == pub["manifest_id"] and initial["expiry"] == body["freshness"]["expires_at"]
+        assert initial["run"] == forecast["source"]["model_run_at"] and initial["valid"] == forecast["samples"][0]["valid_at"]
+        assert abs(float(initial["display"]) - forecast["samples"][0]["temperature_2m"]) <= 0.051
         remaining = signed_expiry - time.time()
         assert 0 < remaining < 61
         time.sleep(remaining + 0.05)
         observed = time.time()
         assert signed_expiry <= observed and get(origin) == (503, {"error": "FORECAST_UNAVAILABLE"})
         assert list((root/"scratch").iterdir()) == []
-    expired_output = root / "expired-forecast.json"
-    denied = subprocess.run([*command, "--local-output", expired_output],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-    assert denied.returncode != 0 and not expired_output.exists()
+        assert read_client(origin) == {"error": "FORECAST_UNAVAILABLE"}
+        expired_output = root / "expired-forecast.json"
+        denied = subprocess.run([*command, "--local-output", expired_output],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        assert denied.returncode != 0 and not expired_output.exists()
+        # The separate publisher may now deliver its pre-signed revision. The Weather account
+        # still has neither the publisher's keys nor filesystem access to its cache.
+        Path("/run/weather-recovery/advance").write_bytes(b"1")
+        stop = time.monotonic() + 15
+        while True:
+            recovered = read_client(origin)
+            if recovered != {"error": "FORECAST_UNAVAILABLE"}:
+                break
+            assert time.monotonic() < stop, "client did not recover"
+            time.sleep(.15)
+        assert recovered["manifest"] == replacement["manifest_id"] and recovered["expiry"] > initial["expiry"]
+        assert all(recovered[key] == initial[key] for key in ("display", "run", "valid"))
+        status, body = get(origin)
+        assert status == 200 and body["forecast"] == forecast and body["delivery"]["revision"] == 2
+        assert body["delivery"]["manifest_id"] == recovered["manifest"] and body["delivery"]["cache_only"]
+        assert list((root/"scratch").iterdir()) == []
     evidence = forecast["samples"][0]["evidence"]
     return dict(schema=1, core_sha=os.environ["CORE_SOURCE"], weather_sha=os.environ["GITHUB_SHA"],
                 product_sha256=wire_hash, manifest_id=pub["manifest_id"], signed_expires_unix=signed_expiry,
@@ -134,7 +167,9 @@ def run(root, source, publication):
                 decoder_sha256=evidence["decoder_sha256"], model_run=forecast["source"]["model_run_at"],
                 acquired_at=forecast["source"]["acquired_at"], valid_at=forecast["samples"][0]["valid_at"],
                 temperature_c=forecast["samples"][0]["temperature_2m"], cache_seed="original signed local publication",
-                distinct_weather_owner=True, cache_only=True, reads_before_expiry=2, bridge_restarted=True, http_after_expiry=503,
+                distinct_weather_owner=True, cache_only=True, reads_before_expiry=3, bridge_restarted=True, http_after_expiry=503,
+                drizzli_rejected_expired=True, drizzli_recovered=True, revision_after_recovery=2,
+                replacement_manifest_id=recovered["manifest"], drizzli_displayed_temperature_c=recovered["display"],
                 network_interfaces=interfaces, core_refused_expired=True, original_plaintext_removed=True, scratch_empty=True)
 
 

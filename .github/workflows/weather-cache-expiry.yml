@@ -8,6 +8,7 @@ on:
       - tests/native-cache/**
       - src/core-cache.mjs
       - src/provider-http.mjs
+      - integrations/drizzli/overlay/src/lib/services/volparossa/client.mjs
 
 permissions:
   contents: read
