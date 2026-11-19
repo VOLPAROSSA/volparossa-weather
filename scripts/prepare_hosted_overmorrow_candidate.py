@@ -20,7 +20,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-BASE = 'eb7eeeb9ddb52cafa689df4202206a0460445ece'
+BASE = 'f5d87e99d866ad175de68f386fed0b89ee33d9f1'
 INPUT = ROOT / 'build/hosted-overmorrow-input-candidate'
 PUBLIC = ROOT / 'build/p15-overmorrow-candidate-public'
 STAGE = ROOT / 'build/p15-overmorrow-stage'
@@ -170,7 +170,7 @@ def guards(*, mode=MODE):
         'tests/test_hosted_overmorrow_sources.py',
         'tests/test_hosted_overmorrow_pub_metadata.py',
         'tests/test_hosted_overmorrow_pub_outputs.py',
-        'docs/P15_OVERMORROW_CANDIDATE.md'}
+        'docs/P15_OVERMORROW_CANDIDATE.md', 'docs/overmorrow-cold-comparison.json'}
     require(set(changed.decode().splitlines()) <= allowed, 'P15_SHARED_SOURCE_CHANGED')
     helper.process(['/usr/bin/git', '-C', str(ROOT), 'diff', '--quiet', 'HEAD', '--'], 10)
     return helper, platform

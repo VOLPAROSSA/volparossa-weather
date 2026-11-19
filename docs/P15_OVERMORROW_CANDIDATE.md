@@ -1,7 +1,7 @@
 # P15 Overmorrow candidate, 2026-10-28
 
 The November 19 integration uses protected Weather revision
-`eb7eeeb9ddb52cafa689df4202206a0460445ece` as its source-review base.
+`f5d87e99d866ad175de68f386fed0b89ee33d9f1` as its source-review base.
 The candidate constructs the offline Flutter package root from the signed
 Ubuntu snapshot and checks the packages against the existing Overmorrow lock.
 The [November hosted trial](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44433873133)
@@ -23,6 +23,16 @@ and the single file `assets/icons/icon.png`, totaling 35 application assets.
 The output check now reads these declarations from the sealed pubspec, compares
 the exact set of emitted application paths and verifies every file's bytes.
 [Original asset declarations](https://github.com/bmaroti9/Overmorrow/blob/97995e2e00e454389e00e35f1e65654afe3e8bed/pubspec.yaml).
+
+The first complete candidate ran all 15 steps on November 19. All 24 Flutter
+tests passed, the release web compiler succeeded and all 35 declared assets
+matched the original bytes. The deployment contained 64 files and 24,608,666
+bytes. Both hook profiles completed with four shared directories and zero native
+asset outputs. The runner joined all processes, removed its policy, stage,
+deployment and private inputs, and preserved the inventory in artifact
+`14490102988` with ZIP SHA-256
+`79e53c8ab23a9fb318371ce330c63675d66373ee1bffad492c954f1712eb18e6`.
+[Complete build](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44438611156).
 
 **P15i preflight, 2026-10-31:** the complete hook-state contract is checked
 jointly against original producers for test and test-plus-web lifecycles. The
