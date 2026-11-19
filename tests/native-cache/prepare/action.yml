@@ -14,7 +14,11 @@ runs:
         ref: 3cccff9190126e1b4bb76504aa2932735f523ea3
         path: build/core
         persist-credentials: false
+    - id: ubuntu
+      uses: VOLPAROSSA/.github/actions/ubuntu-archive@e3f98bbc538f5df580b78c8a0d8bd932dfe3e381
     - name: Install the authenticated Core compiler and ecCodes distribution
+      env:
+        UBUNTU_ARCHIVE_CONFIG: ${{ steps.ubuntu.outputs.config }}
       shell: bash
       run: |
         set -eu
@@ -23,8 +27,8 @@ runs:
         test "$(git -C build/core rev-parse HEAD)" = "$core_source"
         echo "CORE_SOURCE=$core_source" >> "$GITHUB_ENV"
         python3 -B build/core/scripts/provision-rust189.py runner
-        sudo -n apt-get update -o APT::Update::Error-Mode=any
-        sudo -n apt-get install --no-install-recommends -y libeccodes-tools qemu-system-x86 qemu-utils cloud-image-utils genisoimage
+        sudo -n apt-get -c "$UBUNTU_ARCHIVE_CONFIG" update
+        sudo -n apt-get -c "$UBUNTU_ARCHIVE_CONFIG" install --no-install-recommends -y libeccodes-tools qemu-system-x86 qemu-utils cloud-image-utils genisoimage
         dpkg-query -W libeccodes-tools libeccodes0 libeccodes-data
     - name: Compile the pinned CLI, daemon and local cache setup
       working-directory: build/core

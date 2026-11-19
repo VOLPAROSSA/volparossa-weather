@@ -19,13 +19,13 @@ def wait_for(check, seconds):
     raise TimeoutError('android handoff timeout')
 
 
-def relay(channel, work):
+def relay(channel, work, *, connection_wait=450, request_wait=60, observation_wait=35):
     with socket.socket(socket.AF_UNIX) as connection, HTTPServer(('127.0.0.1', 43210), Handler) as server:
-        wait_for(channel.exists, 450)
-        connection.settimeout(240)
+        wait_for(channel.exists, connection_wait)
+        connection.settimeout(max(240, connection_wait))
         connection.connect(str(channel))
         with connection.makefile('rwb', buffering=0) as device:
-            server.timeout = 60
+            server.timeout = request_wait
             for phase in ('initial', 'refused', 'recovered'):
                 assert device.readline(40) == (phase + '\n').encode(), phase
                 (work / (phase + '.ready')).touch(exist_ok=False)
@@ -38,7 +38,7 @@ def relay(channel, work):
                 temporary = work / (phase + '.part')
                 temporary.write_text(json.dumps(receipts))
                 temporary.rename(work / (phase + '.json'))
-                wait_for((work / (phase + '.observed')).is_file, 35)
+                wait_for((work / (phase + '.observed')).is_file, observation_wait)
                 device.write((phase + '-observed\n').encode())
 
 
