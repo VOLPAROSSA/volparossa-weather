@@ -51,9 +51,11 @@ full browser trial.
 The separate joined core delivery trial below passes in the browser. The Android
 debug build, strict offline rebuild and installed-emulator trial also pass,
 including actual refresh taps and background/resume expiry with synthetic
-products. Live Android-to-core delivery, physical devices, iOS packaging and
-native home-screen widgets remain unverified. Neither synthetic interaction
-tests nor successful delivery establish forecast accuracy.
+products. Separate Android emulator runs exercised cold Core retrieval and
+signed expiry with recovery while NOAA particulates stayed visible. Physical
+devices, iOS packaging and native home-screen widgets remain unverified.
+[Cold delivery run](https://github.com/VOLPAROSSA/volparossa/actions/runs/38717988016) ·
+[Signed expiry and recovery](#signed-expiry-in-the-installed-android-app)
 
 ## Hosted build and browser trials
 
@@ -606,11 +608,12 @@ original deadline and keep directory ownership until any pending write stops;
 an incomplete cleanup remains a failure. Raw receipts include local trial paths
 and must not be exported as public artifacts.
 
-The combined core/VM runner and its source, custody, cold-fetch and packet-capture
-acceptance checks remain to be integrated and executed. These components do not
-prove Android-triggered cold peer retrieval, live expiry behavior, an embedded
-mobile daemon or physical-device support. The historical synthetic Android trial
-and the successful web/core trial below retain their separate scopes.
+The combined Core/VM runner subsequently recorded the installed app's cold peer
+retrieval of both real products, two cache-backed refreshes and a background/resume
+cycle while both products were fresh. A separate signed-expiry trial exercised
+the stale weather and recovery screens. Both runs used an Android emulator and an
+external Debian Core. [Cold delivery run](https://github.com/VOLPAROSSA/volparossa/actions/runs/38717988016) ·
+[Signed expiry and recovery](#signed-expiry-in-the-installed-android-app)
 
 ## Joined core delivery trial
 
