@@ -1,5 +1,11 @@
 # P15 Overmorrow candidate, 2026-10-28
 
+The November 19 integration uses protected Weather revision
+`2a38b8707428ddc35548b64cd26aa6b8eac89703` as its source-review base.
+The candidate constructs the offline Flutter package root from the signed
+Ubuntu snapshot and checks the packages against the existing Overmorrow lock.
+The latest recorded hosted trial below completed all 24 Flutter tests.
+
 **P15i preflight, 2026-10-31:** the complete hook-state contract is checked
 jointly against original producers for test and test-plus-web lifecycles. The
 shared-directory closure now requires both original 32- and 10-character names

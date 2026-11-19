@@ -328,6 +328,16 @@ jobs:
           ref: 08bac388a0abfd06426bebe8f6fabd0157d2e709
           path: build/hosted-browser-source
           persist-credentials: false
+      - name: Ensure the packaged sandbox tools are available
+        run: |
+          set -euo pipefail
+          if test -x /usr/bin/bwrap && test -x /usr/sbin/apparmor_parser; then exit 0; fi
+          sudo -n apt-get update
+          # Keep every preinstalled package at its existing version. Build inputs
+          # come separately from the signed snapshot inside the private root.
+          apt-get -s --no-remove --no-upgrade --no-install-recommends install apparmor bubblewrap > "$RUNNER_TEMP/p15-sandbox-plan"
+          if grep -Eq '^Remv |^Inst [^ ]+ \[' "$RUNNER_TEMP/p15-sandbox-plan"; then exit 1; fi
+          sudo -n apt-get install --yes --no-remove --no-upgrade --no-install-recommends apparmor bubblewrap
       - name: Run the bounded candidate or diagnostic-only pub prefix
         run: |
           set -euo pipefail

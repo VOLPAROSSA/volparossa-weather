@@ -20,7 +20,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-BASE = 'e774912e292f339d42ff23f00b4d8fc5d69e5b47'
+BASE = '2a38b8707428ddc35548b64cd26aa6b8eac89703'
 INPUT = ROOT / 'build/hosted-overmorrow-input-candidate'
 PUBLIC = ROOT / 'build/p15-overmorrow-candidate-public'
 STAGE = ROOT / 'build/p15-overmorrow-stage'
@@ -162,9 +162,9 @@ def guards(*, mode=MODE):
     helper.process(['/usr/bin/git', '-C', str(ROOT), 'merge-base', '--is-ancestor', BASE, 'HEAD'], 10)
     _, head = helper.process(['/usr/bin/git', '-C', str(ROOT), 'rev-parse', 'HEAD'], 10)
     require(head.decode().strip() == os.environ['GITHUB_SHA'], 'P15_SOURCE_COMMIT')
-    # P15 is allowed only its own files and its own Overmorrow workflow.
+    # The shared test records the complete set of dispatch modes for each client.
     _, changed = helper.process(['/usr/bin/git', '-C', str(ROOT), 'diff', '--name-only', BASE, 'HEAD'], 10)
-    allowed = set(OWNED_SOURCE) | {'tests/test_hosted_overmorrow_candidate.py',
+    allowed = set(OWNED_SOURCE) | {'tests/test_hosted_client_inputs.py', 'tests/test_hosted_overmorrow_candidate.py',
         'tests/test_hosted_overmorrow_dependencies.py', 'tests/test_hosted_overmorrow_hooks.py',
         'tests/test_hosted_overmorrow_plugins.py',
         'tests/test_hosted_overmorrow_sources.py',
@@ -481,8 +481,12 @@ def execute(*, mode=MODE):
     try:
         apt = module('prepare_hosted_client_apt')
         package_inputs = I.load_package_inputs('overmorrow')
-        apt.installed_inventory('overmorrow', INPUT, package_inputs)
-        packages = I.document(I.read(INPUT / 'apt-candidate.json'))['packages']
+        objects = B.PackageObjects(private / 'package-objects')
+        candidate = apt.candidate(package_inputs['apt']['profile'], INPUT, keep_file=objects.keep)
+        apt.bind_package_candidate(candidate, package_inputs)
+        details['package_root'] = dict(snapshot=candidate['snapshot'], packages=len(candidate['packages']),
+            regular_objects=len(objects.digests), object_bytes=objects.bytes,
+            archive_data_only=True, snapshot_packages_installed_on_runner=False)
         phase = 'materialize-pinned-runtime-sdk'
         runtime, sdk = private / 'runtime', private / 'flutter-sdk'
         runtime.mkdir(mode=0o700); sdk.mkdir(mode=0o700)
@@ -504,7 +508,7 @@ def execute(*, mode=MODE):
         O.DEPLOY, O.PROOF, O.TABLE_PROOF, O.SDK = DEPLOY, H.PROOF, H.BOUNDARY_TABLE_PROOF, sdk
         O.SDK_TOOL_STATE, O.SDK_TOOL_MOUNT = H.PRIVATE / 'flutter-tool-state', sdk / 'packages/flutter_tools/.dart_tool'
         phase = 'boundary-bindings'
-        view = B.View(base / 'view', B.subset(packages, 'overmorrow', I), 'overmorrow')
+        view = B.View(base / 'view', candidate['packages'], 'overmorrow', objects=objects)
         # Every executed dependency/compiler command is offline. No resolver
         # snapshot is needed; the original API rejects acquire without one.
         boundary = B.Boundary(view, H, H.BROWSER, sdk)

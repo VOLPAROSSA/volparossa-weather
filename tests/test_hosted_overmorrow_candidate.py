@@ -138,18 +138,22 @@ class CandidateTests(unittest.TestCase):
         inputs = build / 'hosted-overmorrow-input-candidate'
         helper = SimpleNamespace(DRAIN_CONFIRMED=True)
         failure = failure or ValueError('TEST_PROVISIONING_REJECTED')
-        apt = SimpleNamespace(installed_inventory=Mock(side_effect=failure))
+        apt = SimpleNamespace(candidate=Mock(side_effect=failure))
         cleanup = I.cleanup_candidate
         if cleanup_rejected:
             cleanup = Mock(side_effect=ValueError('INSTALLER_CLEANUP_UNCONFIRMED'))
         with patch.dict(G, ROOT=root, INPUT=inputs, PUBLIC=public, STAGE=build/'stage', DEPLOY=build/'deploy',
                         guards=Mock(return_value=(helper, {})), module=Mock(return_value=apt)), \
                 patch.object(I, 'ROOT', root), patch.object(I, 'cleanup_candidate', cleanup), \
-                patch.object(I, 'load_package_inputs', return_value={}), \
+                patch.object(I, 'load_package_inputs', return_value={'apt': {'profile': 'flutter'}}), \
                 patch.object(H, 'DRAIN_CONFIRMED', drain), patch.object(H, 'LOGS', []), \
                 patch.dict(os.environ, GITHUB_SHA='a'*40, GITHUB_RUN_ID='123', GITHUB_RUN_ATTEMPT='1'):
             with self.assertRaisesRegex(ValueError, 'P15_CANDIDATE_FAILED'):
                 W['execute'](mode=mode)
+        apt.candidate.assert_called_once()
+        self.assertEqual(apt.candidate.call_args.args, ('flutter', inputs))
+        keep = apt.candidate.call_args.kwargs['keep_file']
+        self.assertEqual(keep.__self__.root, inputs / 'runtime-private/package-objects')
         result = json.loads((public/'result.json').read_text())
         receipt = json.loads((public/'cleanup.json').read_text())
         self.assertFalse(result['success'])

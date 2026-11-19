@@ -569,10 +569,11 @@ class ClientInputTests(unittest.TestCase):
         for profile, name in (('drizzli', 'hosted-clients.yml'), ('overmorrow', 'hosted-overmorrow.yml')):
             source = (ROOT / '.github/workflows' / name).read_text()
             historical, candidate = source.split('\n  input-candidate:', 1)
+            candidate = candidate.split('\n  installed-environment:', 1)[0]
             self.assertIn("if: github.event.inputs.input_mode == '' || github.event.inputs.input_mode == 'historical-v1'", historical)
             expected = 'historical-v1, source-input-inventory, installed-environment-inventory'
             if profile == 'overmorrow':
-                expected += ', runtime-boundary-verification'
+                expected += ', runtime-boundary-verification, source-candidate-build, source-pub-diagnostic'
             else:
                 expected += ', drizzli-candidate-build'
             self.assertIn('options: [' + expected + ']', historical)
