@@ -32,7 +32,7 @@ replay and a labelled 13-second loading cut. The network diagram is conceptual;
 separate reports establish peer delivery, cache reuse and background/resume.
 The video alone does not prove networking. Forecasts are model products, not
 observations or a complete AQI service. This is not a standalone Android Core or
-supported end-user release. Physical devices and signed Core delivery on iOS remain unverified.
+supported end-user release. The signed iOS simulator trial and its screenshots are available separately. [iPhone trial](integrations/overmorrow/README.md#iphone-simulator)
 
 Explore the [evidence and reproduction guide](https://github.com/VOLPAROSSA/volparossa/blob/a1f268d64dd3b2625c827f2ed77840c65d0a405c/docs/demos/weather-demo-0/README.md).
 Credits: ECMWF, NOAA and Overmorrow; see [attribution and notices](https://github.com/VOLPAROSSA/volparossa/blob/a1f268d64dd3b2625c827f2ed77840c65d0a405c/docs/demos/weather-demo-0/NOTICES.md).
@@ -68,9 +68,9 @@ an isolated emulator. The installed app also hides expired signed weather and
 restores it after a second refresh tap while the NOAA particulate product stays
 visible. [Signed Android recovery results](integrations/overmorrow/README.md#signed-expiry-in-the-installed-android-app)
 
-An [iOS 18.5 simulator trial](integrations/overmorrow/README.md#iphone-simulator) also displayed the IFS forecast heading and model after the original app requested both synthetic products.
+On the iOS 18.5 simulator the installed app displayed the signed ECMWF forecast, hid it when it expired in the foreground, and restored it from revision 2 after two refresh taps. The independent NOAA particulate forecast remained available. [iPhone results and screenshots](integrations/overmorrow/README.md#iphone-simulator)
 
-Physical devices, signed Core delivery on iOS, observation acquisition, trained corrections and
+Physical devices, observation acquisition, trained corrections and
 automatic shared acquisition remain unfinished. The local verification command
 compares archived IFS and AIFS temperatures using supplied station observations. Rain accumulation
 must not be presented as hourly rainfall; unsupported values are not invented.
@@ -407,8 +407,9 @@ remained available through both taps.
 [Installed Android and Core evidence](integrations/overmorrow/README.md#signed-expiry-in-the-installed-android-app) ·
 [Core evidence ledger](https://github.com/VOLPAROSSA/volparossa/blob/main/docs/IMPLEMENTATION_STATUS.md#execution-priorities-and-next-milestones)
 
-Physical devices, a deployable mobile core, signed Core delivery on iOS,
-home-screen widgets and release packaging remain required.
+The iPhone simulator also exercised foreground expiry, refusal on the first refresh and recovery on the second. [Four iPhone screens](integrations/overmorrow/README.md#iphone-simulator)
+
+Physical devices, a deployable mobile core, home-screen widgets and release packaging remain required.
 
 ### Additional weather data
 
@@ -429,8 +430,9 @@ home-screen widgets and release packaging remain required.
   actual isolated Firefox and HTTP bridge with synthetic PM2.5/PM10 values.
 - [ ] Complete particulate delivery across the required application clients;
   the joined Drizz.li web trial and Overmorrow web and Android emulator trials
-  have passed. The iPhone simulator requested synthetic particulates. Its detail
-  screen, signed iOS delivery and physical devices remain open.
+  have passed. The signed iPhone simulator trial displayed the native NOAA forecast
+  table and kept it available through weather expiry. The dedicated iOS particulate
+  detail page and physical devices remain open. [iPhone results](integrations/overmorrow/README.md#iphone-simulator)
 - [ ] Additional pollutants and any derived air-quality index, with explicit
   averaging periods, index definition and independently tested transformations.
 
