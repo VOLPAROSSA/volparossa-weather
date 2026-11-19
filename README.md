@@ -333,6 +333,10 @@ A separate [combined particulate browser trial](integrations/drizzli/air-quality
 passes on the updated full app build: exact PM2.5/PM10 values, native NOAA times,
 refresh, separate source expiry and independent product failures remain visible.
 It uses synthetic data through the actual bridge, not a new particulate peer transfer.
+The subsequent joined production trial acquired 16 real ECMWF fields and
+10 NOAA particulate fields. Drizz.li displayed and refreshed both signed
+products after their cold peer transfer. Both transfers recorded zero origin
+bytes. [Core delivery run](https://github.com/VOLPAROSSA/volparossa/actions/runs/38228710535).
 Separate functional tests exercise the bridge's core-process boundary using a
 synthetic core executable. These synthetic trials remain separate from the new
 [joined core-delivery proof](integrations/drizzli/core-delivery-smoke.json) and
@@ -399,8 +403,9 @@ home-screen widgets and release packaging remain required.
 - [x] Drizz.li precipitation display and interaction: actual isolated Firefox
   with synthetic values and native accumulation windows, including refresh.
 - [ ] Complete precipitation delivery across the required application clients;
-  Overmorrow's joined real-product delivery passes separately from Drizz.li's
-  temperature/wind proof and synthetic precipitation interaction checks.
+  Drizz.li and Overmorrow have displayed the real product on the web, and
+  the installed Android trial displayed and refreshed its native time windows.
+  Physical mobile devices and iOS remain open.
 - [x] Particulate source and contract: real NOAA PM2.5/PM10 acquisition, native
   instantaneous concentrations, pinned decoder, five verified forecast steps.
 - [x] Particulate core-cache consumer and CLI: fixed trusted publication/query,
@@ -409,7 +414,8 @@ home-screen widgets and release packaging remain required.
 - [x] Drizz.li particulate display, refresh and independent expiry/failure handling:
   actual isolated Firefox and HTTP bridge with synthetic PM2.5/PM10 values.
 - [ ] Complete particulate delivery across the required application clients;
-  Overmorrow's scoped real web/Android delivery passes; Drizz.li remains separate.
+  the joined Drizz.li web trial and Overmorrow web and Android emulator trials
+  have passed. Physical mobile devices and iOS remain open.
 - [ ] Additional pollutants and any derived air-quality index, with explicit
   averaging periods, index definition and independently tested transformations.
 
