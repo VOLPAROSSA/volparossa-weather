@@ -152,13 +152,19 @@ def selected_mode():
 
 def validate_repository_changes(paths):
     # The dedicated Drizz.li app and Debian cache-guest trial supply no Flutter inputs.
+    shared = 'scripts/prepare_hosted_clients_ci.py'
+    if shared in paths:
+        require(I.sha(I.read(ROOT / shared)) == '73816dec71c6779a026b725054b0909940bff2a8ad8e240cf80f1e2a84e6ce1e',
+                'P15_SHARED_SOURCE_CHANGED')
     allowed = set(OWNED_SOURCE) | {'tests/test_hosted_client_inputs.py', 'tests/test_hosted_overmorrow_candidate.py',
         'tests/test_hosted_overmorrow_dependencies.py', 'tests/test_hosted_overmorrow_hooks.py',
         'tests/test_hosted_overmorrow_plugins.py',
         'tests/test_hosted_overmorrow_sources.py',
         'tests/test_hosted_overmorrow_pub_metadata.py',
         'tests/test_hosted_overmorrow_pub_outputs.py',
-        'README.md', '.github/workflows/weather-cache-expiry.yml',
+        'README.md', '.github/workflows/weather-cache-expiry.yml', '.github/workflows/hosted-android.yml',
+        'scripts/prepare_hosted_android_ci.py', 'tests/test_hosted_android_ci.py',
+        'tests/test_hosted_android_workflow.py', 'tests/test_hosted_client_runtime.py', shared,
         'docs/P15_OVERMORROW_CANDIDATE.md', 'docs/overmorrow-cold-comparison.json'}
     require(all(path in allowed or path.startswith(('integrations/drizzli/', 'tests/native-cache/'))
                 for path in paths), 'P15_SHARED_SOURCE_CHANGED')

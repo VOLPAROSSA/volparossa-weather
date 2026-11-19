@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Run the real Weather HTTP bridge and Core daemon as an independent owner in a networkless Debian guest."""
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import hashlib
 import http.client
 import json
@@ -16,6 +16,8 @@ import sys
 import tempfile
 import time
 from urllib.parse import urlsplit
+
+import android_channel
 
 ROOT = Path(__file__).resolve().parents[2]
 CLI = "/usr/bin/volparossa"
@@ -50,11 +52,11 @@ def opening(proc):
         return urlsplit(json.loads(proc.stdout.readline(4096))["listening"])
 
 
-def get(origin):
+def get(origin, path='/api/volparossa/forecast'):
     assert origin.scheme == "http" and origin.hostname == "127.0.0.1" and origin.port
     conn = http.client.HTTPConnection(origin.hostname, origin.port, timeout=10)
     try:
-        conn.request("GET", "/api/volparossa/forecast")
+        conn.request("GET", path)
         res = conn.getresponse()
         raw = res.read(262145)
         assert len(raw) <= 262144 and res.getheader("Cache-Control") == "no-store"
@@ -67,6 +69,19 @@ def read_client(origin):
     result = subprocess.run([NODE, ROOT / "tests/native-cache/read-client.mjs", origin.geturl()],
                             capture_output=True, check=True, timeout=10)
     return json.loads(result.stdout)
+
+
+def bridge_config(core, forecast, quality=None):
+    query = dict(latitude=52.52, longitude=13.41, run=forecast["source"]["model_run_at"], model="ifs",
+                 steps=[24], communityArea=True, includeWind=False, includePrecipitation=False)
+    config = dict(core=dict(core, query=query), variables=["temperature_2m"])
+    if quality is not None:
+        source = quality["source"]
+        aq_query = dict(latitude=52.52, longitude=13.41, run=source["model_run_at"], model=source["model"],
+                        steps=[24], communityArea=True)
+        config["airQuality"] = dict(core=dict(core, cache="/var/lib/volparossa/air-quality-cache",
+            name="weather.public-community-air-trial", query=aq_query), variables=["pm2_5", "pm10"])
+    return config
 
 
 def run(root, source, publication):
@@ -91,13 +106,19 @@ def run(root, source, publication):
     for name in ("scratch", "www"):
         (root / name).mkdir(mode=0o700)
     (root / "www/index.html").write_text("<title>Weather cache trial</title>\n")
-    query = dict(latitude=52.52, longitude=13.41, run=forecast["source"]["model_run_at"], model="ifs",
-                 steps=[24], communityArea=True, includeWind=False, includePrecipitation=False)
     core = dict(mode="core-cache", executable=CLI, controlSocket=str(control), cache=str(cache),
                 scratchParent=str(root/"scratch"), name=NAME, minRevision=1, cacheMode="cache-only",
-                publisherKey=pub["publisher_key_hex"], query=query)
+                publisherKey=pub["publisher_key_hex"])
     cfg = root / "weather.json"
-    cfg.write_text(json.dumps(dict(core=core, variables=["temperature_2m"])))
+    mobile = android_channel.PORT.exists()
+    mobile_responses = {}
+    quality = None
+    if mobile:
+        aq_path = publication.with_name('air-quality.json')
+        quality = json.loads(aq_path.read_bytes())
+        aq_path.unlink()
+    config = bridge_config(core, forecast, quality)
+    cfg.write_text(json.dumps(config))
     bridge = [NODE, ROOT/"scripts/serve-provider.mjs", "--config", cfg, "--static-root", root/"www", "--port", "0"]
     signed_expiry = pub["expires_unix_seconds"]
     command = [CLI, "--control-socket", control, "content", "fetch-name", "--publisher-key",
@@ -125,7 +146,8 @@ def run(root, source, publication):
         assert delivery["cache_only"] is True and delivery["manifest_id"] == pub["manifest_id"]
         assert delivery["sha256"] == wire_hash and delivery["revision"] == 1
         assert int(time.time()) < signed_expiry and body["freshness"]["expires_at"] == delivery["publication_expires_at"]
-    with child(bridge) as second:
+    channel = android_channel.PORT.open('r+b', buffering=0) if mobile else nullcontext()
+    with child(bridge) as second, channel as port:
         origin = opening(second)
         status, body = get(origin)
         assert status == 200 and body["forecast"] == forecast and body["delivery"]["manifest_id"] == pub["manifest_id"]
@@ -133,6 +155,8 @@ def run(root, source, publication):
         assert initial["manifest"] == pub["manifest_id"] and initial["expiry"] == body["freshness"]["expires_at"]
         assert initial["run"] == forecast["source"]["model_run_at"] and initial["valid"] == forecast["samples"][0]["valid_at"]
         assert abs(float(initial["display"]) - forecast["samples"][0]["temperature_2m"]) <= 0.051
+        if mobile:
+            mobile_responses['initial'] = android_channel.exchange(port, 'initial', origin, get)
         remaining = signed_expiry - time.time()
         assert 0 < remaining < 61
         time.sleep(remaining + 0.05)
@@ -144,6 +168,8 @@ def run(root, source, publication):
         denied = subprocess.run([*command, "--local-output", expired_output],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
         assert denied.returncode != 0 and not expired_output.exists()
+        if mobile:
+            mobile_responses['refused'] = android_channel.exchange(port, 'refused', origin, get)
         # The separate publisher may now deliver its pre-signed revision. The Weather account
         # still has neither the publisher's keys nor filesystem access to its cache.
         Path("/run/weather-recovery/advance").write_bytes(b"1")
@@ -160,6 +186,8 @@ def run(root, source, publication):
         assert status == 200 and body["forecast"] == forecast and body["delivery"]["revision"] == 2
         assert body["delivery"]["manifest_id"] == recovered["manifest"] and body["delivery"]["cache_only"]
         assert list((root/"scratch").iterdir()) == []
+        if mobile:
+            mobile_responses['recovered'] = android_channel.exchange(port, 'recovered', origin, get)
     evidence = forecast["samples"][0]["evidence"]
     return dict(schema=1, core_sha=os.environ["CORE_SOURCE"], weather_sha=os.environ["GITHUB_SHA"],
                 product_sha256=wire_hash, manifest_id=pub["manifest_id"], signed_expires_unix=signed_expiry,
@@ -170,7 +198,8 @@ def run(root, source, publication):
                 distinct_weather_owner=True, cache_only=True, reads_before_expiry=3, bridge_restarted=True, http_after_expiry=503,
                 drizzli_rejected_expired=True, drizzli_recovered=True, revision_after_recovery=2,
                 replacement_manifest_id=recovered["manifest"], drizzli_displayed_temperature_c=recovered["display"],
-                network_interfaces=interfaces, core_refused_expired=True, original_plaintext_removed=True, scratch_empty=True)
+                network_interfaces=interfaces, core_refused_expired=True, original_plaintext_removed=True, scratch_empty=True,
+                **({'android_requests': mobile_responses} if mobile else {}))
 
 
 if __name__ == "__main__":

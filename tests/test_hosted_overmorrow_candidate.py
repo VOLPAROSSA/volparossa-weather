@@ -411,6 +411,7 @@ class CandidateTests(unittest.TestCase):
     def test_independent_weather_and_drizzli_changes_preserve_shared_input_guard(self):
         validate = W['validate_repository_changes']
         validate(['README.md', '.github/workflows/weather-cache-expiry.yml',
+                  'scripts/prepare_hosted_android_ci.py', 'tests/test_hosted_android_ci.py',
                   'tests/native-cache/read-client.mjs', 'integrations/drizzli/README.md',
                   'integrations/drizzli/overlay/src/routes/weather/week/VolparossaWeek.svelte'])
         for shared in ('src/provider.mjs', 'scripts/prepare_hosted_client_inputs.py',
@@ -418,6 +419,13 @@ class CandidateTests(unittest.TestCase):
                        'sitecustomize.py', 'tests/native-cache-other/guest.py'):
             with self.subTest(shared=shared), self.assertRaisesRegex(ValueError, 'P15_SHARED_SOURCE_CHANGED'):
                 validate(['integrations/drizzli/README.md', shared])
+
+    def test_shared_controller_must_match_the_reviewed_android_routing_change(self):
+        validate = W['validate_repository_changes']
+        name = 'scripts/prepare_hosted_clients_ci.py'
+        validate([name])
+        with patch.object(I, 'read', return_value=b'unreviewed'), self.assertRaisesRegex(ValueError, 'P15_SHARED_SOURCE_CHANGED'):
+            validate([name])
 
     def test_reviewed_source_set_replaces_old_unreachable_allowances(self):
         self.file('pubspec.yaml')

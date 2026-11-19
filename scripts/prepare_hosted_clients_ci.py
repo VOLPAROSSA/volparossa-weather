@@ -116,25 +116,32 @@ def require_runtime_boundary():
         event = os.environ.get("GITHUB_EVENT_PATH")
         require(event is not None, "BOUNDARY_EVENT_CONTEXT_REQUIRED")
         value = json.loads(read(Path(event), 256 * 1024), object_pairs_hook=unique)
-        require(type(value) is dict and type(value.get("inputs", {})) is dict, "BOUNDARY_EVENT_SCHEMA")
-        mode = value.get("inputs", {}).get("input_mode", "")
+        require(type(value) is dict, "BOUNDARY_EVENT_SCHEMA")
+        inputs = value.get("inputs")
+        # GitHub represents a manual workflow with no defined inputs as null.
+        inputs = {} if inputs is None else inputs
+        require(type(inputs) is dict, "BOUNDARY_EVENT_SCHEMA")
+        mode = inputs.get("input_mode", "")
         require(type(mode) is str and len(mode) <= 80, "BOUNDARY_EVENT_SCHEMA")
         event_name = os.environ.get("GITHUB_EVENT_NAME")
         legacy_dispatch = event_name == "workflow_dispatch" and mode == "historical-v1"
         legacy_push = event_name == "push" and mode == "" and (os.environ.get("GITHUB_WORKFLOW"),
             os.environ.get("GITHUB_REF")) in (("Build hosted Weather clients", "refs/heads/feature/hosted-weather-clients"),
                 ("Build hosted Overmorrow client", "refs/heads/feature/hosted-overmorrow"))
-        # Both installed-Android entry points predate input_mode. Their
-        # reviewed workflows have no dispatch inputs and one explicit push ref.
+        # Android retains its original toolchain path for the two known workflows.
+        # Only the Weather repository offers the optional installed cache scenario.
         android_ref = {
             ("VOLPAROSSA/volparossa-weather", "Build hosted Android client"):
                 "refs/heads/feature/overmorrow-native-android",
             ("VOLPAROSSA/volparossa", "Weather Android protected core delivery"):
                 "refs/heads/feature/weather-android-core",
         }.get((os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_WORKFLOW")))
-        android = android_ref is not None and not value.get("inputs", {}) and (
-            event_name == "workflow_dispatch" or
-            event_name == "push" and os.environ.get("GITHUB_REF") == android_ref)
+        android_variant = (os.environ.get("GITHUB_REPOSITORY") == "VOLPAROSSA/volparossa-weather"
+            and set(inputs) == {"signed_cache_recovery"} and inputs["signed_cache_recovery"] in ("true", "false", True, False)
+            and type(inputs["signed_cache_recovery"]) in (str, bool))
+        android = android_ref is not None and (
+            event_name == "workflow_dispatch" and (not inputs or android_variant)
+            or event_name == "push" and not inputs and os.environ.get("GITHUB_REF") == android_ref)
         require(legacy_dispatch or legacy_push or android or BOUNDARY is not None, "RUNTIME_BOUNDARY_REQUIRED")
 
 

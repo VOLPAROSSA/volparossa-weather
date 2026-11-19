@@ -2033,6 +2033,22 @@ def run_protected_core(helper, platform, upstream_socket):
                 signal.signal(s, handler)
 
 
+def start_adb_server(adb, launch):
+    # Platform-tools binds its loopback listener with tcp:PORT. A host in the
+    # listen specification is unsupported. Wait before any client can fork a
+    # replacement server, so cleanup always owns the process serving this AVD.
+    process = launch([adb, "-L", "tcp:5037", "nodaemon", "server"])
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        require(process.poll() is None, "ADB_SERVER_STOPPED")
+        try:
+            with socket.create_connection(("127.0.0.1", 5037), timeout=.25):
+                return process
+        except ConnectionRefusedError:
+            time.sleep(.05)
+    raise ValueError("ADB_SERVER_STARTUP_TIMEOUT")
+
+
 def inside(*, avd_only=False, upstream_socket=None):
     require(type(avd_only) is bool and (upstream_socket is None or not avd_only), "INSIDE_SCOPE")
     require(os.getuid() != 0 and "volparossa_ci_weather_clients_child" in Path("/proc/self/attr/current").read_text()
@@ -2159,7 +2175,7 @@ def inside(*, avd_only=False, upstream_socket=None):
         with config.open("a") as out:
             out.write("\nhw.lcd.width=1080\nhw.lcd.height=1920\nhw.lcd.density=420\nhw.keyboard=yes\n")
         diagnostic.phase = "service_start"
-        start("adb", [adb, "-L", "tcp:127.0.0.1:5037", "nodaemon", "server"])
+        start_adb_server(adb, lambda args: start("adb", args))
         if upstream_socket is None:
             Path("/state/native-fixture").mkdir(mode=0o700)
             fixture = start("fixture", [str(H.NODE), str(W.HERE / "native-android-fixture.mjs"), "--work", "/state/native-fixture"])

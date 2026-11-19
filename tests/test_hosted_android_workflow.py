@@ -27,7 +27,10 @@ class Workflow(unittest.TestCase):
         self.assertNotIn("  pull_request:", self.text)
         self.assertNotIn("  schedule:", self.text)
         for action in re.findall(r"uses: (\S+)", self.text):
-            self.assertRegex(action, r"@[0-9a-f]{40}$")
+            if action == './tests/native-cache/prepare':
+                self.assertTrue((ROOT / 'tests/native-cache/prepare/action.yml').is_file())
+            else:
+                self.assertRegex(action, r"@[0-9a-f]{40}$")
         self.assertIn('git rev-parse HEAD', self.text)
         self.assertIn('persist-credentials: false', self.text)
 
