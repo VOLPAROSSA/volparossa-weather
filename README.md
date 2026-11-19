@@ -69,7 +69,7 @@ an isolated emulator. The installed app also hides expired signed weather and
 restores it after a second refresh tap while the NOAA particulate product stays
 visible. [Signed Android recovery results](integrations/overmorrow/README.md#signed-expiry-in-the-installed-android-app)
 
-On the iOS 18.5 simulator the installed app displayed the signed ECMWF forecast, hid it when it expired in the foreground, and restored it from revision 2 after two refresh taps. The independent NOAA particulate forecast remained available. [iPhone results and screenshots](integrations/overmorrow/README.md#iphone-simulator)
+On the iOS 18.5 simulator the installed app displayed the signed ECMWF forecast, hid it when it expired in the foreground, and restored it from revision 2 after two refresh taps. The independent NOAA particulate forecast remained available. A later run opened its dedicated Air quality page and displayed both source concentrations. [iPhone results and screenshots](integrations/overmorrow/README.md#iphone-simulator)
 
 Physical devices, observation acquisition, trained corrections and
 automatic shared acquisition remain unfinished. The local verification command
@@ -432,8 +432,8 @@ Physical devices, a deployable mobile core, home-screen widgets and release pack
 - [ ] Complete particulate delivery across the required application clients;
   the joined Drizz.li web trial and Overmorrow web and Android emulator trials
   have passed. The signed iPhone simulator trial displayed the native NOAA forecast
-  table and kept it available through weather expiry. The dedicated iOS particulate
-  detail page and physical devices remain open. [iPhone results](integrations/overmorrow/README.md#iphone-simulator)
+  table and kept it available through weather expiry. The iPhone detail page displayed both concentrations
+  and their units. Physical-device delivery remains open. [iPhone detail and original screens](integrations/overmorrow/README.md#particulate-detail-and-forecast-precision)
 - [ ] Additional pollutants and any derived air-quality index, with explicit
   averaging periods, index definition and independently tested transformations.
 

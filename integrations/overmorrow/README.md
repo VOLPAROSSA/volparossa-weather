@@ -93,7 +93,15 @@ On the same simulator, the ordinary Overmorrow app displayed a real ECMWF IFS fo
 
 The app requested both forecasts each time. Core returned weather and particulate status codes of 200/200, 503/200 and 200/200. The independent NOAA GEFS-Aerosols product contained 6.18903 µg/m³ PM2.5 and 13.0314 µg/m³ PM10. The native particulate table remained available during the weather failure. Inside a Debian 13 guest with no network card, Core refused the expired weather publication 205 milliseconds after its signed deadline. The guest generated its keys locally. The receipt records both signed manifest IDs and the original source, application and screenshot digests. [Original receipt](../../docs/evidence/iphone-signed-44542699817/iphone-result.json) · [Verified archive and Git digests](../../docs/evidence/iphone-signed-44542699817/verification.json) · [Hosted trial](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44542699817)
 
-The iOS 18.5 run used software emulation for the Core guest. Physical iPhone measurements, standalone mobile Core and the dedicated particulate detail page remain open. [Reproduction workflow](../../.github/workflows/iphone-signed-recovery.yml)
+The iOS 18.5 trial used software emulation for the Core guest. [Reproduction workflow](../../.github/workflows/iphone-signed-recovery.yml)
+
+### Particulate detail and forecast precision
+
+After the restored 7.115 °C forecast appeared, XCTest tapped “Air quality details” in the original app. The separate Air quality page displayed 6.18903 µg/m³ PM2.5 and 13.0314 µg/m³ PM10 side by side. An independent OCR pass read both concentrations from the captured simulator pixels. The receipt records the SHA-256 of the NOAA particulate forecast JSON supplied to Core. All three delivery digests match those original bytes. [Air quality detail](../../docs/evidence/iphone-particulates-44557576434/particulates.png) · [Original receipt](../../docs/evidence/iphone-particulates-44557576434/iphone-result.json) · [Archive and source verification](../../docs/evidence/iphone-particulates-44557576434/verification.json)
+
+The same run also captured the four ordinary weather states. Core refused weather 66 milliseconds after its signed deadline and the second refresh restored revision 2. The same original ECMWF field previously displayed 7.115000000000009 °C. Applying the exact Kelvin-to-Celsius offset to the decoder’s decimal value now gives 7.115 °C. [Initial screen](../../docs/evidence/iphone-particulates-44557576434/initial.png) · [Expired](../../docs/evidence/iphone-particulates-44557576434/expired.png) · [Refused](../../docs/evidence/iphone-particulates-44557576434/refused.png) · [Recovered](../../docs/evidence/iphone-particulates-44557576434/recovered.png) · [Hosted trial](https://github.com/VOLPAROSSA/volparossa-weather/actions/runs/44557576434)
+
+Physical iPhone measurements, standalone mobile Core and native iOS precipitation remain open.
 
 ## Android trial candidate
 
