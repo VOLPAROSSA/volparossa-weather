@@ -1,0 +1,91 @@
+{
+  "identical_receipt_sha256": {
+    "p14-module-graphs.json": "4180b00531acd68ae7edd9713e0a6e64b33200fbee5f2c178600f59b0921bf9c",
+    "p14-output.json": "2d8a0c72d6bf2e5dbaaf364b62f8f59e617f1aa0a137bf42abf57de8129b33a9",
+    "p14-package-root.json": "1ee439a87febd9869218d027df8f2dcb2fc5c2656ad905765423892fb5296686"
+  },
+  "kind": "p14-drizzli-cold-build-comparison",
+  "october_web_output": {
+    "additional_notice_paths": [
+      "VOLPAROSSA-NOTICES/LICENSE.DRIZZLI",
+      "VOLPAROSSA-NOTICES/LICENSE.VOLPAROSSA",
+      "VOLPAROSSA-NOTICES/m-function-matcher.LICENSE",
+      "VOLPAROSSA-NOTICES/message-format.LICENSE",
+      "VOLPAROSSA-NOTICES/npm-originals.txt",
+      "VOLPAROSSA-NOTICES/rolldown-LICENSE",
+      "VOLPAROSSA-NOTICES/rolldown-THIRD-PARTY-LICENSE",
+      "VOLPAROSSA-NOTICES/urlpattern-polyfill-LICENSE",
+      "VOLPAROSSA-NOTICES/vite-LICENSE.md"
+    ],
+    "bytes": 1141753,
+    "compared_fields": [
+      "path",
+      "bytes",
+      "sha256"
+    ],
+    "files": 88,
+    "inventory": "tests/integration/weather-public-drizzli-v4.json",
+    "inventory_sha256": "2011e08002cf756683e8d3c195c6116957005cd65f5b0ab51a28499673bae5d3",
+    "prefix": "volparossa-weather/build/drizzli-volparossa/build/",
+    "repository": "VOLPAROSSA/volparossa",
+    "source": "e1c326baf413b525dabbca747b3e30289f0cb0d4"
+  },
+  "output": {
+    "bytes": 1421053,
+    "compared_fields": [
+      "path",
+      "bytes",
+      "mode",
+      "sha256"
+    ],
+    "files": 97
+  },
+  "package_root": {
+    "object_bytes": 255215222,
+    "packages": 227,
+    "regular_objects": 4921,
+    "snapshot": "20261023T000000Z"
+  },
+  "runs": [
+    {
+      "archive_sha256": "ca1c7c855832ae3ab2960506556628265eb6ba5b5979190608de2b83e0b6ed08",
+      "artifact": 14483995368,
+      "completed_at": "2026-11-18T23:50:06Z",
+      "run_id": 44423008159,
+      "source": "85c6a950f538d393db1ac8cdeb060280e58c26e7"
+    },
+    {
+      "archive_sha256": "2b359fb80824be92bffa6f7f98d4b7eb2552f24324124cadd742bdbfa66baa96",
+      "artifact": 14487966768,
+      "completed_at": "2026-11-19T01:10:27Z",
+      "run_id": 44433427655,
+      "source": "2a38b8707428ddc35548b64cd26aa6b8eac89703"
+    }
+  ],
+  "schema": 1,
+  "staged_source": {
+    "differences": {
+      "added": [],
+      "changed": {
+        ".git/index": {
+          "sha256": [
+            "8fc8a82d7b676dfc00ccfe5e4c4e48adc163e90df5f0e72b891e6f5c0703f1a6",
+            "8f56ca2dc9f9cebc2edf972b42b7496199a7207b4b5d3e16542f8c8107d961de"
+          ]
+        },
+        ".git/logs/HEAD": {
+          "sha256": [
+            "e7a03997c9712ffdb52354c94d4da07d53eda3a3022030ad61ada2b3a41df0ed",
+            "ac92887e4d7d5c95e0afa5d4f6769125f6193b19ca3a0c8b5425f7316143a684"
+          ]
+        }
+      },
+      "removed": []
+    },
+    "files": 273,
+    "receipt_sha256": [
+      "7c31cbc3e4a175ee54d93869e47379239e656811903053358220536763de7ef8",
+      "dd33226478f723adf3a72845d65caaba286a24c0e5a61e83879b6f64ad9c1a2e"
+    ]
+  }
+}
