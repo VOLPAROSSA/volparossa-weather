@@ -71,6 +71,19 @@ def read_client(origin):
     return json.loads(result.stdout)
 
 
+def bridge_config(core, forecast, quality=None):
+    query = dict(latitude=52.52, longitude=13.41, run=forecast["source"]["model_run_at"], model="ifs",
+                 steps=[24], communityArea=True, includeWind=False, includePrecipitation=False)
+    config = dict(core=dict(core, query=query), variables=["temperature_2m"])
+    if quality is not None:
+        source = quality["source"]
+        aq_query = dict(latitude=52.52, longitude=13.41, run=source["model_run_at"], model=source["model"],
+                        steps=[24], communityArea=True)
+        config["airQuality"] = dict(core=dict(core, cache="/var/lib/volparossa/air-quality-cache",
+            name="weather.public-community-air-trial", query=aq_query), variables=["pm2_5", "pm10"])
+    return config
+
+
 def run(root, source, publication):
     interfaces = sorted(name for _, name in socket.if_nameindex())
     assert os.getuid() and interfaces == ["lo"], "only the loopback interface may be present"
@@ -93,23 +106,18 @@ def run(root, source, publication):
     for name in ("scratch", "www"):
         (root / name).mkdir(mode=0o700)
     (root / "www/index.html").write_text("<title>Weather cache trial</title>\n")
-    query = dict(latitude=52.52, longitude=13.41, run=forecast["source"]["model_run_at"], model="ifs",
-                 steps=[24], communityArea=True, includeWind=False, includePrecipitation=False)
     core = dict(mode="core-cache", executable=CLI, controlSocket=str(control), cache=str(cache),
                 scratchParent=str(root/"scratch"), name=NAME, minRevision=1, cacheMode="cache-only",
-                publisherKey=pub["publisher_key_hex"], query=query)
+                publisherKey=pub["publisher_key_hex"])
     cfg = root / "weather.json"
-    config = dict(core=core, variables=["temperature_2m"])
     mobile = android_channel.PORT.exists()
     mobile_responses = {}
+    quality = None
     if mobile:
         aq_path = publication.with_name('air-quality.json')
         quality = json.loads(aq_path.read_bytes())
         aq_path.unlink()
-        aq_query = dict(latitude=52.52, longitude=13.41, communityArea=True,
-                        run=quality['source']['model_run_at'], steps=[24])
-        config['airQuality'] = dict(core=dict(core, cache='/var/lib/volparossa/air-quality-cache',
-            name='weather.public-community-air-trial', query=aq_query), variables=['pm2_5', 'pm10'])
+    config = bridge_config(core, forecast, quality)
     cfg.write_text(json.dumps(config))
     bridge = [NODE, ROOT/"scripts/serve-provider.mjs", "--config", cfg, "--static-root", root/"www", "--port", "0"]
     signed_expiry = pub["expires_unix_seconds"]

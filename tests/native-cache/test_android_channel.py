@@ -35,3 +35,31 @@ class SignedAppRequests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 exchange(Port(commands), 'refused', None,
                          lambda _, path: (200, {'delivery': {'cache_only': True, 'revision': 1}}))
+
+    def test_mobile_guest_config_matches_the_real_bridge_and_source_model(self):
+        import json
+        import subprocess
+        from expiry import ROOT, NODE, bridge_config
+
+        core = dict(mode='core-cache', executable='/usr/bin/volparossa', controlSocket='/run/agent.sock',
+                    cache='/var/lib/volparossa/forecast-cache', scratchParent='/tmp/owner-scratch',
+                    name='weather.public-community-cache-trial', minRevision=1, cacheMode='cache-only',
+                    publisherKey='a' * 64)
+        forecast = {'source': {'model_run_at': '2026-11-18T00:00:00.000Z'}}
+        quality = {'source': {'model_run_at': '2026-11-17T18:00:00.000Z', 'model': 'gefs-aerosols'}}
+        config = bridge_config(core, forecast, quality)
+        js = """import {providerHttpConfiguration} from './src/provider-http.mjs';
+                const config = providerHttpConfiguration(JSON.parse(process.argv[1]));
+                process.stdout.write(JSON.stringify(config.airQuality.core.query));"""
+        def parse():
+            return subprocess.run([NODE, '--input-type=module', '-e', js, json.dumps(config)],
+                                  cwd=ROOT, capture_output=True, text=True, timeout=10)
+        checked = parse()
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        query = json.loads(checked.stdout)
+        self.assertEqual(query['model'], quality['source']['model'])
+        self.assertEqual(query['run'], quality['source']['model_run_at'])
+        del config['airQuality']['core']['query']['model']
+        rejected = parse()
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn('BRIDGE_CONFIG_INVALID', rejected.stderr)
