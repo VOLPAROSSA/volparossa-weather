@@ -27,6 +27,12 @@ spec.loader.exec_module(M)
 FSTAT = os.fstat
 
 
+def setUpModule():
+    # These tests inspect command plans. The actual hosted event admission
+    # cases are exercised explicitly by test_hosted_client_runtime.py.
+    unittest.enterModuleContext(patch.dict(os.environ, GITHUB_ACTIONS="false"))
+
+
 def root_file_stat(fd, **changes):
     """Inert ownership simulation; never chown or execute an apt tool."""
     info = FSTAT(fd)
