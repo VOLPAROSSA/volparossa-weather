@@ -1,0 +1,27 @@
+[
+  {
+    "master": "storm.png",
+    "reference": "design-reference.png (cyclone)",
+    "prompt": "Create only the soft cloud engraving / meteorological vortex underlay for the attached atlas concept. Antique Prussian-blue ink copperplate on clean unmarked warm ivory paper. The tight, beautifully drawn, counterclockwise spiral of an Atlantic low near 40% from the left and 44% from the top with a small clear eye. Atmospheric engraving of billowing clouds, linear curls, fine flowing hatching, not satellite photography. Excellent detail and open ivory light. Concentrate the engraving on upper left through middle, taper the spiral toward bottom left, diffuse all four edges to plain paper, rightmost third mostly unprinted. Wide landscape 1.65:1. ELIMINATE ALL map linework (coastline, fronts, isobars), ALL numbers, map letters, labels, typography and frames. Only the cloud vortex will be used underneath a separate real geographic vector map. Strong engraved contrast, same style as reference."
+  },
+  {
+    "master": "fox.png",
+    "reference": "design-reference.png (fox vignette), previous fox.png at 65fdfd55",
+    "prompt": "Create a revised, standalone finely engraved red fox vignette for a 19th-century weather atlas. The FIRST small reference is the required pose and head attitude, the second is the previous edition whose head reads like a dog. Faithfully redraw the little animal in the first reference with convincingly vulpine facial anatomy. Adult European red fox (Vulpes vulpes), standing lightly in profile, body and long full brush to the right, nose pointing LEFT and head turned a little toward the reader in three-quarter view. Elegant narrow tapered triangular muzzle, small sharp dark nose, closed mouth WITHOUT smile, one fully readable almond eye with a dark eyelid and a glimpse of the far eye, cheek ruff, fine whiskers, two distinct triangular ears. Head anatomically joined to a slender neck and long slim body. Exactly four anatomically coherent legs and ONE tail. Engraved scientific field-guide treatment: delicate royal navy copperplate lines with short dense hatching, paper highlights and readable white cheek patch. Full silhouette and paws visible on a small tuft of grasses. Wide about 1.9:1, fill the available frame. Plain clean white paper, absolutely no writing, label, lines, borders or colour blocks. Clean unlettered art for printing as a small illustration."
+  },
+  {
+    "master": "film.png",
+    "reference": "design-reference.png (cover)",
+    "prompt": "A flat dark Prussian blue cyanotype engraved film title card matching this rectangular print. Reconstruct only the ink artwork, meticulously removing the typesetting and play button. Beautiful cumulus billowing upward from lower left and lower right and a small band of clouds along the bottom; large QUIET DARK BLUE central and upper centre field for separate movie title and control. Engraved white cloud edges, pale powder-blue stippling on navy #193957, unbroken very fine double rectangular pale printed border, engraved decorative corners. Landscape 2.55:1, edge to edge, single flat plate. No lettering, icons, play symbols or numerals ANYWHERE."
+  },
+  {
+    "master": "cloud.png",
+    "reference": "design-reference.png (study)",
+    "prompt": "Reconstruct this square plate of a tall summer cumulus towering over a faint low horizon, rising white engraved cumulus clouds against a deep Prussian blue sky. Finely detailed pale engraved hatching, little stippling, authentic restrained printmaking on warm ivory paper; elegant flat Victorian weather atlas woodcut. Square aspect ratio, edge-to-edge blue ink, no writing, labels or borders outside the square. Preserve the firm silhouette of the tall cloud and its pale bright edges."
+  },
+  {
+    "master": "margin.png",
+    "reference": "design-reference.png (cloud bank above closing band)",
+    "prompt": "Recreate the attached antique weather-atlas cloud bank as a clean isolated copperplate illustration in rich deep Prussian blue ink on pure white paper. Match THIS asymmetrical right-corner composition: the low taper begins at the very bottom LEFT, the medium lobed tower rises in the middle-left, a dark saddle dips between it and the much taller richly billowing cluster at the far RIGHT, with the right side cut off by the edge. Strong warm white highlights in each lobe, short curved crosshatching, crisp deep navy shadows and a little fine sparse stippling. A monumental close up of soaring cumulus, cloud only. The cloud fills the full height on the right and most of the width; compose to the bottom and right edges. This is a wide horizontal 2.6:1 marginal illustration at the FOOT of a printed page. No sky rectangle, no horizon line, no shadows below, no trees or mountains, NO LETTERS (remove the accidental text at far left), no borders, no technical labels. Keep everything outside the bank plain white for transparent ink separation. Rich punchy engraved texture, confident irregular contour as in the supplied print."
+  }
+]
