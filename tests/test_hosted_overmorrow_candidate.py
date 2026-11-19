@@ -408,6 +408,17 @@ class CandidateTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'P15_FIXTURE_OUTPUT_CLOSURE'):
                 W['fixture_delta'](before, inventory.capture())
 
+    def test_independent_weather_and_drizzli_changes_preserve_shared_input_guard(self):
+        validate = W['validate_repository_changes']
+        validate(['README.md', '.github/workflows/weather-cache-expiry.yml',
+                  'tests/native-cache/read-client.mjs', 'integrations/drizzli/README.md',
+                  'integrations/drizzli/overlay/src/routes/weather/week/VolparossaWeek.svelte'])
+        for shared in ('src/provider.mjs', 'scripts/prepare_hosted_client_inputs.py',
+                       'integrations/overmorrow/stage.py', 'third_party/hosted-runtime-inputs.json',
+                       'sitecustomize.py', 'tests/native-cache-other/guest.py'):
+            with self.subTest(shared=shared), self.assertRaisesRegex(ValueError, 'P15_SHARED_SOURCE_CHANGED'):
+                validate(['integrations/drizzli/README.md', shared])
+
     def test_reviewed_source_set_replaces_old_unreachable_allowances(self):
         self.file('pubspec.yaml')
         expected = W['source_files'](self.base)
