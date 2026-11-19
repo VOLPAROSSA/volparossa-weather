@@ -72,7 +72,7 @@ def observe(app, screen, output):
                         if calls == ['weather', 'air']:
                             sim('io', device, 'screenshot', str(path))
                             observations = json.loads(subprocess.check_output([screen, path], timeout=20))
-                            if observations.get('app_title') and observations.get('provider_header'):
+                            if all(observations.get(key) for key in ('provider_header', 'native_forecast', 'ifs_model')):
                                 break
                         time.sleep(1)
                     else:
