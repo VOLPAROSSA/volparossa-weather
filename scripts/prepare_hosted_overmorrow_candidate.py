@@ -150,6 +150,20 @@ def selected_mode():
     return event['inputs']['input_mode']
 
 
+def validate_repository_changes(paths):
+    # The dedicated Drizz.li app and Debian cache-guest trial supply no Flutter inputs.
+    allowed = set(OWNED_SOURCE) | {'tests/test_hosted_client_inputs.py', 'tests/test_hosted_overmorrow_candidate.py',
+        'tests/test_hosted_overmorrow_dependencies.py', 'tests/test_hosted_overmorrow_hooks.py',
+        'tests/test_hosted_overmorrow_plugins.py',
+        'tests/test_hosted_overmorrow_sources.py',
+        'tests/test_hosted_overmorrow_pub_metadata.py',
+        'tests/test_hosted_overmorrow_pub_outputs.py',
+        'README.md', '.github/workflows/weather-cache-expiry.yml',
+        'docs/P15_OVERMORROW_CANDIDATE.md', 'docs/overmorrow-cold-comparison.json'}
+    require(all(path in allowed or path.startswith(('integrations/drizzli/', 'tests/native-cache/'))
+                for path in paths), 'P15_SHARED_SOURCE_CHANGED')
+
+
 def guards(*, mode=MODE):
     I.hosted_guard(os.environ, 'overmorrow')
     require(os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch'
@@ -163,15 +177,8 @@ def guards(*, mode=MODE):
     _, head = helper.process(['/usr/bin/git', '-C', str(ROOT), 'rev-parse', 'HEAD'], 10)
     require(head.decode().strip() == os.environ['GITHUB_SHA'], 'P15_SOURCE_COMMIT')
     # The shared test records the complete set of dispatch modes for each client.
-    _, changed = helper.process(['/usr/bin/git', '-C', str(ROOT), 'diff', '--name-only', BASE, 'HEAD'], 10)
-    allowed = set(OWNED_SOURCE) | {'tests/test_hosted_client_inputs.py', 'tests/test_hosted_overmorrow_candidate.py',
-        'tests/test_hosted_overmorrow_dependencies.py', 'tests/test_hosted_overmorrow_hooks.py',
-        'tests/test_hosted_overmorrow_plugins.py',
-        'tests/test_hosted_overmorrow_sources.py',
-        'tests/test_hosted_overmorrow_pub_metadata.py',
-        'tests/test_hosted_overmorrow_pub_outputs.py',
-        'docs/P15_OVERMORROW_CANDIDATE.md', 'docs/overmorrow-cold-comparison.json'}
-    require(set(changed.decode().splitlines()) <= allowed, 'P15_SHARED_SOURCE_CHANGED')
+    _, changed = helper.process(['/usr/bin/git', '-C', str(ROOT), 'diff', '--name-only', '-z', BASE, 'HEAD'], 10)
+    validate_repository_changes(changed.decode().rstrip('\0').split('\0') if changed else [])
     helper.process(['/usr/bin/git', '-C', str(ROOT), 'diff', '--quiet', 'HEAD', '--'], 10)
     return helper, platform
 
