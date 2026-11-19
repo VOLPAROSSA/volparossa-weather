@@ -20,6 +20,16 @@ G = H["main"].__globals__
 
 
 class HostedClients(unittest.TestCase):
+    def setUp(self):
+        # Pure legacy template cases must retain their event context even when
+        # this test suite runs in the new guarded inventory job.
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        event = Path(temporary.name) / 'event.json'
+        event.write_text(json.dumps(dict(inputs=dict(input_mode='historical-v1'))))
+        event.chmod(0o600)
+        self.enterContext(patch.dict(os.environ, GITHUB_EVENT_PATH=str(event), GITHUB_EVENT_NAME='workflow_dispatch'))
+
     def test_profile_is_separately_pinned_and_capability_denied_child(self):
         raw = H["PROFILE"].read_bytes()
         self.assertEqual(hashlib.sha256(raw).hexdigest(), H["PROFILE_SHA"])

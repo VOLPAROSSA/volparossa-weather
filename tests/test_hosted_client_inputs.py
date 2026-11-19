@@ -569,8 +569,11 @@ class ClientInputTests(unittest.TestCase):
         for profile, name in (('drizzli', 'hosted-clients.yml'), ('overmorrow', 'hosted-overmorrow.yml')):
             source = (ROOT / '.github/workflows' / name).read_text()
             historical, candidate = source.split('\n  input-candidate:', 1)
-            self.assertIn("if: github.event.inputs.input_mode != 'source-input-inventory'", historical)
-            self.assertIn("options: [historical-v1, source-input-inventory]", historical)
+            self.assertIn("if: github.event.inputs.input_mode == '' || github.event.inputs.input_mode == 'historical-v1'", historical)
+            expected = 'historical-v1, source-input-inventory, installed-environment-inventory'
+            if profile == 'overmorrow':
+                expected += ', runtime-boundary-verification'
+            self.assertIn('options: [' + expected + ']', historical)
             self.assertIn('timeout-minutes: 30', candidate)
             self.assertIn(f'--profile {profile} --mode source-input-inventory', candidate)
             self.assertIn(f'--profile {profile} --mode stage-input-metadata', candidate)
@@ -589,7 +592,7 @@ class ClientInputTests(unittest.TestCase):
                 A['signature_identities'](bad)
 
     def test_apt_candidate_has_no_install_or_global_repo_write(self):
-        source = (ROOT / 'scripts/prepare_hosted_client_apt.py').read_text()
+        source = (ROOT / 'scripts/prepare_hosted_client_apt.py').read_text().split('\n# Inventory-only bootstrap exception:', 1)[0]
         self.assertIn("I.write(private / 'status', b'')", source)
         self.assertIn("'--print-uris', '--yes', '--download-only'", source)
         self.assertIn("'Acquire::https::AllowRedirect=false'", source)

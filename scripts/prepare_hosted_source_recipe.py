@@ -57,8 +57,12 @@ PROFILES = {
         "scripts/prepare_hosted_clients_ci.py",
         "scripts/prepare_hosted_client_inputs.py",
         "scripts/prepare_hosted_client_apt.py",
+        "scripts/prepare_hosted_client_runtime.py",
         "third_party/client-notices-v1.json",
         "third_party/client-npm-inactive-v1.json",
+        "third_party/client-package-inputs-drizzli-v1.json",
+        "third_party/client-package-inputs-overmorrow-v1.json",
+        "third_party/client-installer-companions-v1.json",
         "third_party/client-notices/npm-originals.txt",
         "third_party/client-notices/NotoSans-OFL.txt",
         "third_party/client-notices/MaterialIcons-LICENSE.txt",
@@ -122,8 +126,12 @@ PROFILES = {
         "scripts/prepare_hosted_clients_ci.py",
         "scripts/prepare_hosted_client_inputs.py",
         "scripts/prepare_hosted_client_apt.py",
+        "scripts/prepare_hosted_client_runtime.py",
         "third_party/client-notices-v1.json",
         "third_party/client-npm-inactive-v1.json",
+        "third_party/client-package-inputs-drizzli-v1.json",
+        "third_party/client-package-inputs-overmorrow-v1.json",
+        "third_party/client-installer-companions-v1.json",
         "third_party/client-notices/npm-originals.txt",
         "third_party/client-notices/NotoSans-OFL.txt",
         "third_party/client-notices/MaterialIcons-LICENSE.txt",
@@ -266,10 +274,19 @@ def git_read(root, args, limit):
 
 
 def snapshot(root, profile, expected_commit):
+    return tracked_snapshot(root, expected_commit, source_paths(profile))
+
+
+def tracked_snapshot(root, expected_commit, paths):
+    # The two callers supply fixed source-recipe or Browser-helper selections.
+    # No new CLI selection, output scope or dependency authority is added.
     require(isinstance(expected_commit, str)
             and re.fullmatch(r"[0-9a-f]{40}", expected_commit), "Expected commit must be 40 hex")
     check_root(root)
-    paths = source_paths(profile)
+    require(isinstance(paths, tuple) and 0 < len(paths) <= MAX_FILES and len(set(paths)) == len(paths)
+        and all(isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_.@/-]+", name)
+            and not name.startswith('/') and all(p not in ('', '.', '..') for p in name.split('/'))
+            for name in paths), "Invalid fixed tracked source selection")
     head = git_read(root, ["rev-parse", "--verify", "HEAD"], 41).decode().strip()
     require(head == expected_commit, "HEAD differs from expected commit")
     tree = git_read(root, ["ls-tree", "-l", "-z", expected_commit, "--", *paths], MAX_FILES * 512)

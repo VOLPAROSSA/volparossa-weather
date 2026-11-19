@@ -19,6 +19,12 @@ M = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(M)
 
 
+def setUpModule():
+    # These tests inspect command plans. The actual hosted event admission
+    # cases are exercised explicitly by test_hosted_client_runtime.py.
+    unittest.enterModuleContext(patch.dict(os.environ, GITHUB_ACTIONS="false"))
+
+
 def report():
     products = dict(weather=dict(rows=4, table_sha256="a" * 64, product_sha256="b" * 64),
         air_quality=dict(rows=5, table_sha256="c" * 64, product_sha256="d" * 64))

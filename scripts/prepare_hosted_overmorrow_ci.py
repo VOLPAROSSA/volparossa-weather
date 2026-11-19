@@ -96,10 +96,11 @@ def sandbox(command, *, mode, proof=None):
     # SDK mountpoint stays empty on disk and source/.git/locks remain read-only.
     # HOME is an empty tmpfs made BEFORE the read-only checkout mount. Flutter
     # may write its own ephemeral metadata there, never the runner's real home.
-    index = argv.index("--remount-ro")
+    index = next(i for i in range(len(argv) - 1) if argv[i:i+2] == ["--remount-ro", "/home/runner"])
     require(argv[index:index+2] == ["--remount-ro", "/home/runner"], "SANDBOX_TEMPLATE_CHANGED")
-    argv[index:index+2] = ["--bind", str(SDK / "bin/cache"), str(SDK / "bin/cache"),
-                           "--bind", str(SDK_TOOL_STATE), str(SDK_TOOL_MOUNT)]
+    cache_mounts = H.BOUNDARY.sdk_metadata_mounts() if H.BOUNDARY is not None else [
+        "--bind", str(SDK / "bin/cache"), str(SDK / "bin/cache")]
+    argv[index:index+2] = [*cache_mounts, "--bind", str(SDK_TOOL_STATE), str(SDK_TOOL_MOUNT)]
     # Ubuntu's /usr/bin/which is an alternatives link through the deliberately
     # absent /etc/alternatives. Expose only the recorded canonical implementation
     # through an alias in the new root, not the runner's alternatives directory.
@@ -153,6 +154,11 @@ print(json.dumps(dict(schema=1,kind='hosted-overmorrow-sandbox-preflight',mode=m
 
 
 def preflight(mode, proof=None):
+    H.require_runtime_boundary()
+    if H.BOUNDARY is not None:
+        from types import SimpleNamespace
+        return H.BOUNDARY.preflight(mode, overmorrow=SimpleNamespace(
+            sandbox=sandbox, environment=environment, SDK_TOOL_MOUNT=SDK_TOOL_MOUNT), proof=proof)
     work = proof if mode == "browser" else STAGE
     name = "preflight-" + ("table-browser" if proof == TABLE_PROOF else mode)
     raw = H.run(name, sandbox(["/usr/bin/python3", "-I", "-c", PROBE, str(os.getuid()),
@@ -373,6 +379,7 @@ def cleanup_empty_browser_output(proof, identities):
 
 
 def execute(helper, platform):
+    H.require_runtime_boundary()
     installed = attempted = success = False
     owned_browser_directories = {}
     phase = "baseline"
@@ -388,15 +395,16 @@ def execute(helper, platform):
         baseline["kind"] = "hosted-overmorrow-sandbox-baseline"
         H.save("baseline.json", baseline)
         runtime = H.runtime_inventory()
-        sdk = sdk_inventory()
+        sdk = sdk_inventory(allow_build_state=True) if H.BOUNDARY is not None else sdk_inventory()
         tools = system_tools()
         H.save("runtime-binding.json", runtime)
         H.save("sdk-binding.json", sdk)
         H.save("system-tools.json", tools)
-        H.private_directory(PRIVATE)
-        for name in ("config", "cache", "pub-cache"):
-            H.private_directory(PRIVATE / name)
-        prepare_tool_state()
+        if H.BOUNDARY is None:
+            H.private_directory(PRIVATE)
+            for name in ("config", "cache", "pub-cache"):
+                H.private_directory(PRIVATE / name)
+            prepare_tool_state()
         H.write(OUTPUT / "passwd", f"runner:x:{os.getuid()}:{os.getgid()}:CI:/home/runner:/bin/false\n".encode())
         H.write(OUTPUT / "group", f"runner:x:{os.getgid()}:\n".encode())
         phase = "policy-install"
@@ -407,6 +415,15 @@ def execute(helper, platform):
         helper.staged_owned(platform)
         attempted = True
         helper.process(["/usr/bin/sudo", "-n", helper.PARSER, "--add", "--skip-cache", str(helper.STAGED)], 10)
+        if H.BOUNDARY is not None:
+            if H.BOUNDARY.view.cache_sha is None:
+                H.BOUNDARY.prepare_cache()
+            else:
+                H.BOUNDARY.check()
+            H.private_directory(PRIVATE)
+            for name in ("config", "cache", "pub-cache"):
+                H.private_directory(PRIVATE / name)
+            prepare_tool_state()
         phase = "public-acquisition"
         H.run("source-stage", ["/usr/bin/python3", "-B", str(HERE / "stage.py"), "--execute", "--destination", str(STAGE)], 270)
         pin = H.document(HERE / "upstream.json")
@@ -444,10 +461,13 @@ def execute(helper, platform):
         deployment = json.loads(raw, object_pairs_hook=H.unique)
         H.save("deployment.json", deployment)
         phase = "firefox-staging"
-        H.run("firefox-stage", ["/usr/bin/python3", "-B", str(H.BROWSER / "scripts/stage_firefox.py"),
-            "--firefox", str(H.RUNTIME / "firefox/firefox-esr"), "--output", str(H.FIREFOX),
-            "--expected-version", H.FIREFOX_VERSION, "--expected-source-stamp", H.FIREFOX_SOURCE_STAMP,
-            "--without-extensions"], 90)
+        if H.BOUNDARY is None:
+            H.run("firefox-stage", ["/usr/bin/python3", "-B", str(H.BROWSER / "scripts/stage_firefox.py"),
+                "--firefox", str(H.RUNTIME / "firefox/firefox-esr"), "--output", str(H.FIREFOX),
+                "--expected-version", H.FIREFOX_VERSION, "--expected-source-stamp", H.FIREFOX_SOURCE_STAMP,
+                "--without-extensions"], 90)
+        elif not H.BOUNDARY.firefox_ready:
+            H.BOUNDARY.stage_firefox()
         files = H.document(H.RUNTIME / "provenance.json")["files"]
         H.verify_firefox_copy(files)
         reports = {}

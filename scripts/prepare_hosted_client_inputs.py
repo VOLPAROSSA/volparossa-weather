@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
-"""Inert client lock/archive validation and bounded hosted candidate acquisition.
+"""Client input validation and explicit disposable hosted environment inventory.
 
-Candidates are observations, never build or consumer authority. No dependency,
-SDK, plugin, package maintainer script or lifecycle script is executed here.
+Candidates never grant build or consumer authority. The data-candidate mode
+executes no dependency/SDK/plugin/maintainer code. The separate installed mode
+provisions only fixed reviewed packages and captures unadmitted installed state.
 """
 import argparse
 import importlib.util
@@ -23,6 +24,12 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCK = ROOT / 'third_party/hosted-client-inputs-v1.json'
+# Package provisioning is a separate, narrower authority than build admission.
+# No CLI record, digest, URL or profile override is accepted.
+PACKAGE_INPUTS = {
+    'drizzli': ('client-package-inputs-drizzli-v1.json', '775192250323cb74dd0e1f07c77fd4ab9a7c45706a8e0436e88f7eafa9fdd0d0'),
+    'overmorrow': ('client-package-inputs-overmorrow-v1.json', '42fa6761fa56b2b7beb80a493100ec3d65ffd7c61a47e23622d735e874e1328e'),
+}
 MAX_JSON = 64 * 1024**2
 MAX_ARCHIVE = 96 * 1024**2
 MAX_EXPANDED = 512 * 1024**2
@@ -545,6 +552,30 @@ def load_build_lock(profile):
     return entry
 
 
+def load_package_inputs(profile):
+    require(profile in SOURCES and profile in PACKAGE_INPUTS, 'PACKAGE_INPUTS_NOT_REVIEWED')
+    filename, digest = PACKAGE_INPUTS[profile]
+    raw = read(ROOT / 'third_party' / filename)
+    require(sha(raw) == digest, 'PACKAGE_INPUTS_CHANGED')
+    value = document(raw)
+    require(type(value) is dict and set(value) == {'schema', 'kind', 'id', 'profile', 'admitted',
+        'package_inputs_authorized', 'build_environment_admitted', 'consumer_admitted', 'source', 'target',
+        'review', 'apt', 'dependencies', 'runtime_inputs', 'limitations'}
+        and type(value['schema']) is int and value['schema'] == 1
+        and value['kind'] == 'volparossa-weather-client-package-inputs'
+        and value['profile'] == profile and value['source'] == SOURCES[profile]
+        and value['package_inputs_authorized'] is True and value['admitted'] is False
+        and value['build_environment_admitted'] is False and value['consumer_admitted'] is False
+        and value['target'] == NPM_TARGET, 'PACKAGE_INPUTS_SCHEMA')
+    # Runtime records are references only here; this mode never executes them.
+    for filename, pin in value['runtime_inputs'].items():
+        require(filename in ('third_party/hosted-runtime-inputs.json', 'third_party/hosted-runtime-npm.json',
+            'integrations/overmorrow/upstream.json'), 'PACKAGE_RUNTIME_RECORD')
+        raw = read(ROOT / filename)
+        require(pin == dict(bytes=len(raw), sha256=sha(raw)), 'PACKAGE_RUNTIME_CHANGED')
+    return value
+
+
 def candidate(profile, output, *, downloader=fetch):
     require(profile in SOURCES, 'CLIENT_PROFILE')
     source = SOURCES[profile]
@@ -638,6 +669,13 @@ def hosted_guard(environment, profile):
 
 
 PUBLIC_NAMES = frozenset(('dependency-candidate.json', 'dependency-candidate.partial.json', 'apt-candidate.json', 'source-binding.json', 'bootstrap-observations.json',
+    'installer-simulation-started.json', 'installer-install-started.json',
+    'installer-simulation-stdout.log', 'installer-install-stdout.log',
+    'installed-environment.json', 'installed-before.json', 'installer-simulation-cleanup.json',
+    'installer-install-cleanup.json', 'installer-simulation-stderr.log', 'installer-install-stderr.log', 'installed-packages-before.tsv',
+    'installed-packages-after.tsv', 'install-simulation.log', 'install.log', 'provisioning-bootstrap.json', 'installer-companions.json',
+    'installer-cache-before.json', 'installer-cache-after.json',
+    'runtime-boundary-started.json', 'runtime-boundary.json', 'runtime-boundary-cleanup.json', 'runtime-boundary-diagnostics.json',
     'result.json', 'apt-update.log', 'apt-failure.log', 'apt-resolver.log', 'runner-packages.tsv', 'package-lock.json', 'pubspec.lock',
     'noble.InRelease', 'noble-updates.InRelease', 'noble-security.InRelease',
     'noble.signature.log', 'noble-updates.signature.log', 'noble-security.signature.log'))
@@ -680,16 +718,110 @@ def interrupted(_signum, _frame):
     raise InterruptedError('CLIENT_INPUT_INTERRUPTED')
 
 
+def remove_empty_installer_partial(source):
+    # APT's privileged cache lock changes this existing directory to
+    # _apt:root 0700. Its runner-owned parent permits rmdir without opening or
+    # changing the inaccessible child. Only an empty fixed directory qualifies.
+    import pwd
+    allowed = {0, os.getuid()}
+    try:
+        allowed.add(pwd.getpwnam('_apt').pw_uid)
+    except KeyError:
+        pass
+    descriptors = []
+    try:
+        require(source.is_absolute() and source.resolve(strict=True) == source, 'CANDIDATE_ROOT')
+        descriptors.append(os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
+        for name in ('apt-private', 'archives'):
+            info = os.fstat(descriptors[-1])
+            require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700, 'CANDIDATE_CACHE_PARENT')
+            try:
+                descriptors.append(os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=descriptors[-1]))
+            except FileNotFoundError:
+                return  # No installer cache was materialized.
+        cache = descriptors[-1]
+        info = os.fstat(cache)
+        require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700, 'CANDIDATE_CACHE_PARENT')
+        try:
+            info = os.stat('partial', dir_fd=cache, follow_symlinks=False)
+        except FileNotFoundError:
+            return  # Idempotent after an interrupted later rmtree.
+        observation = dict(schema=1, admitted=False, action='remove-empty-installer-cache-partial',
+            uid=info.st_uid, gid=info.st_gid, mode=stat.S_IMODE(info.st_mode), privileged=False)
+        print(canonical(observation).decode(), flush=True)
+        require(stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o700
+            and info.st_uid in allowed and info.st_gid in (0, os.getgid()), 'CANDIDATE_CACHE_PARTIAL')
+        anchors = [(source.lstat(), os.fstat(descriptors[0]))]
+        anchors += [(os.stat(name, dir_fd=parent, follow_symlinks=False), os.fstat(child))
+            for parent, name, child in zip(descriptors, ('apt-private', 'archives'), descriptors[1:])]
+        require(all(stat.S_ISDIR(observed.st_mode) and (observed.st_dev, observed.st_ino) ==
+            (opened.st_dev, opened.st_ino) for observed, opened in anchors), 'CANDIDATE_CACHE_REPLACED')
+        current = os.stat('partial', dir_fd=cache, follow_symlinks=False)
+        require((current.st_dev, current.st_ino, current.st_mode, current.st_uid, current.st_gid) ==
+            (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid), 'CANDIDATE_CACHE_PARTIAL_REPLACED')
+        os.rmdir('partial', dir_fd=cache)  # Atomic empty-directory check; never follows a symlink.
+        try:
+            os.stat('partial', dir_fd=cache, follow_symlinks=False)
+        except FileNotFoundError:
+            print(canonical(dict(observation, removed=True, absent=True)).decode(), flush=True)
+        else:
+            require(False, 'CANDIDATE_CACHE_PARTIAL_REPLACED')
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def cleanup_candidate(profile):
+    # Retain runner-local recovery data if privileged installer cleanup is
+    # unconfirmed. Never publish that private directory as a fallback.
+    import shutil
+    source = ROOT / 'build' / ('hosted-' + profile + '-input-candidate')
+    require(source.parent.resolve() == source.parent, 'CANDIDATE_ROOT')
+    if source.exists() or source.is_symlink():
+        require(source.resolve() == source and source.is_dir(), 'CANDIDATE_ROOT')
+        for label in ('simulation', 'install'):
+            marker = source / ('installer-' + label + '-started.json')
+            if marker.exists() or marker.is_symlink():
+                document(read(marker))
+                receipt = document(read(source / ('installer-' + label + '-cleanup.json')))
+                require(receipt.get('owned_session_drained') is True and receipt.get('leader_reaped') is True,
+                    'INSTALLER_CLEANUP_UNCONFIRMED')
+        runtime_marker = source / 'runtime-boundary-started.json'
+        if runtime_marker.exists() or runtime_marker.is_symlink():
+            document(read(runtime_marker))
+            receipt = document(read(source / 'runtime-boundary-cleanup.json'))
+            require(receipt.get('process_drain_confirmed') is True and receipt.get('policy_removed') is True,
+                'RUNTIME_BOUNDARY_CLEANUP_UNCONFIRMED')
+        remove_empty_installer_partial(source)
+        shutil.rmtree(source)
+    public = source.with_name(source.name + '-public')
+    if public.exists() or public.is_symlink():
+        require(public.resolve() == public and public.is_dir(), 'CANDIDATE_ROOT')
+        shutil.rmtree(public)
+    require(not source.exists() and not source.is_symlink() and not public.exists() and not public.is_symlink(),
+        'CANDIDATE_CLEANUP_INCOMPLETE')
+    print(canonical(dict(schema=1, admitted=False, kind='client-input-data-cleanup',
+        private_absent=True, public_absent=True, privileged_cleanup=False)).decode(), flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--profile', choices=SOURCES, required=True)
-    parser.add_argument('--mode', choices=('source-input-inventory', 'stage-input-metadata'), required=True)
+    parser.add_argument('--mode', choices=('source-input-inventory', 'installed-environment-inventory',
+        'runtime-boundary-verification', 'stage-input-metadata', 'cleanup-input-data'), required=True)
     args = parser.parse_args()
     hosted_guard(os.environ, args.profile)
     os.umask(0o077)
+    if args.mode == 'cleanup-input-data':
+        cleanup_candidate(args.profile)
+        return
     if args.mode == 'stage-input-metadata':
         project_metadata(args.profile)
         return
+    require(args.mode != 'runtime-boundary-verification' or args.profile == 'overmorrow', 'BOUNDARY_FULL_PROFILE_REQUIRED')
+    package_inputs = load_package_inputs(args.profile) if args.mode in (
+        'installed-environment-inventory', 'runtime-boundary-verification') else None
     output = ROOT / 'build' / ('hosted-' + args.profile + '-input-candidate')
     info = output.parent.lstat()
     require(output.parent.resolve() == output.parent and stat.S_ISDIR(info.st_mode)
@@ -699,7 +831,8 @@ def main():
         weather_commit=os.environ['GITHUB_SHA'], run_id=os.environ.get('GITHUB_RUN_ID'),
         run_attempt=os.environ.get('GITHUB_RUN_ATTEMPT'), profile=args.profile,
         recipes={name: sha(read(ROOT / 'scripts' / name)) for name in
-            ('prepare_hosted_client_inputs.py', 'prepare_hosted_client_apt.py')})))
+            ('prepare_hosted_client_inputs.py', 'prepare_hosted_client_apt.py',
+             'prepare_hosted_client_runtime.py', 'prepare_hosted_source_recipe.py')})))
     phase, failure = 'ubuntu-package-closure', None
     handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
     for sig in handlers:
@@ -708,9 +841,19 @@ def main():
         spec = importlib.util.spec_from_file_location('_client_apt', ROOT / 'scripts/prepare_hosted_client_apt.py')
         apt = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(apt)
-        apt.candidate('web' if args.profile == 'drizzli' else 'flutter', output)
-        phase = 'source-and-dependencies'
-        candidate(args.profile, output)
+        if package_inputs is not None:
+            phase = 'installed-environment-inventory'
+            apt.installed_inventory(args.profile, output, package_inputs)
+            if args.mode == 'runtime-boundary-verification':
+                phase = 'runtime-boundary-verification'
+                spec = importlib.util.spec_from_file_location('_runtime_boundary', ROOT / 'scripts/prepare_hosted_client_runtime.py')
+                boundary = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(boundary)
+                boundary.verify(output)
+        else:
+            apt.candidate('web' if args.profile == 'drizzli' else 'flutter', output)
+            phase = 'source-and-dependencies'
+            candidate(args.profile, output)
         phase = 'complete'
     except BaseException as error:
         failure = dict(category=type(error).__name__,
@@ -719,7 +862,7 @@ def main():
     finally:
         try:
             write(output / 'result.json', canonical(dict(schema=1, kind='client-input-inventory-result',
-                profile=args.profile, phase=phase, failure=failure, admitted=False, compiled=False, production_authority=False)))
+                profile=args.profile, mode=args.mode, phase=phase, failure=failure, admitted=False, compiled=False, production_authority=False)))
         finally:
             for sig, handler in handlers.items():
                 signal.signal(sig, handler)
