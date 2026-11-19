@@ -1,6 +1,10 @@
 name: Prepare real signed-cache trial inputs
 description: Compile the pinned Core and acquire the original public forecast fields.
 inputs:
+  wait-for-iphone:
+    description: Acquire the live products only after the ordinary iPhone app is installed.
+    required: false
+    default: 'false'
   particulates:
     description: Also acquire a genuine NOAA particulate forecast for the installed app.
     required: false
@@ -44,6 +48,12 @@ runs:
         settings="$RUNNER_TEMP/weather-cleanup-$GITHUB_RUN_ID.gitconfig"
         install -m 0600 /dev/null "$settings"
         echo "GIT_CONFIG_GLOBAL=$settings" >> "$GITHUB_ENV"
+    - name: Wait for the installed iPhone before acquiring expiring products
+      if: inputs.wait-for-iphone == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 -B tests/iphone-signed/artifact.py ready
     - name: Acquire current public-community forecasts
       env:
         WITH_PARTICULATES: ${{ inputs.particulates }}

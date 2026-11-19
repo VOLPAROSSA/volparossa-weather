@@ -68,8 +68,14 @@ def get(origin, path='/api/volparossa/forecast'):
 
 
 def read_client(origin):
-    result = subprocess.run([NODE, ROOT / "tests/native-cache/read-client.mjs", origin.geturl()],
-                            capture_output=True, check=True, timeout=CALL_TIMEOUT)
+    args = [NODE, ROOT / "tests/native-cache/read-client.mjs", origin.geturl()]
+    if Path('/dev/virtio-ports/weather.iphone').exists():
+        args.append('--software-emulation')
+    result = subprocess.run(args, capture_output=True, timeout=CALL_TIMEOUT)
+    if result.returncode:
+        known = re.findall(r'FORECAST_[A-Z_]{2,64}|TimeoutError|AbortError|TypeError', result.stderr.decode(errors='replace'))
+        print('WEATHER_CLIENT_DIAGNOSTIC=' + ','.join(known[:3] or ['CLIENT_EXIT']), file=sys.stderr)
+        result.check_returncode()
     return json.loads(result.stdout)
 
 

@@ -22,7 +22,7 @@ def media(directory):
         path = directory / name
         assert not path.is_symlink() and path.is_file() and 0 < path.stat().st_size < 512 * 1024**2
         hashes[name] = digest(path)
-    return dict(core=CORE, weather=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'],
+    return dict(core=CORE, weather=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                 debian_sha512=DEBIAN, image=BASE, files=hashes)
 
 

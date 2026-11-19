@@ -5,6 +5,7 @@ from pathlib import Path
 import json
 import os
 import re
+import shutil
 import socketserver
 import subprocess
 import sys
@@ -12,14 +13,13 @@ import tempfile
 import time
 
 from media import CORE, DEBIAN, digest
+from device import DEVICE, RUNTIME, identifier, remove
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / 'native-cache'))
 sys.path.insert(0, str(HERE.parent / 'ios-simulator'))
 from android_relay import relay
 from observe import BUNDLE, sim
 
-RUNTIME = 'com.apple.CoreSimulator.SimRuntime.iOS-18-5'
-DEVICE = 'com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro-Max'
 PHASES = ('initial', 'refused', 'recovered')
 SCREENS = ('initial', 'expired', 'refused', 'recovered')
 
@@ -67,7 +67,7 @@ class Control(socketserver.StreamRequestHandler):
         self.wfile.write((reply + '\n').encode())
 
 
-def drive(work, medium, build, device):
+def drive(work, medium, build, device, screens):
     frames = {}
     expected = iter(SCREENS)
     with ExitStack() as stack, socketserver.TCPServer(('127.0.0.1', 43211), Control) as server:
@@ -98,6 +98,7 @@ def drive(work, medium, build, device):
                 sim('io', device, 'screenshot', str(picture), deadline=time.monotonic() + 100)
                 assert picture.read_bytes()[:8] == b'\x89PNG\r\n\x1a\n'
                 frames[phase] = digest(picture)
+                shutil.copyfile(picture, screens / picture.name)
                 if phase != 'expired':
                     (work / (phase + '.observed')).touch(exist_ok=False)
                 print('Observed mounted iPhone interface:', phase, flush=True)
@@ -167,34 +168,26 @@ def diagnostics(work):
         with path.open('rb') as stream:
             stream.seek(max(0, path.stat().st_size - 32768))
             lines = stream.read().decode(errors='replace').splitlines()
-        markers = r'error|fail|timeout|assert|qemu-system|WeatherTests.swift|WitnessError|WEATHER_GUEST|WEATHER_API|guest diagnostics|expiry.py|stage='
+        markers = r'error|fail|timeout|assert|qemu-system|WeatherTests.swift|WitnessError|WEATHER_GUEST|WEATHER_API|WEATHER_CLIENT|guest diagnostics|expiry.py|stage='
         for line in [line for line in lines if re.search(markers, line, re.I)][-10:]:
             print(filename, line[:300], file=sys.stderr, flush=True)
 
 
-def session(app, medium, build, output):
+def session(app, medium, build, reservation, output):
     assert os.environ['RUNNER_ENVIRONMENT'] == 'github-hosted' and os.uname().machine == 'arm64'
     with tempfile.TemporaryDirectory(prefix='vpw-', dir='/tmp') as trial:
         work = Path(trial)
-        deadline = time.monotonic() + 480
-        device = sim('create', 'Signed VOLPAROSSA Weather', DEVICE, RUNTIME, deadline=deadline)
-        assert re.fullmatch(r'[A-Fa-f0-9-]{36}', device)
+        device = identifier(reservation)
+        screens = output.parent / 'iphone-forecast-screens'
+        screens.mkdir(mode=0o700)
         try:
-            sim('bootstatus', device, '-b', deadline=deadline)
-            sim('install', device, str(app.resolve(strict=True)), deadline=deadline)
-            frames = drive(work, medium, build, device)
+            frames = drive(work, medium, build, device, screens)
             report = verify(work, frames)
         except BaseException:
             diagnostics(work)
             raise
         finally:
-            cleanup = time.monotonic() + 240
-            try:
-                sim('shutdown', device, deadline=cleanup)
-            finally:
-                sim('delete', device, deadline=cleanup)
-        devices = json.loads(sim('list', 'devices', '--json', deadline=cleanup))['devices']
-        assert all(d['udid'] != device for runtime in devices.values() for d in runtime)
+            remove(reservation)
     report.update(runtime=RUNTIME, device=DEVICE, app_bundle=BUNDLE, upstream_revision=subprocess.check_output(
         ['git', '-C', 'build/ios-source', 'rev-parse', 'HEAD'], text=True).strip(), flutter_revision='f6ff1529fd6d8af5f706051d9251ac9231c83407',
         runner_sha256=digest(app / 'Runner'), app_sha256=digest(app / 'Frameworks/App.framework/App'), guest_nics=0,
