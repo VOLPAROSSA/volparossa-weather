@@ -91,10 +91,15 @@ runuser -u volparossa -- volparossa content publish --input "$state/trial-origin
     --lifetime-seconds 60 --quota-bytes 131072 --max-entries 16 --min-free-bytes 67108864 > /run/weather-owner/publication.json
 key=$(python3 -c 'import json;print(json.load(open("/run/weather-owner/publication.json"))["publisher_key_hex"])')
 runuser -u volparossa -- "$root/bin/remember_weather_manifest" "$state/forecast-cache" "$state/trial-manifest" "$key"
+runuser -u volparossa -- volparossa content publish --input "$state/trial-original.json" --cache "$state/replacement-cache" \
+    --identity "$state/identity.key" --passphrase-file "$state/trial-passphrase" --manifest "$state/trial-replacement" \
+    --name weather.public-community-cache-trial --revision 2 --content-type application/vnd.volparossa.forecast.v1+json \
+    --lifetime-seconds 300 --quota-bytes 131072 --max-entries 16 --min-free-bytes 67108864 > /run/weather-owner/replacement.json
 rm -- "$state/trial-passphrase" "$state/trial-manifest" "$state/trial-original.json"
+rm -rf --one-file-system -- "$state/replacement-cache"
 mv -- forecast.json /run/weather-owner/original.json
-chown weatherowner:weatherowner /run/weather-owner/{original,publication}.json
-chmod 0600 /run/weather-owner/{original,publication}.json
+chown weatherowner:weatherowner /run/weather-owner/{original,publication,replacement}.json
+chmod 0600 /run/weather-owner/{original,publication,replacement}.json
 stage=owner
 # The real client has a required veth into its protected worker. The owner
 # needs only loopback and the agent's filesystem Unix socket for this read.
@@ -107,11 +112,27 @@ assert sum(bool(re.fullmatch("vpih[0-9a-f]{8}", link["ifname"]))
            and link.get("linkinfo", {}).get("info_kind") == "veth" for link in links) == 1
 CHECK
 guest_net=$(readlink /proc/self/ns/net)
+install -d -m 0755 /run/weather-recovery
+install -o weatherowner -g weatherowner -m 0200 /dev/null /run/weather-recovery/advance
+(
+    for i in {1..1500}; do
+        if [[ -s /run/weather-recovery/advance ]]; then
+            runuser -u volparossa -- "$root/bin/remember_weather_manifest" "$state/forecast-cache" "$state/trial-replacement" "$key"
+            exit 0
+        fi
+        sleep .1
+    done
+    exit 1
+) &
+recovery_pid=$!
 env GITHUB_SHA="$(cat weather.sha)" CORE_SOURCE="$(cat core.sha)" unshare --net -- /bin/bash -ceu '
     test "$(readlink /proc/self/ns/net)" != "$1"
     ip link set lo up
     exec runuser -u weatherowner -- python3 -B "$2" /run/weather-owner/original.json /run/weather-owner/publication.json
 ' offline-owner "$guest_net" "$root/tests/native-cache/expiry.py" > /run/result.json
+wait "$recovery_pid"
+rm -- "$state/trial-replacement" /run/weather-recovery/advance
+rmdir /run/weather-recovery
 stage=cleanup
 test ! -e /run/weather-owner/original.json
 rmdir /run/weather-owner

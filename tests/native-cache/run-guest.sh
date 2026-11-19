@@ -23,7 +23,9 @@ curl --fail --show-error --silent --location --connect-timeout 30 --max-time 600
 digest=$(jq -er '.sha512 | select(test("^[a-f0-9]{128}$"))' "$manifest")
 echo "$digest  $image" | sha512sum --check --strict -
 guest_data=$vm/stage
-git archive HEAD src scripts tests/native-cache/expiry.py | tar -xf - -C "$guest_data"
+git archive HEAD src scripts tests/native-cache/expiry.py tests/native-cache/read-client.mjs | tar -xf - -C "$guest_data"
+# The app build stages this exact client next to the same Weather provider modules.
+git show HEAD:integrations/drizzli/overlay/src/lib/services/volparossa/client.mjs > "$guest_data/src/drizzli-client.mjs"
 install -m 0755 "$(realpath "$(command -v node)")" "$guest_data/bin/node"
 ldd "$guest_data/bin/node" | tee "$vm/node.linkage"
 if grep -qE 'not found|libnode\.so' "$vm/node.linkage"; then exit 1; fi
@@ -58,7 +60,9 @@ sudo -n -- /usr/bin/setpriv --reuid "$(id -u)" --regid "$kvm_gid" --clear-groups
 test "$(stat -c%s "$vm/result")" -le 8192
 if ! jq -e --arg app "$GITHUB_SHA" --arg engine "$CORE_SOURCE" \
     '.weather_sha == $app and .core_sha == $engine and .distinct_weather_owner and .core_refused_expired and
-     .network_interfaces == ["lo"] and .http_after_expiry == 503 and .processes_joined and .private_directory_removed' \
+     .network_interfaces == ["lo"] and .http_after_expiry == 503 and .processes_joined and .private_directory_removed and
+     .drizzli_rejected_expired and .drizzli_recovered and .revision_after_recovery == 2 and
+     .manifest_id != .replacement_manifest_id' \
     "$vm/result" >/dev/null 2>&1; then
     grep -oE '^WEATHER_TRIAL_FAILED=[a-z-]{1,40}$' "$vm/result" || true
     grep -Eo 'guest diagnostics \[.{0,240}\]|File "[^"]*/expiry.py", line [0-9]{1,4}|WEATHER_GUEST_LINE=[0-9]{1,5}|WEATHER_API_DIAGNOSTIC=[A-Za-z0-9_,.=-]{1,180}|AssertionError:[ a-zA-Z]{1,100}' "$vm/console" | tail -12 || true
