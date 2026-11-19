@@ -1,0 +1,160 @@
+{
+  "schema": "volparossa.weather.ecmwf-archive-evaluation.v1",
+  "model_run_at": "2026-10-10T12:00:00.000Z",
+  "lead_hours": 24,
+  "retrieved_utc_date": "2026-11-18",
+  "models": {
+    "ifs": {
+      "last_modified_at": "2026-10-10T19:34:06.000Z",
+      "index_sha256": "3a6f96b346b9f230314ffe502d29f216933a6a3367c1cec932705617c62db8ed",
+      "field_sha256": "5abb88c7343f1dd075dfee50c6fb6e0cdcbd53f8e503c5a79737eedcd924b909"
+    },
+    "aifs-single": {
+      "last_modified_at": "2026-10-10T17:34:03.000Z",
+      "index_sha256": "525035d702fa28fa218950d468a8d66cdb279e960679eceea807d629efdef159",
+      "field_sha256": "ec7949d00698ba8d9ff4b8a0e7dfd1f63ed09fad0a8036a99684740211d64ef1"
+    }
+  },
+  "stations": [
+    {
+      "observations": {
+        "schema": "volparossa.weather.observations.v1",
+        "source": "Deutscher Wetterdienst (DWD), hourly 2 m station observations, Berlin-Dahlem (FU)",
+        "license": "CC-BY-4.0",
+        "station": {
+          "id": "00403",
+          "latitude": 52.4537,
+          "longitude": 13.3017
+        },
+        "sharing": "public",
+        "purpose": "retrospective-evaluation",
+        "variable": "temperature_2m",
+        "unit": "degC",
+        "statistic": "nominal-synoptic-hour",
+        "samples": [
+          {
+            "observed_at": "2026-10-11T12:00:00.000Z",
+            "temperature_2m": 11.7,
+            "quality": "provisional"
+          }
+        ]
+      },
+      "provenance": {
+        "url": "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/hourly/air_temperature/recent/stundenwerte_TU_00403_akt.zip",
+        "sha256": "5c4f1509768c7892f47116724742d6ce2dede6ea98ac636d2a113209785edcb6",
+        "member": "produkt_tu_stunde_20250517_20261117_00403.txt",
+        "row": "        403;2026101112;    1;  11.7;  79.0;eor",
+        "columns": "STATIONS_ID;MESS_DATUM;QN_9;TT_TU;RF_TU;eor",
+        "quality_note": "DWD QN_9=1, formal control only; recent data may be revised.",
+        "geography_row": "   403;   51.00; 52.4537; 13.3017;19970712;        ;Berlin-Dahlem (FU)",
+        "dataset": "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/hourly/air_temperature/DESCRIPTION_obsgermany_climate_hourly_air_temperature_en.pdf",
+        "terms": "https://opendata.dwd.de/climate_environment/CDC/Terms_of_use.pdf"
+      }
+    },
+    {
+      "observations": {
+        "schema": "volparossa.weather.observations.v1",
+        "source": "Deutscher Wetterdienst (DWD), hourly 2 m station observations, Berlin-Marzahn",
+        "license": "CC-BY-4.0",
+        "station": {
+          "id": "00420",
+          "latitude": 52.5447,
+          "longitude": 13.5598
+        },
+        "sharing": "public",
+        "purpose": "retrospective-evaluation",
+        "variable": "temperature_2m",
+        "unit": "degC",
+        "statistic": "nominal-synoptic-hour",
+        "samples": [
+          {
+            "observed_at": "2026-10-11T12:00:00.000Z",
+            "temperature_2m": 11.5,
+            "quality": "provisional"
+          }
+        ]
+      },
+      "provenance": {
+        "url": "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/hourly/air_temperature/recent/stundenwerte_TU_00420_akt.zip",
+        "sha256": "51c7a18e0ef98f216aca6ff3a55fcb3172a884b7b158448f0f92d6e5a0eb8595",
+        "member": "produkt_tu_stunde_20250517_20261117_00420.txt",
+        "row": "        420;2026101112;    1;  11.5;  85.0;eor",
+        "columns": "STATIONS_ID;MESS_DATUM;QN_9;TT_TU;RF_TU;eor",
+        "quality_note": "DWD QN_9=1, formal control only; recent data may be revised.",
+        "geography_row": "   420;   61.00; 52.5447; 13.5598;20060823;        ;Berlin-Marzahn",
+        "dataset": "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/hourly/air_temperature/DESCRIPTION_obsgermany_climate_hourly_air_temperature_en.pdf",
+        "terms": "https://opendata.dwd.de/climate_environment/CDC/Terms_of_use.pdf"
+      }
+    },
+    {
+      "observations": {
+        "schema": "volparossa.weather.observations.v1",
+        "source": "Deutscher Wetterdienst (DWD), hourly 2 m station observations, Berlin-Tempelhof",
+        "license": "CC-BY-4.0",
+        "station": {
+          "id": "00433",
+          "latitude": 52.4676,
+          "longitude": 13.402
+        },
+        "sharing": "public",
+        "purpose": "retrospective-evaluation",
+        "variable": "temperature_2m",
+        "unit": "degC",
+        "statistic": "nominal-synoptic-hour",
+        "samples": [
+          {
+            "observed_at": "2026-10-11T12:00:00.000Z",
+            "temperature_2m": 11.6,
+            "quality": "provisional"
+          }
+        ]
+      },
+      "provenance": {
+        "url": "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/hourly/air_temperature/recent/stundenwerte_TU_00433_akt.zip",
+        "sha256": "54543fed98a4763cccd99464fa15424ce1414a4a3688fb648b4d7ce871e51225",
+        "member": "produkt_tu_stunde_20250517_20261117_00433.txt",
+        "row": "        433;2026101112;    1;  11.6;  77.0;eor",
+        "columns": "STATIONS_ID;MESS_DATUM;QN_9;TT_TU;RF_TU;eor",
+        "quality_note": "DWD QN_9=1, formal control only; recent data may be revised.",
+        "geography_row": "   433;   47.74; 52.4676; 13.4020;20250923;        ;Berlin-Tempelhof",
+        "dataset": "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/hourly/air_temperature/DESCRIPTION_obsgermany_climate_hourly_air_temperature_en.pdf",
+        "terms": "https://opendata.dwd.de/climate_environment/CDC/Terms_of_use.pdf"
+      }
+    },
+    {
+      "observations": {
+        "schema": "volparossa.weather.observations.v1",
+        "source": "Deutscher Wetterdienst (DWD), hourly 2 m station observations, Potsdam",
+        "license": "CC-BY-4.0",
+        "station": {
+          "id": "03987",
+          "latitude": 52.3812,
+          "longitude": 13.0622
+        },
+        "sharing": "public",
+        "purpose": "retrospective-evaluation",
+        "variable": "temperature_2m",
+        "unit": "degC",
+        "statistic": "nominal-synoptic-hour",
+        "samples": [
+          {
+            "observed_at": "2026-10-11T12:00:00.000Z",
+            "temperature_2m": 11.6,
+            "quality": "provisional"
+          }
+        ]
+      },
+      "provenance": {
+        "url": "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/hourly/air_temperature/recent/stundenwerte_TU_03987_akt.zip",
+        "sha256": "bb2a405ac75547d53f46dee5b4fda7cbce51e2f07acd14e65c8bdd30e2505d30",
+        "member": "produkt_tu_stunde_20250517_20261117_03987.txt",
+        "row": "       3987;2026101112;    1;  11.6;  74.0;eor",
+        "columns": "STATIONS_ID;MESS_DATUM;QN_9;TT_TU;RF_TU;eor",
+        "quality_note": "DWD QN_9=1, formal control only; recent data may be revised.",
+        "geography_row": "  3987;   80.86; 52.3812; 13.0622;20230706;        ;Potsdam",
+        "dataset": "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/hourly/air_temperature/DESCRIPTION_obsgermany_climate_hourly_air_temperature_en.pdf",
+        "terms": "https://opendata.dwd.de/climate_environment/CDC/Terms_of_use.pdf"
+      }
+    }
+  ]
+}

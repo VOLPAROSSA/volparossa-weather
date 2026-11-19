@@ -2,8 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
-import { mkdtemp, chmod, mkdir, open, writeFile, readdir, rename, rm, stat, symlink } from 'node:fs/promises';
+import { constants, watch } from 'node:fs';
+import { mkdtemp, chmod, mkdir, open, readFile, writeFile, readdir, rename, rm, stat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { airQualityRequest } from '../src/air-quality.mjs';
@@ -320,11 +320,22 @@ test('decoder failure and child cancellation clean fields and process group with
     await assert.rejects(fetchAirQualityForecast(QUERY, options),
       error => error.code === 'CORE_FAILED' && !error.message.includes('private'));
   }, '#!/bin/sh\nprintf private-error >&2\nexit 7\n');
-  await fixture(async options => {
+  await fixture(async (options, parent) => {
     const controller = new AbortController(), started = Date.now();
-    const timer = setTimeout(() => controller.abort(), 100);
+    const marker = 'decoder-child-state';
+    const watcher = watch(parent, (_event, name) => {
+      if (name === marker) controller.abort();
+    });
     try { await assert.rejects(fetchAirQualityForecast(QUERY, { ...options, signal: controller.signal }), code('CANCELLED')); }
-    finally { clearTimeout(timer); }
+    finally { watcher.close(); }
     assert.ok(Date.now() - started < 5000);
-  }, '#!/bin/sh\nsleep 30\n');
+    assert.equal(await readFile(join(parent, marker), 'utf8'), 'joined');
+    await rm(join(parent, marker));
+  }, `#!/bin/sh
+# Signal readiness from the descendant so cancellation exercises the whole
+# group. Its parent must reap it even when the container's PID 1 cannot.
+trap 'wait; printf joined > ../decoder-child-state; exit 0' TERM
+(: > ../decoder-child-state; exec sleep 30) &
+wait
+`);
 });

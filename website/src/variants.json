@@ -1,0 +1,168 @@
+{
+  "storm": [
+    {
+      "width": 640,
+      "height": 388,
+      "webp": {
+        "bytes": 158388,
+        "sha256": "dce8eb36575e895c3418409ee1ab699382873a9b6b284fad02fcbabce0c06f0c"
+      },
+      "jpg": {
+        "bytes": 54088,
+        "sha256": "eb94396f005117b0e585bdc528c390e605ca88528113c8aa084b0641729bedcc"
+      }
+    },
+    {
+      "width": 1000,
+      "height": 607,
+      "webp": {
+        "bytes": 440624,
+        "sha256": "1841bbd86c9c040d1468519995a2ba207d15fdccf54b2ffbbd8774c809cd5896"
+      },
+      "jpg": {
+        "bytes": 139497,
+        "sha256": "a1307e246b7211c7c65aa899bd04d5fe1a8f894d133c525069fede92d2d123ba"
+      }
+    },
+    {
+      "width": 1440,
+      "height": 874,
+      "webp": {
+        "bytes": 898488,
+        "sha256": "7a630f5f03383c0d521922d0b93e8879aecc62fdc9398d04fb676887f9a525d1"
+      },
+      "jpg": {
+        "bytes": 292181,
+        "sha256": "ee7feaa372b7952287810c7e2831edbed6e8b1ff9fe07a366c67fe551fe7a56c"
+      }
+    }
+  ],
+  "fox": [
+    {
+      "width": 240,
+      "height": 126,
+      "webp": {
+        "bytes": 16210,
+        "sha256": "f59c9e1c5fdd98c8ffd377aa506e521011da5d02ad759d030fe2d32502a97e7c"
+      },
+      "jpg": {
+        "bytes": 7790,
+        "sha256": "f605c5df24c17077ca4a64f9b956d9c36a2c925ba70f140b0766b0178ab162c9"
+      }
+    },
+    {
+      "width": 480,
+      "height": 253,
+      "webp": {
+        "bytes": 57160,
+        "sha256": "bf1166aa4113d13fcded43f7ead9486632cfd68451ca94c2eb49724ab1f81818"
+      },
+      "jpg": {
+        "bytes": 28746,
+        "sha256": "570e61d04ffe8006bd708d6e92b01f467d69c026f3a88f284fc481c49ca5a134"
+      }
+    }
+  ],
+  "film": [
+    {
+      "width": 480,
+      "height": 188,
+      "webp": {
+        "bytes": 15228,
+        "sha256": "beca74fd0d283f415717a80061a6c257ac64e0065b4309056af6b00c86fe781b"
+      },
+      "jpg": {
+        "bytes": 19843,
+        "sha256": "7697aea4997ca67f970435402d81a797fd15a336ded3b84bd4a04f87b341ad02"
+      }
+    },
+    {
+      "width": 800,
+      "height": 314,
+      "webp": {
+        "bytes": 51388,
+        "sha256": "a2d40dc43189716095fda8e03a6af7a6ff867931612dc2322b9b1f7f7c8571b1"
+      },
+      "jpg": {
+        "bytes": 57398,
+        "sha256": "f6c14f0b736720b730435eb8299703d5ca5bacdc19b483c53d1d984fd4bc695a"
+      }
+    },
+    {
+      "width": 1200,
+      "height": 470,
+      "webp": {
+        "bytes": 141778,
+        "sha256": "e92f55d098604f2214cbe24d11b2042a13647bbc081946f8c3a623b5de6074fa"
+      },
+      "jpg": {
+        "bytes": 146182,
+        "sha256": "64f3d4cbc874b2132fd076bfd97a530c3e17a69592a047481944250389b23829"
+      }
+    }
+  ],
+  "cloud": [
+    {
+      "width": 240,
+      "height": 240,
+      "webp": {
+        "bytes": 19864,
+        "sha256": "90f16b86829450ebc911e201733998bf1aac5b9afdd544ed0241361e703ba2f8"
+      },
+      "jpg": {
+        "bytes": 19977,
+        "sha256": "dae7e438a84d2cb533f13b1a41ae45b0a97400d898e4508b8c3b51eb16d323d7"
+      }
+    },
+    {
+      "width": 480,
+      "height": 480,
+      "webp": {
+        "bytes": 87188,
+        "sha256": "cf8a1fb0a8f0079808e4edcdd6f0721acbbf262c8c151edaa1b93ffb27ce07e8"
+      },
+      "jpg": {
+        "bytes": 86193,
+        "sha256": "94b78a7bd2d3e1b4eee7ba105aef430ca58f84be4845f6b6972a2d6d8ec95088"
+      }
+    }
+  ],
+  "margin": [
+    {
+      "width": 400,
+      "height": 154,
+      "webp": {
+        "bytes": 42822,
+        "sha256": "713af2d1b76c2a81506bdf5bcaf8c0e1cf9823af08453ad65179b3bf068efb84"
+      },
+      "jpg": {
+        "bytes": 21076,
+        "sha256": "39f965ce534d6265804e71329d38cd61086a2d0926781b44bb5c4b0e64784ec5"
+      }
+    },
+    {
+      "width": 800,
+      "height": 308,
+      "webp": {
+        "bytes": 159212,
+        "sha256": "9af339e70b6a5d3f89643996d7804eeb1222c18482d85e352c4e273d74d1d7e4"
+      },
+      "jpg": {
+        "bytes": 82364,
+        "sha256": "cde015b97c8da1b63252420823c67490575f971df64ffd2f3a1a89404b9977a0"
+      }
+    },
+    {
+      "width": 1200,
+      "height": 462,
+      "webp": {
+        "bytes": 340398,
+        "sha256": "9d6239cd28780fd5bf8d3b4560ea423e66a6be3ffcec732a63fb6bbc37149361"
+      },
+      "jpg": {
+        "bytes": 184530,
+        "sha256": "2c0447d9bc6f4ea374a1ee51b9b408a07e2a3deb6152bd67c4cc0f73aab576fd"
+      }
+    }
+  ]
+}
