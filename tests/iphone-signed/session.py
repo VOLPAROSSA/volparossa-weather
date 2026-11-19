@@ -140,6 +140,7 @@ def verify(work, frames):
         'private_directory_removed', 'drizzli_rejected_expired', 'drizzli_recovered', 'cache_only'))
     assert guest['revision_after_recovery'] == 2 and guest['replacement_manifest_id'] != guest['manifest_id']
     products = {}
+    air_hashes = {}
     air_delivery = None
     for phase in PHASES:
         receipt = json.loads((work / (phase + '.json')).read_bytes())
@@ -147,7 +148,8 @@ def verify(work, frames):
         air_status, quality = receipt['air']
         assert [status, air_status] == guest['iphone_requests'][phase] == ([503, 200] if phase == 'refused' else [200, 200])
         assert quality['delivery']['cache_only'] is True and quality['delivery']['revision'] == 1
-        assert quality['delivery']['sha256'] == guest['air_product_sha256']
+        air_hashes[phase] = quality['delivery']['sha256']
+        assert air_hashes[phase] == guest['air_product_sha256']
         air = quality['forecast']['samples'][0]
         current_air = [quality['delivery']['manifest_id'], air['pm2_5'], air['pm10']]
         if air_delivery is None:
@@ -162,7 +164,8 @@ def verify(work, frames):
             assert delivery['sha256'] == guest['product_sha256']
             assert forecast['forecast']['samples'][0]['temperature_2m'] == guest['temperature_c']
         products[phase] = [status, air_status]
-    return dict(core=guest, product_requests=products, air_manifest=air_delivery[0], pm2_5=air_delivery[1], pm10=air_delivery[2],
+    return dict(core=guest, product_requests=products, air_manifest=air_delivery[0], air_response_sha256=air_hashes,
+                pm2_5=air_delivery[1], pm10=air_delivery[2],
                 screenshots_sha256=frames, screenshot_witness='XCTest accessibility and CoreSimulator framebuffer')
 
 

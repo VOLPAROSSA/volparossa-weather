@@ -92,6 +92,13 @@ def bridge_config(core, forecast, quality=None):
     return config
 
 
+def consume_product(path):
+    raw = path.read_bytes()
+    product = json.loads(raw)
+    path.unlink()
+    return product, hashlib.sha256(raw).hexdigest()
+
+
 def run(root, source, publication):
     interfaces = sorted(name for _, name in socket.if_nameindex())
     assert os.getuid() and interfaces == ["lo"], "only the loopback interface may be present"
@@ -107,9 +114,7 @@ def run(root, source, publication):
     assert replacement["operation"] == "offline_content_publish" and replacement["network_publication"] is False
     assert replacement["publisher_key_hex"] == pub["publisher_key_hex"]
     assert replacement["manifest_id"] != pub["manifest_id"] and replacement["expires_unix_seconds"] > pub["expires_unix_seconds"]
-    forecast = json.loads(source.read_bytes())
-    wire_hash = hashlib.sha256(source.read_bytes()).hexdigest()
-    source.unlink()
+    forecast, wire_hash = consume_product(source)
     publication.unlink()
     for name in ("scratch", "www"):
         (root / name).mkdir(mode=0o700)
@@ -124,11 +129,7 @@ def run(root, source, publication):
     mobile_responses = {}
     quality = None
     if mobile:
-        aq_path = publication.with_name('air-quality.json')
-        air_bytes = aq_path.read_bytes()
-        air_hash = hashlib.sha256(air_bytes).hexdigest()
-        quality = json.loads(air_bytes)
-        aq_path.unlink()
+        quality, air_hash = consume_product(publication.with_name('air-quality.json'))
     config = bridge_config(core, forecast, quality)
     cfg.write_text(json.dumps(config))
     bridge = [NODE, ROOT/"scripts/serve-provider.mjs", "--config", cfg, "--static-root", root/"www", "--port", "0"]
