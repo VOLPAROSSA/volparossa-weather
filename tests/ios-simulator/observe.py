@@ -38,63 +38,74 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-store')
         self.end_headers()
         self.wfile.write(raw)
+        self.wfile.flush()
+        if kind == 'air':
+            self.server.complete.set()
 
 
 def sim(*args, timeout=60):
     return subprocess.check_output(['xcrun', 'simctl', *args], text=True, timeout=timeout).strip()
 
 
+def capture(app, device, directory):
+    sim('boot', device)
+    sim('bootstatus', device, '-b', timeout=240)
+    sim('install', device, str(app), timeout=90)
+    assert sim('get_app_container', device, BUNDLE, 'app').endswith('/Runner.app')
+    pair = json.loads(subprocess.check_output(['node', HERE / 'fixture.mjs'], timeout=15))
+    frames = []
+    with ThreadingHTTPServer(('127.0.0.1', 43210), Handler) as server:
+        server.calls, server.lock, server.complete = [], threading.Lock(), threading.Event()
+        server.bodies = {k: json.dumps(v, separators=(',', ':')).encode() for k, v in pair.items()}
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            assert re.fullmatch(re.escape(BUNDLE) + r': [1-9][0-9]*', sim('launch', device, BUNDLE))
+            deadline = time.monotonic() + 100
+            assert server.complete.wait(85), 'iPhone did not finish both product requests'
+            # Capture the actual running screen while Flutter renders the arrived
+            # products. Vision runs after simulator removal to avoid competing
+            # with its large working set on the hosted Apple VM.
+            for i in range(3):
+                path = directory / f'forecast-{i}.png'
+                if i:
+                    time.sleep(2)
+                sim('io', device, 'screenshot', str(path), timeout=max(.1, deadline - time.monotonic()))
+                frames.append(path)
+            sim('terminate', device, BUNDLE)
+        finally:
+            server.shutdown()
+            thread.join(timeout=10)
+            assert not thread.is_alive()
+        assert server.calls == ['weather', 'air']
+        return frames, {k: hashlib.sha256(v).hexdigest() for k, v in server.bodies.items()}
+
+
 def observe(app, screen, output):
     runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-18-5'
     device_type = 'com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro-Max'
-    device = sim('create', 'VOLPAROSSA Weather trial', device_type, runtime)
-    assert re.fullmatch(r'[0-9A-Fa-f-]{36}', device)
-    try:
-        sim('boot', device)
-        sim('bootstatus', device, '-b', timeout=240)
-        sim('install', device, str(app), timeout=90)
-        assert sim('get_app_container', device, BUNDLE, 'app').endswith('/Runner.app')
-        pair = json.loads(subprocess.check_output(['node', HERE / 'fixture.mjs'], timeout=15))
-        with ThreadingHTTPServer(('127.0.0.1', 43210), Handler) as server:
-            server.calls, server.lock = [], threading.Lock()
-            server.bodies = {k: json.dumps(v, separators=(',', ':')).encode() for k, v in pair.items()}
-            thread = threading.Thread(target=server.serve_forever)
-            thread.start()
-            try:
-                assert re.fullmatch(re.escape(BUNDLE) + r': [1-9][0-9]*', sim('launch', device, BUNDLE))
-                deadline = time.monotonic() + 100
-                observations = {}
-                with tempfile.TemporaryDirectory(prefix='weather-screen-') as directory:
-                    path = Path(directory) / 'screen.png'
-                    while time.monotonic() < deadline:
-                        with server.lock:
-                            calls = server.calls.copy()
-                        if calls == ['weather', 'air']:
-                            sim('io', device, 'screenshot', str(path))
-                            observations = json.loads(subprocess.check_output([screen, path], timeout=20))
-                            if all(observations.get(key) for key in ('provider_header', 'native_forecast', 'ifs_model')):
-                                break
-                        time.sleep(1)
-                    else:
-                        raise RuntimeError(f'iPhone screen did not show the loaded Weather profile: reads={calls}, screen={observations}')
-                    screenshot_sha = hashlib.sha256(path.read_bytes()).hexdigest()
-                sim('terminate', device, BUNDLE)
-            finally:
-                server.shutdown()
-                thread.join(timeout=10)
-                assert not thread.is_alive()
-            assert server.calls == ['weather', 'air']
-            result = dict(runtime=runtime, device=device_type, app_bundle=BUNDLE, installed=True, launched=True,
-                          product_requests=server.calls, screen=observations, screenshot_sha256=screenshot_sha,
-                          source_sha256={k: hashlib.sha256(v).hexdigest() for k, v in server.bodies.items()},
-                          synthetic_products=True, core_executed=False)
-    finally:
+    with tempfile.TemporaryDirectory(prefix='weather-screen-') as directory:
+        device = sim('create', 'VOLPAROSSA Weather trial', device_type, runtime)
+        assert re.fullmatch(r'[0-9A-Fa-f-]{36}', device)
         try:
-            sim('shutdown', device)
+            frames, hashes = capture(app, device, Path(directory))
         finally:
-            sim('delete', device)
-    remaining = json.loads(sim('list', 'devices', '--json'))['devices']
-    assert all(d['udid'] != device for devices in remaining.values() for d in devices)
+            try:
+                sim('shutdown', device)
+            finally:
+                sim('delete', device)
+        remaining = json.loads(sim('list', 'devices', '--json'))['devices']
+        assert all(d['udid'] != device for devices in remaining.values() for d in devices)
+        deadline = time.monotonic() + 65
+        for path in reversed(frames):
+            observations = json.loads(subprocess.check_output([screen, path], timeout=max(.1, deadline - time.monotonic())))
+            if all(observations.get(key) for key in ('provider_header', 'native_forecast', 'ifs_model')):
+                break
+        else:
+            raise RuntimeError(f'iPhone forecast could not be recognized in the captured frames: {observations}')
+        result = dict(runtime=runtime, device=device_type, app_bundle=BUNDLE, installed=True, launched=True,
+                      product_requests=['weather', 'air'], screen=observations, screenshot_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                      captured_frames=len(frames), source_sha256=hashes, synthetic_products=True, core_executed=False)
     result['simulator_removed'] = True
     result['weather_revision'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     result['upstream_revision'] = subprocess.check_output(
