@@ -46,30 +46,35 @@ export function fieldUrl(input, step, extension) {
   return `${ORIGIN}/${date}/${hour}z/${query.model}/0p25/oper/${date}${hour}0000-${step}h-oper-fc.${extension}`;
 }
 
-export function selectIndex(bytes, input, step, parameter = '2t') {
-  const query = ecmwfRequest(input);
-  parameterDefinition(parameter, query.model);
+function selectRanges(bytes, query, step, parameters) {
+  for (const parameter of parameters) parameterDefinition(parameter, query.model);
   requireThat(bytes instanceof Uint8Array && bytes.length <= MAX_INDEX_BYTES, 'INDEX_TOO_LARGE');
   let lines;
   try { lines = new TextDecoder('utf-8', { fatal: true }).decode(bytes).trim().split('\n'); }
   catch { throw new WeatherError('INDEX_INVALID'); }
   requireThat(lines.length <= 4096, 'INDEX_TOO_LARGE');
-  const selected = [];
+  const ranges = new Map();
   for (const line of lines) {
     requireThat(line.length <= 4096, 'INDEX_INVALID');
     let item;
     try { item = JSON.parse(line); } catch { throw new WeatherError('INDEX_INVALID'); }
     requireThat(item && !Array.isArray(item) && typeof item === 'object', 'INDEX_INVALID');
-    if (item.param !== parameter || item.levtype !== 'sfc') continue;
+    if (item.levtype !== 'sfc' || !parameters.includes(item.param)) continue;
     requireThat(item.date === query.run.slice(0, 10).replaceAll('-', '') && item.time === query.run.slice(11, 13) + '00'
       && item.step === String(step) && item.class === (query.model === 'ifs' ? 'od' : 'ai')
       && item.type === 'fc' && item.stream === 'oper' && item.expver === '0001', 'INDEX_IDENTITY_MISMATCH');
     requireThat(Number.isSafeInteger(item._offset) && item._offset >= 0 && item._offset < 2 ** 40
       && Number.isSafeInteger(item._length) && item._length >= 20 && item._length <= MAX_FIELD_BYTES, 'INDEX_RANGE_INVALID');
-    selected.push({ offset: item._offset, length: item._length });
+    requireThat(!ranges.has(item.param), 'FIELD_MISSING_OR_AMBIGUOUS');
+    ranges.set(item.param, { offset: item._offset, length: item._length });
   }
-  requireThat(selected.length === 1, 'FIELD_MISSING_OR_AMBIGUOUS');
-  return selected[0];
+  requireThat(ranges.size === parameters.length, 'FIELD_MISSING_OR_AMBIGUOUS');
+  return ranges;
+}
+
+export function selectIndex(bytes, input, step, parameter = '2t') {
+  const query = ecmwfRequest(input);
+  return selectRanges(bytes, query, step, [parameter]).get(parameter);
 }
 
 async function getBytes(url, { range = null, signal, fetcher = globalThis.fetch } = {}) {
@@ -132,15 +137,16 @@ export async function fetchFields(input, step, { mode, acceptDataLicense = false
   const query = ecmwfRequest(input);
   const index = await getBytes(fieldUrl(query, step, 'index'), { signal, fetcher });
   const parameters = ['2t', ...(query.includeWind ? ['10u', '10v'] : []), ...(query.includePrecipitation ? ['tp'] : [])];
-  const ranges = parameters.map(parameter => ({ parameter, ...selectIndex(index, query, step, parameter) }));
-  const ordered = [...ranges].sort((a, b) => a.offset - b.offset);
+  const ranges = selectRanges(index, query, step, parameters);
+  const ordered = [...ranges.values()].sort((a, b) => a.offset - b.offset);
   requireThat(ordered.slice(1).every((item, i) => item.offset >= ordered[i].offset + ordered[i].length), 'INDEX_RANGES_OVERLAP');
+  const indexSha256 = sha256(index);
   const result = {};
-  for (const { parameter, offset, length } of ranges) {
-    const range = { offset, length };
+  for (const parameter of parameters) {
+    const range = ranges.get(parameter);
     const field = await getBytes(fieldUrl(query, step, 'grib2'), { range, signal, fetcher });
     checkGrib(field, range.length);
-    result[parameter] = { field, indexSha256: sha256(index), fieldSha256: sha256(field), range };
+    result[parameter] = { field, indexSha256, fieldSha256: sha256(field), range };
   }
   return result;
 }
