@@ -1225,7 +1225,11 @@ test('actual product sequence retains exact initial/refresh/expiry gates, comman
   assert.deepEqual(fixture.report.observations.requests, { weather: 3, air_quality: 3 });
   assert.equal(fixture.report.observations.initial.weather.rows, 4);
   assert.equal(fixture.report.observations.refresh.air_quality.rows, 5);
-  assert.deepEqual(fixture.events.filter(row => row[0] === 'wait').map(row => row[1]), [15000, 15000, 15000, 15000, 15000, 15000, 15000, 3000, 15000, 15000]);
+  assert.deepEqual(fixture.events.filter(row => row[0] === 'wait').map(row => row[1]), [15000, 15000, 15000, 15000, 15000, 15000, 15000, 15000, 3000, 15000, 15000]);
+  const preparedAt = fixture.events.findIndex(row => row[0] === 'control' && row[1] === '/phase/short-lived');
+  const shortTarget = row => row[0] === 'snapshot' && row[1] === 'background-resume-expiry' && row[2] === 'refresh_snapshot';
+  assert.equal(fixture.events.slice(0, preparedAt).filter(shortTarget).length, 2);
+  assert.equal(fixture.events.slice(preparedAt).filter(shortTarget).length, 1);
   assert.deepEqual(fixture.events.filter(row => row[0] === 'control').map(row => row.slice(1)),
     [['/state', 'GET'], ['/phase/refresh', 'POST'], ['/state', 'GET'], ['/phase/short-lived', 'POST'], ['/state', 'GET'], ['/state', 'GET']]);
   assert.deepEqual(fixture.events.filter(row => row[0] === 'adb').map(row => row.slice(1)), [
@@ -1235,6 +1239,21 @@ test('actual product sequence retains exact initial/refresh/expiry gates, comman
     ['shell', 'am', 'start', '-n', COMPONENT]]);
   assert.deepEqual(fixture.events.filter(row => row[0] === 'sleep'), [['sleep', 6000]]);
 });
+test('a refresh button that moves during short-product acquisition is rechecked before tapping', async () => {
+  let prepared = false;
+  const fixture = productExerciseFixture({
+    control(_state, path) { if (path === '/phase/short-lived') prepared = true; },
+    snapshot(value, _report, diagnostic) {
+      if (prepared && diagnostic.subphase === 'refresh_snapshot') value.refresh[0].x = 510;
+    },
+  });
+  await fixture.run();
+  const sent = fixture.events.filter(row => row[0] === 'adb' && row.includes('tap'));
+  assert.deepEqual(sent.map(row => row.slice(-2)), [['540', '1800'], ['510', '1800']]);
+  const preparedAt = fixture.events.findIndex(row => row[0] === 'control' && row[1] === '/phase/short-lived');
+  assert.equal(fixture.events.slice(preparedAt).filter(row => row[0] === 'snapshot' && row[2] === 'refresh_snapshot').length, 2);
+});
+
 test('one fresh expiry snapshot supplies all pre-HOME predicates without an extra VM traversal', async () => {
   const value = productExerciseFixture(); await value.run();
   const expiry = value.events.findIndex(row => row[0] === 'snapshot' && row[2] === 'expiry_snapshot');
