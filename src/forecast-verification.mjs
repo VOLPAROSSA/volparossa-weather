@@ -53,6 +53,29 @@ function score(errors) {
   return { mean_error_degC: mean(errors), mean_absolute_error_degC: mean(errors.map(Math.abs)) };
 }
 
+// Compare the fixed 50:50 estimate on precisely the pairs admitted by the verifier.
+// Each station/time counts once, even when several stations share one forecast cell.
+export function compareEqualWeightTemperature(reports) {
+  const ifs = [], aifs = [], blend = [];
+  let excluded = 0;
+  for (const report of reports) {
+    for (const sample of report.cases) {
+      if (sample.excluded) {
+        excluded++;
+        continue;
+      }
+      const left = sample.ifs_error_degC, right = sample.aifs_single_error_degC;
+      ifs.push(left);
+      aifs.push(right);
+      // The average signed error equals the average forecast minus the observation.
+      blend.push(left / 2 + right / 2);
+    }
+  }
+  return { method: 'equal-weight-ifs-aifs-single', unit: 'degC', stations: reports.length,
+    paired_station_times: blend.length, excluded_station_times: excluded,
+    ifs: score(ifs), 'aifs-single': score(aifs), blend: score(blend) };
+}
+
 function stationDistanceKm(station, grid) {
   const radians = Math.PI / 180;
   const halfLatitude = (grid.latitude - station.latitude) * radians / 2;

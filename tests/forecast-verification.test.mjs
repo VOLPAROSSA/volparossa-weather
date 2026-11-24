@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { verifyTemperature } from '../src/forecast-verification.mjs';
+import { compareEqualWeightTemperature, verifyTemperature } from '../src/forecast-verification.mjs';
 import { MAX_BYTES } from '../src/forecast.mjs';
 import { forecast, QUERY } from './fixtures.mjs';
 
@@ -121,6 +121,14 @@ test('local CLI reads the three supplied files, returning only closed errors for
   const ok = run(paths);
   assert.equal(ok.status, 0, ok.stderr);
   assert.deepEqual(JSON.parse(ok.stdout), verifyTemperature(...data));
+  const comparison = run(['--compare-blend', ...paths]);
+  assert.equal(comparison.status, 0, comparison.stderr);
+  const { verification, comparison: metrics } = JSON.parse(comparison.stdout);
+  assert.deepEqual(verification, JSON.parse(ok.stdout));
+  assert.deepEqual(metrics, { method: 'equal-weight-ifs-aifs-single', unit: 'degC', stations: 1,
+    paired_station_times: 2, excluded_station_times: 1,
+    ifs: verification.models.ifs, 'aifs-single': verification.models['aifs-single'],
+    blend: { mean_error_degC: -0.5, mean_absolute_error_degC: 1 } });
   const leak = join(root, 'private-name');
   await symlink(paths[0], leak);
   for (const [files, code] of [[[leak, ...paths.slice(1)], 'VERIFICATION_INPUT_FAILED'],
@@ -137,4 +145,18 @@ test('local CLI reads the three supplied files, returning only closed errors for
     assert.equal(failed.status, 1);
     assert.deepEqual(JSON.parse(failed.stderr), { error: code });
   }
+});
+
+test('equal weighting uses matched station-hours, including multiple stations on the same cell', async () => {
+  const source = new URL('../third_party/ecmwf-dwd-archive-report.json', import.meta.url);
+  const report = JSON.parse(await readFile(source, 'utf8'));
+  const result = compareEqualWeightTemperature(report.stations);
+  assert.equal(result.stations, 4);
+  assert.equal(result.paired_station_times, 4);
+  assert.equal(result.excluded_station_times, 0);
+  assert.ok(Math.abs(result.blend.mean_absolute_error_degC - 0.37578125) < 1e-10);
+  const empty = compareEqualWeightTemperature([{ cases: [{ excluded: ['missing_observation'] }] }]);
+  assert.equal(empty.paired_station_times, 0);
+  assert.equal(empty.excluded_station_times, 1);
+  assert.deepEqual(empty.blend, { mean_error_degC: null, mean_absolute_error_degC: null });
 });
