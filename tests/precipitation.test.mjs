@@ -181,6 +181,23 @@ test('one shared bounded index and exactly one extra GRIB range, independent of 
   assert.equal(calls.length, 2, 'legacy single-field helper remains temperature-only');
 });
 
+test('multi-field acquisition scans each index row once and preserves request order', async t => {
+  const input = { ...query, includeWind: true };
+  const rows = records(input).reverse();
+  rows.push({ param: 'unrequested', levtype: 'sfc' });
+  const indexRows = new Set(rows.map(row => JSON.stringify(row)));
+  const parse = t.mock.method(JSON, 'parse');
+  const calls = [];
+  const fields = await fetchFields(input, 12,
+    { mode: 'origin', acceptDataLicense: true, fetcher: fetcher(input, calls, rows) });
+  const parsed = parse.mock.calls.filter(call => indexRows.has(call.arguments[0]));
+  assert.equal(parsed.length, rows.length, 'index row parse calls');
+  assert.deepEqual(parsed.map(call => call.arguments[0]), [...indexRows]);
+  assert.deepEqual(Object.keys(fields), ['2t', '10u', '10v', 'tp']);
+  assert.deepEqual(calls.slice(1).map(call => call.options.headers.Range),
+    ['bytes=0-63', 'bytes=64-127', 'bytes=128-191', 'bytes=192-255']);
+});
+
 test('requested missing/ambiguous precipitation fails before field downloads; index is not temporal authority', async () => {
   for (const rows of [records(query).slice(0, 3), [...records(query), records(query)[3]]]) {
     const calls = [];
