@@ -13,8 +13,9 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: weather-cache-expiry-${{ github.ref }}
-  cancel-in-progress: false
+  # An explicit rerun of an earlier PR commit must not cancel the latest trial.
+  group: weather-cache-expiry-${{ github.ref }}-${{ github.event_name == 'pull_request' && github.run_attempt > 1 && github.run_id || 'latest' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}
 env:
   CARGO_BUILD_JOBS: '2'
   CARGO_TERM_COLOR: never
