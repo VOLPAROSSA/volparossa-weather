@@ -255,7 +255,8 @@ def app_gradle_resources():
 
 def gradle(acquire):
     # Equivalent properties emitted by pinned Flutter's Gradle builder. Config
-    # generation itself is done first by maintained flutter --config-only.
+    # generation itself is done first by maintained flutter --config-only. Build
+    # the app and its dependencies without scheduling standalone plugin AARs.
     defines = ",".join(base64.b64encode(s.encode()).decode() for s in
         ("VOLPAROSSA_WEATHER=true", "VOLPAROSSA_CORE_ORIGIN=http://127.0.0.1:43210"))
     return [str(STAGE / "android/gradlew"), "-p", str(STAGE / "android"), "--no-daemon",
@@ -263,7 +264,7 @@ def gradle(acquire):
         f"-Pandroid.r8.threadPoolSize={APP_D8_THREADS}",
         "--init-script", str(ROOT / "scripts/hosted-android-repositories.gradle"),
         *( ["--write-verification-metadata", "sha256"] if acquire else ["--offline", "--dependency-verification", "strict", "clean"]),
-        "assembleDebug", "-Ptarget-platform=android-x64", "-Ptarget=" + str(STAGE / "lib/volparossa_native_trial.dart"),
+        ":app:assembleDebug", "-Ptarget-platform=android-x64", "-Ptarget=" + str(STAGE / "lib/volparossa_native_trial.dart"),
         "-Pbase-application-name=android.app.Application", "-Pdart-defines=" + defines,
         "-Pdart-obfuscation=false", "-Ptrack-widget-creation=true", "-Ptree-shake-icons=false"]
 
