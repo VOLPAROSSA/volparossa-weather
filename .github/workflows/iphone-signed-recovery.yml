@@ -77,9 +77,10 @@ jobs:
           xcodegen generate --spec tests/iphone-signed/project.yml --project tests/iphone-signed
           xcodebuild -quiet -project tests/iphone-signed/WeatherWitness.xcodeproj -scheme WeatherWitness \
             -configuration Debug -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/witness-build" build-for-testing
-      - name: Install the ordinary app on a fresh simulator
+      - name: Register the ordinary app and its XCTest runner on a fresh simulator
         run: |
           python3 -B tests/iphone-signed/device.py install build/ios-source/build/ios/iphonesimulator/Runner.app \
+            "$RUNNER_TEMP/witness-build/Build/Products/Debug-iphonesimulator/InterfaceTests-Runner.app" \
             "$RUNNER_TEMP/weather-device" "$RUNNER_TEMP/iphone-ready.json"
       - name: Signal the Linux publisher to acquire current model fields
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
