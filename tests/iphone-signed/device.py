@@ -3,13 +3,14 @@
 from pathlib import Path
 import json
 import os
+import plistlib
 import re
 import subprocess
 import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ios-simulator'))
-from observe import sim
+from observe import BUNDLE, sim
 
 RUNTIME = 'com.apple.CoreSimulator.SimRuntime.iOS-18-5'
 DEVICE = 'com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro-Max'
@@ -42,14 +43,22 @@ def remove(reservation):
     reservation.unlink()
 
 
-def install(app, reservation, ready):
+def install(app, witness, reservation, ready):
     deadline = time.monotonic() + 480
     device = sim('create', 'Signed VOLPAROSSA Weather', DEVICE, RUNTIME, deadline=deadline)
     with reservation.open('x') as output:
         output.write(device + '\n')
     assert identifier(reservation) == device
     sim('bootstatus', device, '-b', deadline=deadline)
-    sim('install', device, str(app.resolve(strict=True)), deadline=deadline)
+    # FrontBoard must know both bundle IDs before this simulator signals the publisher.
+    runner_id = 'org.volparossa.test.weather-witness.xctrunner'
+    for bundle, expected in ((app, BUNDLE), (witness, runner_id)):
+        with (bundle / 'Info.plist').open('rb') as stream:
+            assert plistlib.load(stream)['CFBundleIdentifier'] == expected, 'unexpected simulator bundle'
+        sim('install', device, str(bundle.resolve(strict=True)), deadline=deadline)
+        location = Path(sim('get_app_container', device, expected, 'app', deadline=deadline))
+        with (location / 'Info.plist').open('rb') as stream:
+            assert plistlib.load(stream)['CFBundleIdentifier'] == expected, 'simulator registration mismatch'
     with ready.open('x') as stream:
         json.dump(dict(run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                        weather=os.environ['GITHUB_SHA'], app_installed=True), stream)

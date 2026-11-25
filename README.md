@@ -668,6 +668,26 @@ contract above with `purpose: "retrospective-evaluation"`; use
 incompatible units and statistics fail validation. Missing, rejected,
 unmatched or late-available pairs have no score.
 
+### Compare an equal-weight temperature estimate
+
+Pass `--compare-blend` to the verification CLI to compare the arithmetic mean of
+IFS and AIFS Single with each input on the same station-hours. It uses the
+existing checks for run, grid, observation quality and availability before the
+valid time. Each eligible station-hour contributes one error to all three
+scores. With no eligible pairs the scores are null.
+
+```sh
+node scripts/verify-forecast.mjs --compare-blend ifs.json aifs-single.json observations.json
+node scripts/verify-forecast.mjs --compare-blend archive third_party/ecmwf-dwd-archive-input.json /path/to/cached-fields
+```
+
+For the four provisional Berlin/Potsdam station readings at 12:00 UTC on
+11 October 2026, mean absolute error was 0.376 °C for the equal-weight
+estimate, 0.778 °C for IFS and 0.494 °C for AIFS Single. Two stations use
+the same grid cell. Broader skill evaluation requires additional regions and
+independent forecast runs. The comparison is available for offline evaluation.
+[Original field and observation report](third_party/ecmwf-dwd-archive-report.json)
+
 ## Shared forecasting and learning, next
 
 The intended next integration is one permitted acquisition per requested public
